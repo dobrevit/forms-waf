@@ -29,6 +29,9 @@ spec:
             - name: metrics
               containerPort: 8081
               protocol: TCP
+            - name: admin
+              containerPort: 8082
+              protocol: TCP
           env:
             - name: REDIS_HOST
               value: ${REDIS_HOST:-forms-waf-redis}
@@ -88,6 +91,10 @@ spec:
       targetPort: metrics
       protocol: TCP
       name: metrics
+    - port: 8082
+      targetPort: admin
+      protocol: TCP
+      name: admin
   selector:
     app.kubernetes.io/name: forms-waf
     app.kubernetes.io/component: openresty

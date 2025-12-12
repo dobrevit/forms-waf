@@ -16,6 +16,10 @@ spec:
       targetPort: metrics
       protocol: TCP
       name: metrics
+    - port: {{ .Values.openresty.service.adminPort }}
+      targetPort: admin
+      protocol: TCP
+      name: admin
   selector:
     {{- include "forms-waf.openresty.selectorLabels" . | nindent 4 }}
 {{- end }}

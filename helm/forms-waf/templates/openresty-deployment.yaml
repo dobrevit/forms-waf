@@ -35,6 +35,9 @@ spec:
             - name: metrics
               containerPort: 8081
               protocol: TCP
+            - name: admin
+              containerPort: 8082
+              protocol: TCP
           env:
             - name: REDIS_HOST
               value: {{ include "forms-waf.redis.host" . | quote }}

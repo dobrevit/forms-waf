@@ -77,6 +77,31 @@ data:
             }
         }
 
+        # Admin API server (separate port for security)
+        server {
+            listen 8082;
+            server_name _;
+
+            access_log /var/log/nginx/admin-access.log json_combined;
+
+            location / {
+                default_type application/json;
+                return 404 '{"error": "Not found", "hint": "Admin API is available at /waf-admin/"}\n';
+            }
+
+            location /waf-admin/ {
+                content_by_lua_block {
+                    local admin = require "admin_api"
+                    admin.handle_request()
+                }
+            }
+
+            location /health {
+                access_log off;
+                return 200 "OK\n";
+            }
+        }
+
         server {
             listen 8080;
             server_name _;
@@ -110,17 +135,6 @@ data:
                 proxy_set_header X-Client-IP $remote_addr;
             }
 
-            location /waf-admin/ {
-                allow 10.0.0.0/8;
-                allow 172.16.0.0/12;
-                allow 192.168.0.0/16;
-                deny all;
-
-                content_by_lua_block {
-                    local admin = require "admin_api"
-                    admin.handle_request()
-                }
-            }
         }
     }
 ---

@@ -25,6 +25,7 @@ openresty:
     type: ClusterIP
     port: 8080
     metricsPort: 8081
+    adminPort: 8082  # Admin API port - internal only, never expose externally
 
   resources:
     limits:

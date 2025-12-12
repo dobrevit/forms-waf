@@ -1,11 +1,12 @@
 #!/bin/bash
 # Test script for Forms WAF
-# Usage: ./test-waf.sh [base_url]
+# Usage: ./test-waf.sh [base_url] [admin_url]
 
 set -e
 #set -x
 
 BASE_URL="${1:-http://localhost:8080}"
+ADMIN_URL="${2:-http://localhost:8082}"
 PASS=0
 FAIL=0
 
@@ -62,6 +63,7 @@ test_request() {
 echo "========================================"
 echo "Forms WAF Test Suite"
 echo "Base URL: $BASE_URL"
+echo "Admin URL: $ADMIN_URL"
 echo "========================================"
 echo ""
 
@@ -148,11 +150,50 @@ test_request "Health endpoint" "200" "GET" "/health"
 
 echo ""
 
-# Test 7: Admin API (if accessible)
-log_info "Testing Admin API..."
-test_request "Admin status endpoint" "200" "GET" "/waf-admin/status"
-test_request "List blocked keywords" "200" "GET" "/waf-admin/keywords/blocked"
-test_request "List flagged keywords" "200" "GET" "/waf-admin/keywords/flagged"
+# Test 7: Admin API (on dedicated port 8082)
+log_info "Testing Admin API on dedicated port ($ADMIN_URL)..."
+
+# Helper function for admin requests
+test_admin_request() {
+    local name="$1"
+    local expected_status="$2"
+    local method="$3"
+    local endpoint="$4"
+    shift 4
+    local data="$@"
+
+    local response
+    local status
+
+    if [ "$method" = "GET" ]; then
+        response=$(curl -s -w "\n%{http_code}" "$ADMIN_URL$endpoint")
+    else
+        response=$(curl -s -w "\n%{http_code}" -X "$method" "$ADMIN_URL$endpoint" "$data")
+    fi
+
+    status=$(echo "$response" | tail -1)
+    body=$(echo "$response" | sed '$d')
+
+    if [ "$status" = "$expected_status" ]; then
+        log_pass "$name (status: $status)"
+    else
+        log_fail "$name (expected: $expected_status, got: $status)"
+        echo "  Response: $body"
+    fi
+}
+
+# Check admin port is accessible
+test_admin_request "Admin health endpoint" "200" "GET" "/health"
+test_admin_request "Admin status endpoint" "200" "GET" "/waf-admin/status"
+test_admin_request "List blocked keywords" "200" "GET" "/waf-admin/keywords/blocked"
+test_admin_request "List flagged keywords" "200" "GET" "/waf-admin/keywords/flagged"
+test_admin_request "Get thresholds" "200" "GET" "/waf-admin/config/thresholds"
+
+echo ""
+
+# Test 8: Verify admin is NOT accessible on main port (security check)
+log_info "Verifying admin API is NOT accessible on main port ($BASE_URL)..."
+test_request "Admin should be blocked on main port" "404" "GET" "/waf-admin/status"
 
 echo ""
 

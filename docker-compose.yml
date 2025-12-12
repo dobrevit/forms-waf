@@ -54,6 +54,7 @@ services:
     ports:
       - "8080:8080"
       - "8081:8081"
+      - "8082:8082"  # Admin API - remove or restrict in production
     volumes:
       # Mount lua scripts for development (hot reload with nginx -s reload)
       - ./openresty/lua:/etc/nginx/lua:ro

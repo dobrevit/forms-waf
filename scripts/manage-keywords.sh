@@ -6,7 +6,7 @@ set -e
 
 REDIS_HOST="${REDIS_HOST:-localhost}"
 REDIS_PORT="${REDIS_PORT:-6379}"
-WAF_URL="${WAF_URL:-http://localhost:8080}"
+WAF_ADMIN_URL="${WAF_ADMIN_URL:-http://localhost:8082}"
 
 usage() {
     cat << EOF
@@ -39,7 +39,7 @@ Commands:
 Options:
   --redis-host HOST    Redis host (default: localhost)
   --redis-port PORT    Redis port (default: 6379)
-  --waf-url URL        WAF admin URL (default: http://localhost:8080)
+  --waf-admin-url URL  WAF admin API URL (default: http://localhost:8082)
 
 Examples:
   $0 add-blocked "spam-keyword"
@@ -60,8 +60,8 @@ while [[ $# -gt 0 ]]; do
             REDIS_PORT="$2"
             shift 2
             ;;
-        --waf-url)
-            WAF_URL="$2"
+        --waf-admin-url)
+            WAF_ADMIN_URL="$2"
             shift 2
             ;;
         *)
@@ -83,11 +83,11 @@ waf_api() {
     local data="$3"
 
     if [ -n "$data" ]; then
-        curl -s -X "$method" "$WAF_URL/waf-admin$endpoint" \
+        curl -s -X "$method" "$WAF_ADMIN_URL/waf-admin$endpoint" \
             -H "Content-Type: application/json" \
             -d "$data"
     else
-        curl -s -X "$method" "$WAF_URL/waf-admin$endpoint"
+        curl -s -X "$method" "$WAF_ADMIN_URL/waf-admin$endpoint"
     fi
 }
 
