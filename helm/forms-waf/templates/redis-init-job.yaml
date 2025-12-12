@@ -1,0 +1,75 @@
+{{- if and .Values.redis.enabled .Values.redisInit.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "forms-waf.fullname" . }}-redis-init
+  labels:
+    {{- include "forms-waf.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis-init
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "forms-waf.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: redis-init
+          image: "{{ .Values.redisInit.image.repository }}:{{ .Values.redisInit.image.tag }}"
+          imagePullPolicy: {{ .Values.redisInit.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              REDIS_HOST="{{ include "forms-waf.redis.host" . }}"
+              REDIS_PORT="{{ include "forms-waf.redis.port" . }}"
+
+              echo "Waiting for Redis to be ready..."
+              until redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; do
+                  echo "Waiting for Redis..."
+                  sleep 2
+              done
+
+              echo "Loading blocked keywords..."
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:keywords:blocked \
+              {{- range .Values.redisInit.blockedKeywords }}
+                "{{ . }}" \
+              {{- end }}
+                "placeholder-to-avoid-empty"
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SREM waf:keywords:blocked "placeholder-to-avoid-empty"
+
+              echo "Loading flagged keywords..."
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:keywords:flagged \
+              {{- range .Values.redisInit.flaggedKeywords }}
+                "{{ . }}" \
+              {{- end }}
+                "placeholder-to-avoid-empty"
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SREM waf:keywords:flagged "placeholder-to-avoid-empty"
+
+              echo "Loading thresholds..."
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET waf:config:thresholds \
+              {{- range $key, $value := .Values.redisInit.thresholds }}
+                {{ $key }} {{ $value }} \
+              {{- end }}
+                placeholder 0
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HDEL waf:config:thresholds placeholder
+
+              echo "Loading IP whitelist..."
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:whitelist:ips \
+              {{- range .Values.redisInit.whitelistedIPs }}
+                "{{ . }}" \
+              {{- end }}
+                "placeholder-to-avoid-empty"
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SREM waf:whitelist:ips "placeholder-to-avoid-empty"
+
+              echo "Redis initialization complete!"
+              echo "Blocked keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:blocked)"
+              echo "Flagged keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:flagged)"
+              echo "Whitelisted IPs: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:whitelist:ips)"
+{{- end }}

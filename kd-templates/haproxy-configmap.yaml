@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ${RELEASE_NAME:-forms-waf}-haproxy-config
+  namespace: ${NAMESPACE:-forms-waf}
+  labels:
+    app.kubernetes.io/name: forms-waf
+    app.kubernetes.io/component: haproxy
+data:
+  haproxy.cfg: |
+    global
+        log stdout format raw local0 info
+        maxconn 4096
+        stats socket /var/run/haproxy.sock mode 600 level admin expose-fd listeners
+        stats timeout 30s
+
+    defaults
+        log     global
+        mode    http
+        option  httplog
+        option  dontlognull
+        option  http-server-close
+        option  forwardfor except 127.0.0.0/8
+        timeout connect 5s
+        timeout client  30s
+        timeout server  30s
+        timeout http-request 10s
+
+    peers haproxy_peers
+        peer ${RELEASE_NAME:-forms-waf}-haproxy-0 ${RELEASE_NAME:-forms-waf}-haproxy-0.${RELEASE_NAME:-forms-waf}-haproxy-headless:10000
+        peer ${RELEASE_NAME:-forms-waf}-haproxy-1 ${RELEASE_NAME:-forms-waf}-haproxy-1.${RELEASE_NAME:-forms-waf}-haproxy-headless:10000
+        peer ${RELEASE_NAME:-forms-waf}-haproxy-2 ${RELEASE_NAME:-forms-waf}-haproxy-2.${RELEASE_NAME:-forms-waf}-haproxy-headless:10000
+
+    frontend ft_waf
+        bind *:8080
+
+        acl has_form_hash req.hdr(X-Form-Hash) -m found
+        acl has_spam_score req.hdr(X-Spam-Score) -m found
+        acl has_client_ip req.hdr(X-Client-IP) -m found
+        acl spam_score_high req.hdr(X-Spam-Score),int ge 80
+        acl blocked_by_openresty req.hdr(X-Blocked) -m str true
+
+        http-request deny deny_status 403 if blocked_by_openresty
+        http-request deny deny_status 403 if spam_score_high
+
+        http-request track-sc0 req.hdr(X-Form-Hash) table st_form_hashes if has_form_hash
+        http-request track-sc1 req.hdr(X-Client-IP) table st_client_ips if has_client_ip
+        http-request track-sc2 req.hdr(X-Client-IP) table st_spam_scores if has_client_ip
+
+        acl hash_flood sc0_gpc0_rate(st_form_hashes) gt 10
+        http-request deny deny_status 429 if hash_flood
+
+        acl hash_flagged sc0_gpc1(st_form_hashes) gt 0
+        http-request deny deny_status 403 if hash_flagged
+
+        acl ip_rate_exceeded sc1_http_req_rate(st_client_ips) gt 30
+        http-request deny deny_status 429 if ip_rate_exceeded
+
+        acl ip_spam_score sc2_gpc0(st_spam_scores) gt 500
+        http-request deny deny_status 403 if ip_spam_score
+
+        http-request sc-inc-gpc0(0) if has_form_hash
+
+        http-response set-header X-WAF-Hash-Count %[sc0_gpc0(st_form_hashes)]
+        http-response set-header X-WAF-IP-Rate %[sc1_http_req_rate(st_client_ips)]
+
+        default_backend bk_application
+
+    backend st_form_hashes
+        stick-table type string len 64 size 100k expire 1h peers haproxy_peers store gpc0,gpc0_rate(60s),gpc1,conn_cnt
+
+    backend st_client_ips
+        stick-table type string len 45 size 50k expire 1h peers haproxy_peers store http_req_rate(60s),http_req_cnt,gpc0,conn_cnt
+
+    backend st_spam_scores
+        stick-table type string len 45 size 50k expire 24h peers haproxy_peers store gpc0,gpc1
+
+    backend bk_application
+        balance roundrobin
+        option httpchk GET /health
+        http-check expect status 200
+        server app1 ${BACKEND_HOST:-forms-waf-backend}:${BACKEND_PORT:-8080} check inter 5s fall 3 rise 2
+
+    frontend stats
+        bind *:8404
+        mode http
+        stats enable
+        stats uri /stats
+        stats refresh 10s
+        stats admin if TRUE
+        http-request use-service prometheus-exporter if { path /metrics }
+
+    frontend health
+        bind *:8405
+        mode http
+        monitor-uri /health

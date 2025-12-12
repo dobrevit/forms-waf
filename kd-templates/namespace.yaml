@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${NAMESPACE:-forms-waf}
+  labels:
+    app.kubernetes.io/name: forms-waf
+    app.kubernetes.io/instance: ${RELEASE_NAME:-forms-waf}

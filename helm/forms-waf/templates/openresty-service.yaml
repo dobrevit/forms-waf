@@ -1,0 +1,21 @@
+{{- if .Values.openresty.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "forms-waf.fullname" . }}-openresty
+  labels:
+    {{- include "forms-waf.openresty.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.openresty.service.type }}
+  ports:
+    - port: {{ .Values.openresty.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.openresty.service.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "forms-waf.openresty.selectorLabels" . | nindent 4 }}
+{{- end }}

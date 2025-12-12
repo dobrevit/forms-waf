@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${RELEASE_NAME:-forms-waf}-redis-init
+  namespace: ${NAMESPACE:-forms-waf}
+  labels:
+    app.kubernetes.io/name: forms-waf
+    app.kubernetes.io/component: redis-init
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: forms-waf
+        app.kubernetes.io/component: redis-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: redis-init
+          image: redis:7-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              REDIS_HOST="${REDIS_HOST:-forms-waf-redis}"
+              REDIS_PORT="${REDIS_PORT:-6379}"
+
+              echo "Waiting for Redis to be ready..."
+              until redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; do
+                  echo "Waiting for Redis..."
+                  sleep 2
+              done
+
+              echo "Loading blocked keywords..."
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:keywords:blocked \
+                "viagra" "cialis" "casino" "poker" "lottery" \
+                "crypto-investment" "bitcoin-profit" "forex-trading" \
+                "earn-money-fast" "work-from-home-opportunity" \
+                "nigerian-prince" "male-enhancement" "xxx" "porn"
+
+              echo "Loading flagged keywords..."
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:keywords:flagged \
+                "free:10" "winner:15" "click here:10" "urgent:10" \
+                "act now:10" "limited time:10" "exclusive offer:10" \
+                "discount:5" "cheap:5" "buy now:10" "subscribe:5" \
+                "guarantee:5" "no obligation:10" "risk free:10" \
+                "100% free:15" "double your:15" "make money:10"
+
+              echo "Loading thresholds..."
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET waf:config:thresholds \
+                spam_score_block 80 \
+                spam_score_flag 50 \
+                hash_count_block 10 \
+                ip_rate_limit 30
+
+              echo "Loading IP whitelist..."
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:whitelist:ips \
+                "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16"
+
+              echo "Redis initialization complete!"
+              echo "Blocked keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:blocked)"
+              echo "Flagged keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:flagged)"
+          env:
+            - name: REDIS_HOST
+              value: ${REDIS_HOST:-forms-waf-redis}
+            - name: REDIS_PORT
+              value: "${REDIS_PORT:-6379}"

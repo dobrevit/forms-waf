@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ${RELEASE_NAME:-forms-waf}-openresty-config
+  namespace: ${NAMESPACE:-forms-waf}
+  labels:
+    app.kubernetes.io/name: forms-waf
+    app.kubernetes.io/component: openresty
+data:
+  nginx.conf: |
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 4096;
+        use epoll;
+        multi_accept on;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        log_format json_combined escape=json '{'
+            '"time":"$time_iso8601",'
+            '"remote_addr":"$remote_addr",'
+            '"request_method":"$request_method",'
+            '"request_uri":"$request_uri",'
+            '"status":$status,'
+            '"spam_score":"$sent_http_x_spam_score",'
+            '"form_hash":"$sent_http_x_form_hash"'
+        '}';
+
+        access_log /var/log/nginx/access.log json_combined;
+
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+
+        lua_package_path "/etc/nginx/lua/?.lua;;";
+        lua_package_cpath "/usr/local/openresty/lualib/?.so;;";
+
+        lua_shared_dict keyword_cache 10m;
+        lua_shared_dict hash_cache 50m;
+        lua_shared_dict config_cache 1m;
+        lua_shared_dict ip_whitelist 5m;
+        lua_shared_dict rate_limit 20m;
+
+        init_worker_by_lua_block {
+            local redis_sync = require "redis_sync"
+            redis_sync.start_sync_timer()
+        }
+
+        upstream haproxy_backend {
+            server ${RELEASE_NAME:-forms-waf}-haproxy:8080;
+            keepalive 32;
+        }
+
+        server {
+            listen 8081;
+            location /health {
+                access_log off;
+                return 200 "OK\n";
+            }
+            location /metrics {
+                access_log off;
+                content_by_lua_block {
+                    local metrics = require "metrics"
+                    ngx.say(metrics.get_prometheus())
+                }
+            }
+        }
+
+        server {
+            listen 8080;
+            server_name _;
+
+            client_body_buffer_size 128k;
+            client_max_body_size 10m;
+
+            location /health {
+                access_log off;
+                return 200 "OK\n";
+            }
+
+            location / {
+                lua_need_request_body on;
+
+                access_by_lua_block {
+                    local waf = require "waf_handler"
+                    waf.process_request()
+                }
+
+                proxy_pass http://haproxy_backend;
+                proxy_http_version 1.1;
+                proxy_set_header Connection "";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Form-Hash $sent_http_x_form_hash;
+                proxy_set_header X-Spam-Score $sent_http_x_spam_score;
+                proxy_set_header X-Spam-Flags $sent_http_x_spam_flags;
+                proxy_set_header X-Client-IP $remote_addr;
+            }
+
+            location /waf-admin/ {
+                allow 10.0.0.0/8;
+                allow 172.16.0.0/12;
+                allow 192.168.0.0/16;
+                deny all;
+
+                content_by_lua_block {
+                    local admin = require "admin_api"
+                    admin.handle_request()
+                }
+            }
+        }
+    }

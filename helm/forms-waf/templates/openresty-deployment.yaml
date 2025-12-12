@@ -1,0 +1,88 @@
+{{- if .Values.openresty.enabled }}
+{{- if eq .Values.openresty.kind "Deployment" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "forms-waf.fullname" . }}-openresty
+  labels:
+    {{- include "forms-waf.openresty.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.openresty.autoscaling.enabled }}
+  replicas: {{ .Values.openresty.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "forms-waf.openresty.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/openresty-configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "forms-waf.openresty.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "forms-waf.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "forms-waf.openresty.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.openresty.securityContext | nindent 8 }}
+      containers:
+        - name: openresty
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.openresty.image.repository }}:{{ .Values.openresty.image.tag }}"
+          imagePullPolicy: {{ .Values.openresty.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: REDIS_HOST
+              value: {{ include "forms-waf.redis.host" . | quote }}
+            - name: REDIS_PORT
+              value: {{ include "forms-waf.redis.port" . | quote }}
+            - name: WAF_SYNC_INTERVAL
+              value: {{ .Values.openresty.env.WAF_SYNC_INTERVAL | quote }}
+            {{- if .Values.redis.auth.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-redis
+                  key: redis-password
+            {{- end }}
+          {{- with .Values.openresty.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.openresty.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.openresty.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.openresty.resources | nindent 12 }}
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: lua-scripts
+              mountPath: /etc/nginx/lua
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ include "forms-waf.fullname" . }}-openresty-config
+        - name: lua-scripts
+          configMap:
+            name: {{ include "forms-waf.fullname" . }}-openresty-lua
+      {{- with .Values.openresty.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.openresty.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.openresty.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

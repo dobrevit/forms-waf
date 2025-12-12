@@ -1,0 +1,84 @@
+{{- if .Values.haproxy.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "forms-waf.fullname" . }}-haproxy
+  labels:
+    {{- include "forms-waf.haproxy.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "forms-waf.haproxy.headlessServiceName" . }}
+  replicas: {{ .Values.haproxy.replicaCount }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "forms-waf.haproxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/haproxy-configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "forms-waf.haproxy.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "forms-waf.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "forms-waf.haproxy.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.haproxy.securityContext | nindent 8 }}
+      containers:
+        - name: haproxy
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.haproxy.image.repository }}:{{ .Values.haproxy.image.tag }}"
+          imagePullPolicy: {{ .Values.haproxy.image.pullPolicy }}
+          args:
+            - haproxy
+            - "-f"
+            - "/usr/local/etc/haproxy/haproxy.cfg"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: stats
+              containerPort: 8404
+              protocol: TCP
+            - name: health
+              containerPort: 8405
+              protocol: TCP
+            - name: peer
+              containerPort: 10000
+              protocol: TCP
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KUBERNETES_MODE
+              value: {{ .Values.haproxy.env.KUBERNETES_MODE | quote }}
+          livenessProbe:
+            {{- toYaml .Values.haproxy.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.haproxy.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.haproxy.resources | nindent 12 }}
+          volumeMounts:
+            - name: haproxy-config
+              mountPath: /usr/local/etc/haproxy/haproxy.cfg
+              subPath: haproxy.cfg
+            - name: run
+              mountPath: /var/run
+      volumes:
+        - name: haproxy-config
+          configMap:
+            name: {{ include "forms-waf.fullname" . }}-haproxy-config
+        - name: run
+          emptyDir: {}
+      {{- with .Values.haproxy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.haproxy.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.haproxy.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

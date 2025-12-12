@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build artifacts
+*.log
+*.pid
+*.sock
+
+# Docker
+.docker/
+
+# Helm
+helm/forms-waf/charts/
+*.tgz
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+/tmp/
+*.tmp
+
+# Environment files with secrets
+.env
+.env.local
+.env.production
+env.production
+env.local
+
+# Redis data
+dump.rdb
+appendonly.aof
+
+# Logs
+logs/
+*.log

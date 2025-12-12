@@ -1,0 +1,73 @@
+Forms WAF has been deployed!
+
+{{- if .Values.ingress.enabled }}
+Access the WAF through the ingress:
+{{- range $host := .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}
+{{- end }}
+{{- else }}
+
+To access the WAF locally, use port forwarding:
+
+  # OpenResty (main entry point)
+  kubectl port-forward svc/{{ include "forms-waf.fullname" . }}-openresty 8080:{{ .Values.openresty.service.port }}
+
+  # HAProxy stats
+  kubectl port-forward svc/{{ include "forms-waf.fullname" . }}-haproxy 8404:{{ .Values.haproxy.service.statsPort }}
+
+{{- end }}
+
+## Testing the WAF
+
+1. Submit a legitimate form:
+   curl -X POST http://localhost:8080/submit \
+     -d "name=John&email=john@example.com&message=Hello"
+
+2. Submit spam content (will be blocked):
+   curl -X POST http://localhost:8080/submit \
+     -d "name=Spammer&email=spam@test.com&message=Buy viagra now!"
+
+3. Check HAProxy stats:
+   Open http://localhost:8404/stats
+
+## Admin API
+
+The WAF admin API is available at /waf-admin/ (restricted to internal IPs):
+
+  # List blocked keywords
+  curl http://localhost:8080/waf-admin/keywords/blocked
+
+  # Add a blocked keyword
+  curl -X POST http://localhost:8080/waf-admin/keywords/blocked \
+    -H "Content-Type: application/json" \
+    -d '{"keyword":"newspam"}'
+
+  # Check status
+  curl http://localhost:8080/waf-admin/status
+
+## Redis Management
+
+{{- if .Values.redis.enabled }}
+Redis is deployed within the cluster. To access:
+
+  kubectl exec -it $(kubectl get pods -l app.kubernetes.io/name=redis -o jsonpath='{.items[0].metadata.name}') -- redis-cli
+
+{{- else }}
+Redis is configured to use an external service at: {{ .Values.externalRedis.host }}:{{ .Values.externalRedis.port }}
+{{- end }}
+
+## Monitoring
+
+{{- if .Values.monitoring.enabled }}
+Prometheus metrics are available at:
+  - OpenResty: http://localhost:8081/metrics
+  - HAProxy: http://localhost:8404/metrics
+{{- else }}
+Monitoring is disabled. Enable it in values.yaml to expose Prometheus metrics.
+{{- end }}
+
+## Components
+
+- OpenResty: {{ .Values.openresty.replicaCount }} replica(s) - Form parsing and filtering
+- HAProxy: {{ .Values.haproxy.replicaCount }} replica(s) - Global rate limiting with stick-table sync
+- Redis: Configuration store for keywords and rules

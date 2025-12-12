@@ -1,0 +1,24 @@
+apiVersion: v2
+name: forms-waf
+description: Forms WAF - Spam protection system with OpenResty and HAProxy
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - waf
+  - security
+  - spam-protection
+  - openresty
+  - haproxy
+  - redis
+maintainers:
+  - name: Security Team
+    email: security@example.com
+home: https://github.com/example/forms-waf
+sources:
+  - https://github.com/example/forms-waf
+dependencies:
+  - name: redis
+    version: "18.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled

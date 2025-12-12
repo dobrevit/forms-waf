@@ -1,0 +1,49 @@
+# Deployment manifests - not needed for container builds
+helm/
+kd-templates/
+
+# Documentation
+docs/
+*.md
+LICENSE
+
+# Scripts (not needed in containers)
+scripts/
+
+# Git
+.git/
+.gitignore
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker Compose (not needed in build context)
+docker-compose*.yml
+docker-compose*.yaml
+
+# Test files
+*.test
+*.spec
+tests/
+
+# Logs and temporary files
+*.log
+*.tmp
+tmp/
+logs/
+
+# Environment files
+.env*
+env.*
+
+# Redis data files
+*.rdb
+*.aof

@@ -1,0 +1,321 @@
+# Default values for forms-waf
+
+# Global settings
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+# Namespace to deploy to (if different from release namespace)
+namespace: ""
+
+# OpenResty configuration
+openresty:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    repository: forms-waf/openresty
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  # DaemonSet or Deployment
+  kind: Deployment
+
+  service:
+    type: ClusterIP
+    port: 8080
+    metricsPort: 8081
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # Autoscaling (only for Deployment)
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+
+  # Environment variables
+  env:
+    WAF_SYNC_INTERVAL: "30"
+
+  # Extra environment variables from secrets/configmaps
+  envFrom: []
+
+  # Node selector
+  nodeSelector: {}
+
+  # Tolerations
+  tolerations: []
+
+  # Affinity rules
+  affinity: {}
+
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # Service account
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    fsGroup: 101
+
+  # Liveness and readiness probes
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8081
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 8081
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# HAProxy configuration
+haproxy:
+  enabled: true
+  replicaCount: 3
+
+  image:
+    repository: forms-waf/haproxy
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8080
+    statsPort: 8404
+    healthPort: 8405
+    peerPort: 10000
+
+  # Headless service for peer discovery
+  headlessService:
+    enabled: true
+    name: haproxy-headless
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # Environment variables
+  env:
+    KUBERNETES_MODE: "true"
+
+  # Node selector
+  nodeSelector: {}
+
+  # Tolerations
+  tolerations: []
+
+  # Affinity rules - prefer spreading across nodes
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - haproxy
+            topologyKey: kubernetes.io/hostname
+
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+  # Service account
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 99
+    fsGroup: 99
+
+  # Liveness and readiness probes
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8405
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 8405
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Redis configuration (using Bitnami chart)
+redis:
+  enabled: true
+  architecture: standalone
+
+  auth:
+    enabled: false
+    # password: ""
+
+  master:
+    persistence:
+      enabled: true
+      size: 1Gi
+
+    resources:
+      limits:
+        cpu: 250m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+
+  # Custom Redis configuration
+  commonConfiguration: |-
+    maxmemory 256mb
+    maxmemory-policy allkeys-lru
+    notify-keyspace-events KEA
+
+# Redis initialization job
+redisInit:
+  enabled: true
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+
+  # Initial blocked keywords
+  blockedKeywords:
+    - viagra
+    - cialis
+    - casino
+    - poker
+    - lottery
+    - crypto-investment
+    - bitcoin-profit
+
+  # Initial flagged keywords (keyword:score format)
+  flaggedKeywords:
+    - "free:10"
+    - "winner:15"
+    - "click here:10"
+    - "urgent:10"
+    - "act now:10"
+    - "limited time:10"
+
+  # Initial thresholds
+  thresholds:
+    spam_score_block: 80
+    spam_score_flag: 50
+    hash_count_block: 10
+    ip_rate_limit: 30
+
+  # Initial whitelisted IPs
+  whitelistedIPs:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+    # nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: forms-waf.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: forms-waf-tls
+    #   hosts:
+    #     - forms-waf.example.com
+
+# Backend service configuration (the actual application)
+backend:
+  # External backend service
+  externalService:
+    enabled: false
+    host: ""
+    port: 8080
+
+  # Internal backend (for testing)
+  mock:
+    enabled: true
+    image:
+      repository: nginx
+      tag: alpine
+      pullPolicy: IfNotPresent
+    replicaCount: 1
+    service:
+      port: 8080
+
+# Network policies
+networkPolicy:
+  enabled: false
+  # Allow traffic only from specific namespaces
+  allowedNamespaces: []
+
+# Pod security policies (deprecated in K8s 1.25+)
+podSecurityPolicy:
+  enabled: false
+
+# Monitoring
+monitoring:
+  enabled: false
+
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+  prometheusRule:
+    enabled: false
+    rules: []
+
+# ConfigMaps for custom configuration
+configMaps:
+  # Custom nginx.conf overrides
+  nginxConfig: {}
+  # Custom HAProxy config overrides
+  haproxyConfig: {}
+  # Custom Lua scripts
+  luaScripts: {}
