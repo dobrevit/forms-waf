@@ -68,8 +68,53 @@ spec:
                 "placeholder-to-avoid-empty"
               redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SREM waf:whitelist:ips "placeholder-to-avoid-empty"
 
+              {{- if .Values.adminUI.enabled }}
+              echo "Creating default admin user..."
+              ADMIN_SALT="waf_admin_salt_v1"
+              ADMIN_PASSWORD="{{ .Values.adminUI.auth.defaultPassword }}"
+              ADMIN_HASH=$(echo -n "${ADMIN_SALT}${ADMIN_PASSWORD}${ADMIN_SALT}" | sha256sum | cut -d' ' -f1)
+              ADMIN_USER_JSON=$(cat <<EOF
+              {
+                "username": "{{ .Values.adminUI.auth.defaultUsername }}",
+                "password_hash": "${ADMIN_HASH}",
+                "salt": "${ADMIN_SALT}",
+                "role": "admin",
+                "must_change_password": true,
+                "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              }
+              EOF
+              )
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:admin:users:{{ .Values.adminUI.auth.defaultUsername }}" "$ADMIN_USER_JSON"
+              echo "Created admin user: {{ .Values.adminUI.auth.defaultUsername }} (password: {{ .Values.adminUI.auth.defaultPassword }})"
+              echo "WARNING: Change the default password on first login!"
+              {{- end }}
+
+              echo "Loading virtual hosts..."
+              {{- range $vhost := .Values.redisInit.vhosts }}
+              # Virtual host: {{ $vhost.id }}
+              VHOST_{{ $vhost.id | replace "-" "_" }}='{{ $vhost.config | toJson }}'
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:vhosts:config:{{ $vhost.id }}" "$VHOST_{{ $vhost.id | replace "-" "_" }}"
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD "waf:vhosts:index" "{{ $vhost.id }}"
+              {{- range $hostname := $vhost.hostnames }}
+              {{- if hasPrefix "*" $hostname }}
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:vhosts:hosts:wildcard" {{ $vhost.priority | default 100 }} "{{ $hostname }}|{{ $vhost.id }}"
+              {{- else }}
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:vhosts:hosts:exact" "{{ $hostname }}" "{{ $vhost.id }}"
+              {{- end }}
+              {{- end }}
+              {{- end }}
+
               echo "Redis initialization complete!"
+              echo "=== Loaded Data Summary ==="
               echo "Blocked keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:blocked)"
               echo "Flagged keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:flagged)"
               echo "Whitelisted IPs: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:whitelist:ips)"
+              echo "Virtual hosts: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:vhosts:index)"
+              {{- if .Values.adminUI.enabled }}
+              echo "Admin users: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" KEYS 'waf:admin:users:*' | wc -l)"
+              echo ""
+              echo "=== Admin UI Access ==="
+              echo "Default credentials: {{ .Values.adminUI.auth.defaultUsername }} / {{ .Values.adminUI.auth.defaultPassword }}"
+              echo "WARNING: Change password on first login!"
+              {{- end }}
 {{- end }}

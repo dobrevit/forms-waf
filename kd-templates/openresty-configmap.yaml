@@ -48,6 +48,7 @@ data:
         lua_shared_dict ip_whitelist 5m;
         lua_shared_dict rate_limit 20m;
         lua_shared_dict endpoint_cache 10m;
+        lua_shared_dict vhost_cache 10m;
 
         init_worker_by_lua_block {
             local redis_sync = require "redis_sync"
@@ -57,6 +58,11 @@ data:
         upstream haproxy_backend {
             server ${RELEASE_NAME:-forms-waf}-haproxy:8080;
             keepalive 32;
+        }
+
+        upstream admin_ui {
+            server ${RELEASE_NAME:-forms-waf}-admin-ui:80;
+            keepalive 4;
         }
 
         server {
@@ -81,11 +87,23 @@ data:
 
             access_log /var/log/nginx/admin-access.log json_combined;
 
-            location / {
-                default_type application/json;
-                return 404 '{"error": "Not found", "hint": "Admin API is available at /waf-admin/"}\n';
+            # Authentication endpoints (no auth required)
+            location /api/auth/ {
+                content_by_lua_block {
+                    local admin_auth = require "admin_auth"
+                    admin_auth.handle_request()
+                }
             }
 
+            # Admin API endpoints (auth required)
+            location /api/ {
+                content_by_lua_block {
+                    local admin = require "admin_api"
+                    admin.handle_request()
+                }
+            }
+
+            # Legacy admin API endpoints (backward compatibility)
             location /waf-admin/ {
                 content_by_lua_block {
                     local admin = require "admin_api"
@@ -93,9 +111,21 @@ data:
                 }
             }
 
+            # Health check for admin port
             location /health {
                 access_log off;
                 return 200 "OK\n";
+            }
+
+            # Admin UI - React SPA (catch-all for frontend routes)
+            location / {
+                proxy_pass http://admin_ui;
+                proxy_http_version 1.1;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_set_header Connection "";
             }
         }
 

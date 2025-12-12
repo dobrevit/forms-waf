@@ -18,6 +18,12 @@ local DEFAULT_THRESHOLDS = {
     ip_daily_limit = 500,        -- Max form submissions per day per IP
 }
 
+-- Default routing settings
+local DEFAULT_ROUTING = {
+    haproxy_upstream = "haproxy:80",  -- Default HAProxy upstream address
+    haproxy_timeout = 30,             -- Default timeout in seconds
+}
+
 -- Get thresholds (from Redis cache or defaults)
 function _M.get_thresholds()
     local cached = config_cache:get("thresholds")
@@ -44,11 +50,47 @@ function _M.get_threshold(name)
     return thresholds[name] or DEFAULT_THRESHOLDS[name]
 end
 
+-- Get routing config (from Redis cache or defaults)
+function _M.get_routing()
+    local cached = config_cache:get("routing")
+
+    if cached then
+        local routing = cjson.decode(cached)
+        if routing then
+            -- Merge with defaults
+            for k, v in pairs(DEFAULT_ROUTING) do
+                if not routing[k] then
+                    routing[k] = v
+                end
+            end
+            return routing
+        end
+    end
+
+    return DEFAULT_ROUTING
+end
+
+-- Get HAProxy upstream address
+function _M.get_haproxy_upstream()
+    local routing = _M.get_routing()
+    return routing.haproxy_upstream or DEFAULT_ROUTING.haproxy_upstream
+end
+
+-- Get HAProxy timeout
+function _M.get_haproxy_timeout()
+    local routing = _M.get_routing()
+    return routing.haproxy_timeout or DEFAULT_ROUTING.haproxy_timeout
+end
+
 -- Get all config (for admin API)
 function _M.get_all()
     return {
         thresholds = _M.get_thresholds(),
-        defaults = DEFAULT_THRESHOLDS,
+        routing = _M.get_routing(),
+        defaults = {
+            thresholds = DEFAULT_THRESHOLDS,
+            routing = DEFAULT_ROUTING,
+        },
     }
 end
 

@@ -1,0 +1,193 @@
+// API Response types
+export interface ApiResponse<T> {
+  status?: 'ok'
+  data?: T
+  error?: string
+}
+
+// Auth types
+export interface User {
+  username: string
+  must_change_password?: boolean
+}
+
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
+export interface ChangePasswordRequest {
+  current_password: string
+  new_password: string
+}
+
+// Virtual Host types
+export interface VhostWafConfig {
+  enabled: boolean
+  mode: 'monitoring' | 'blocking' | 'passthrough' | 'strict'
+}
+
+export interface VhostRouting {
+  use_haproxy: boolean
+  haproxy_backend?: string
+  haproxy_upstream?: string  // Override global HAProxy upstream
+  upstream?: {
+    servers: string[]
+    health_check?: string
+    timeout?: number
+  }
+}
+
+// Global routing configuration
+export interface GlobalRouting {
+  haproxy_upstream: string  // Default HAProxy upstream address (e.g., "haproxy:80")
+  haproxy_timeout?: number  // Default timeout for HAProxy connections
+}
+
+export interface VhostThresholds {
+  spam_score_block?: number
+  spam_score_flag?: number
+  ip_rate_limit?: number
+}
+
+export interface VhostKeywords {
+  inherit_global: boolean
+  additional_blocked?: string[]
+  additional_flagged?: string[]
+  exclusions?: string[]
+}
+
+export interface VhostEndpoints {
+  inherit_global: boolean
+  overrides?: Record<string, unknown>
+  custom?: unknown[]
+}
+
+export interface Vhost {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  hostnames: string[]
+  waf: VhostWafConfig
+  routing: VhostRouting
+  thresholds?: VhostThresholds
+  keywords?: VhostKeywords
+  endpoints?: VhostEndpoints
+  endpoint_count?: number  // Number of vhost-specific endpoints
+}
+
+// Endpoint types
+export interface EndpointMatching {
+  paths?: string[]
+  path_prefix?: string
+  path_regex?: string
+  methods?: string[]
+  content_types?: string[]
+}
+
+export interface EndpointThresholds {
+  spam_score_block?: number
+  spam_score_flag?: number
+  ip_rate_limit?: number
+  ip_daily_limit?: number
+  hash_count_block?: number
+  hash_unique_ips_block?: number
+}
+
+export interface EndpointKeywords {
+  inherit_global: boolean
+  blocked?: Record<string, unknown>  // Endpoint-specific blocked keywords
+  flagged?: Record<string, unknown>  // Endpoint-specific flagged keywords
+  additional_blocked?: string[]  // Legacy
+  additional_flagged?: string[]  // Legacy
+}
+
+export interface EndpointFields {
+  required?: string[] | Record<string, unknown>
+  max_length?: Record<string, number>
+  ignore_fields?: string[]
+}
+
+export interface EndpointRateLimiting {
+  enabled: boolean
+  requests_per_minute?: number
+}
+
+export interface EndpointPatterns {
+  inherit_global: boolean
+  disabled_patterns?: Record<string, boolean>
+  custom_patterns?: Record<string, unknown>
+}
+
+export interface EndpointActions {
+  on_flag?: 'tag' | 'log' | 'none'
+  on_block?: 'reject' | 'tag' | 'log'
+  log_level?: 'debug' | 'info' | 'warn' | 'error'
+}
+
+export interface EndpointHashContent {
+  enabled: boolean
+  fields?: string[]  // Only hash these specific fields
+}
+
+export interface Endpoint {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  mode: 'monitoring' | 'blocking' | 'passthrough' | 'strict'
+  priority?: number
+  vhost_id?: string | null  // null/empty = global endpoint
+  matching: EndpointMatching
+  thresholds?: EndpointThresholds
+  keywords?: EndpointKeywords
+  fields?: EndpointFields
+  rate_limiting?: EndpointRateLimiting
+  patterns?: EndpointPatterns
+  actions?: EndpointActions
+  hash_content?: EndpointHashContent
+}
+
+// Config types
+export interface Thresholds {
+  spam_score_block: number
+  spam_score_flag: number
+  hash_count_block: number
+  ip_rate_limit: number
+  ip_daily_limit?: number
+  hash_unique_ips_block?: number
+}
+
+// Status types
+export interface WafStatus {
+  status: string
+  redis_connected: boolean
+  blocked_keywords_count: number
+  flagged_keywords_count: number
+  blocked_hashes_count: number
+  whitelisted_ips_count: number
+  endpoints_count: number
+  vhosts_count: number
+}
+
+// Match test types
+export interface VhostMatchResult {
+  vhost_id: string
+  match_type: 'exact' | 'wildcard' | 'default'
+  config?: Vhost
+}
+
+export interface EndpointMatchResult {
+  endpoint_id: string
+  match_type: 'exact' | 'prefix' | 'regex' | 'global'
+  config?: Endpoint
+}
+
+export interface ContextResult {
+  vhost: VhostMatchResult
+  endpoint: EndpointMatchResult
+  skip_waf: boolean
+  reason?: string
+  mode: string
+}

@@ -1,6 +1,6 @@
 # Forms WAF - Spam Protection System
 
-A multi-layer spam protection system for web forms using OpenResty (Lua) for form parsing/filtering and HAProxy with stick-tables for global rate limiting.
+A multi-layer spam protection system for web forms using OpenResty (Lua) for form parsing/filtering and HAProxy with stick-tables for global rate limiting. Includes a modern React-based Admin UI for configuration management.
 
 ## Architecture Overview
 
@@ -8,6 +8,8 @@ A multi-layer spam protection system for web forms using OpenResty (Lua) for for
 Client → Ingress → OpenResty → HAProxy → Backend
                       ↓            ↓
                     Redis    (Stick-table sync)
+                      ↑
+                  Admin UI
 ```
 
 ### Components
@@ -17,6 +19,8 @@ Client → Ingress → OpenResty → HAProxy → Backend
    - SHA256 hashing of form content for duplicate detection
    - Redis-backed dynamic keyword filtering
    - Pattern-based spam scoring (URLs, XSS, etc.)
+   - **Virtual host (vhost) support** - Multi-tenant with per-host configuration
+   - **Dynamic endpoint configuration** - Per-endpoint WAF rules and thresholds
 
 2. **HAProxy** - Global rate limiting with stick-table synchronization
    - StatefulSet with peer discovery
@@ -29,6 +33,15 @@ Client → Ingress → OpenResty → HAProxy → Backend
    - Blocked content hashes
    - Configuration thresholds
    - IP whitelist
+   - **Virtual host configurations**
+   - **Endpoint configurations**
+
+4. **Admin UI** - React-based management dashboard
+   - Session-based authentication with password management
+   - Virtual host management (multi-tenant)
+   - Endpoint configuration with per-endpoint thresholds
+   - Keyword management (blocked/flagged with scores)
+   - Real-time configuration updates
 
 ## Quick Start
 
@@ -97,8 +110,16 @@ export HAPROXY_IMAGE=your-registry/forms-waf-haproxy
 | `waf:keywords:blocked` | SET | Keywords that trigger immediate block |
 | `waf:keywords:flagged` | SET | Keywords that add to spam score (format: `keyword:score`) |
 | `waf:hashes:blocked` | SET | Content hashes to block |
-| `waf:config:thresholds` | HASH | Configuration thresholds |
+| `waf:config:thresholds` | HASH | Global configuration thresholds |
+| `waf:config:routing` | HASH | Global routing configuration (HAProxy upstream) |
 | `waf:whitelist:ips` | SET | IPs to bypass filtering |
+| `waf:vhosts:index` | ZSET | Virtual host IDs by priority |
+| `waf:vhosts:config:{id}` | STRING | Virtual host configuration (JSON) |
+| `waf:vhosts:hosts:exact` | HASH | Exact hostname to vhost mapping |
+| `waf:vhosts:hosts:wildcard` | ZSET | Wildcard hostname patterns |
+| `waf:endpoints:index` | ZSET | Endpoint IDs by priority |
+| `waf:endpoints:config:{id}` | STRING | Endpoint configuration (JSON) |
+| `waf:endpoints:paths:exact` | HASH | Exact path to endpoint mapping |
 
 ### Thresholds
 
@@ -108,6 +129,8 @@ export HAPROXY_IMAGE=your-registry/forms-waf-haproxy
 | `spam_score_flag` | 50 | Score at which to flag for HAProxy |
 | `hash_count_block` | 10 | Block if same hash seen N times |
 | `ip_rate_limit` | 30 | Max submissions per minute per IP |
+| `ip_daily_limit` | 500 | Max submissions per day per IP |
+| `hash_unique_ips_block` | 5 | Block hash if seen from N unique IPs |
 
 ### Managing Keywords
 
@@ -130,22 +153,49 @@ redis-cli SADD waf:keywords:flagged "suspicious:15"
 
 ## API Endpoints
 
-### WAF Admin API
+### Authentication (Port 8082)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/waf-admin/status` | GET | WAF status and configuration |
-| `/waf-admin/keywords/blocked` | GET/POST/DELETE | Manage blocked keywords |
-| `/waf-admin/keywords/flagged` | GET/POST | Manage flagged keywords |
-| `/waf-admin/hashes/blocked` | GET/POST | Manage blocked hashes |
-| `/waf-admin/whitelist/ips` | GET/POST | Manage IP whitelist |
-| `/waf-admin/config/thresholds` | GET/POST | Manage thresholds |
-| `/waf-admin/sync` | POST | Force Redis sync |
+| `/api/auth/login` | POST | Login with username/password |
+| `/api/auth/logout` | POST | End session |
+| `/api/auth/verify` | GET | Verify session validity |
+| `/api/auth/change-password` | POST | Change password |
+
+### WAF Admin API (Port 8082, requires authentication)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/status` | GET | WAF status and configuration |
+| `/api/keywords/blocked` | GET/POST/PUT/DELETE | Manage blocked keywords |
+| `/api/keywords/flagged` | GET/POST/PUT/DELETE | Manage flagged keywords |
+| `/api/hashes/blocked` | GET/POST/DELETE | Manage blocked hashes |
+| `/api/whitelist/ips` | GET/POST/DELETE | Manage IP whitelist |
+| `/api/config/thresholds` | GET/POST | Manage global thresholds |
+| `/api/config/routing` | GET/PUT | Manage global routing (HAProxy upstream) |
+| `/api/vhosts` | GET/POST | List/create virtual hosts |
+| `/api/vhosts/{id}` | GET/PUT/DELETE | Manage virtual host |
+| `/api/vhosts/{id}/enable` | POST | Enable virtual host |
+| `/api/vhosts/{id}/disable` | POST | Disable virtual host |
+| `/api/vhosts/match` | GET | Test hostname matching |
+| `/api/vhosts/context` | GET | Get full request context |
+| `/api/endpoints` | GET/POST | List/create endpoints |
+| `/api/endpoints/{id}` | GET/PUT/DELETE | Manage endpoint |
+| `/api/endpoints/{id}/enable` | POST | Enable endpoint |
+| `/api/endpoints/{id}/disable` | POST | Disable endpoint |
+| `/api/endpoints/match` | GET | Test path matching |
+| `/api/sync` | POST | Force Redis sync |
 
 ### HAProxy Stats
 
 - Stats UI: `http://localhost:8404/stats`
 - Prometheus metrics: `http://localhost:8404/metrics`
+
+### Admin UI
+
+Access the Admin UI at `http://localhost:3000` (development) or via the configured ingress.
+
+Default credentials: `admin` / `changeme` (must be changed on first login)
 
 ## Testing
 
@@ -194,6 +244,17 @@ curl -X POST http://localhost:8080/submit \
 ```
 forms-waf/
 ├── docker-compose.yml        # Local development
+├── admin-ui/                 # React Admin Dashboard
+│   ├── src/
+│   │   ├── api/              # API client and types
+│   │   ├── components/       # UI components (shadcn/ui)
+│   │   ├── contexts/         # Auth context
+│   │   └── pages/            # Page components
+│   │       ├── vhosts/       # Virtual host management
+│   │       ├── endpoints/    # Endpoint configuration
+│   │       ├── keywords/     # Keyword management
+│   │       └── config/       # Global configuration
+│   └── package.json
 ├── openresty/
 │   ├── Dockerfile
 │   ├── conf/nginx.conf
@@ -203,8 +264,12 @@ forms-waf/
 │       ├── content_hasher.lua   # Content hashing
 │       ├── keyword_filter.lua   # Keyword filtering
 │       ├── redis_sync.lua       # Redis synchronization
-│       ├── waf_config.lua       # Configuration
-│       ├── admin_api.lua        # Admin API
+│       ├── waf_config.lua       # Global configuration
+│       ├── admin_api.lua        # Admin API endpoints
+│       ├── admin_auth.lua       # Session authentication
+│       ├── vhost_matcher.lua    # Virtual host matching
+│       ├── vhost_resolver.lua   # Request context resolution
+│       ├── endpoint_matcher.lua # Endpoint matching
 │       └── metrics.lua          # Prometheus metrics
 ├── haproxy/
 │   ├── Dockerfile
@@ -216,7 +281,10 @@ forms-waf/
 ├── helm/forms-waf/           # Helm chart
 │   ├── Chart.yaml
 │   ├── values.yaml
+│   ├── files/lua/            # Lua modules for ConfigMap
 │   └── templates/
+│       ├── admin-ui-*.yaml   # Admin UI deployment
+│       └── ...
 ├── kd-templates/             # kd deployment templates
 │   ├── deploy.sh
 │   ├── env.default
@@ -226,17 +294,43 @@ forms-waf/
 │   ├── load-test.sh
 │   └── manage-keywords.sh
 └── docs/
-    └── ARCHITECTURE.md
+    ├── ARCHITECTURE.md
+    ├── ENDPOINT_CONFIGURATION.md
+    └── ADMIN_API_SEPARATION.md
 ```
 
 ## Production Considerations
 
 1. **Redis HA**: Use Redis Sentinel or Cluster for high availability
 2. **TLS**: Enable TLS for HAProxy peer communication
-3. **Authentication**: Protect admin API with authentication
-4. **Monitoring**: Enable Prometheus metrics and alerts
-5. **Logging**: Configure structured logging for analysis
-6. **Tuning**: Adjust stick-table sizes based on traffic
+3. **Admin UI Security**:
+   - Change default admin password immediately
+   - Run Admin UI behind ingress with TLS
+   - Consider network policies to restrict access
+4. **Admin API**: Runs on dedicated port 8082 (not exposed externally)
+5. **Monitoring**: Enable Prometheus metrics and alerts
+6. **Logging**: Configure structured logging for analysis
+7. **Tuning**: Adjust stick-table sizes based on traffic
+
+## Key Features
+
+### Multi-Tenant Virtual Hosts
+- Configure per-host WAF rules
+- Wildcard hostname support (e.g., `*.example.com`)
+- Per-vhost routing to different HAProxy backends
+- Override global thresholds per vhost
+
+### Dynamic Endpoint Configuration
+- Per-endpoint WAF modes (blocking, monitoring, passthrough, strict)
+- Custom thresholds per endpoint
+- Rate limiting per endpoint
+- Field validation (required fields, max lengths, ignored fields)
+- Vhost-scoped endpoints (priority over global)
+
+### Keyword Management
+- Blocked keywords: Immediate rejection
+- Flagged keywords: Score-based with customizable weights
+- Edit/update keywords atomically via API
 
 ## License
 

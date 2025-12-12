@@ -1,5 +1,5 @@
 -- redis_sync.lua
--- Synchronizes keyword lists, configuration, and endpoint configs from Redis
+-- Synchronizes keyword lists, configuration, endpoint configs, and vhost configs from Redis
 
 local _M = {}
 
@@ -7,6 +7,7 @@ local redis = require "resty.redis"
 local cjson = require "cjson.safe"
 local keyword_filter = require "keyword_filter"
 local endpoint_matcher = require "endpoint_matcher"
+local vhost_matcher = require "vhost_matcher"
 
 -- Configuration
 local REDIS_HOST = os.getenv("REDIS_HOST") or "redis"
@@ -23,6 +24,7 @@ local KEYS = {
     flagged_keywords = "waf:keywords:flagged",
     blocked_hashes = "waf:hashes:blocked",
     thresholds = "waf:config:thresholds",
+    routing = "waf:config:routing",
     ip_whitelist = "waf:whitelist:ips",
     -- Endpoint configuration keys
     endpoint_index = "waf:endpoints:index",
@@ -30,6 +32,11 @@ local KEYS = {
     endpoint_paths_exact = "waf:endpoints:paths:exact",
     endpoint_paths_prefix = "waf:endpoints:paths:prefix",
     endpoint_paths_regex = "waf:endpoints:paths:regex",
+    -- Virtual host configuration keys
+    vhost_index = "waf:vhosts:index",
+    vhost_config_prefix = "waf:vhosts:config:",
+    vhost_hosts_exact = "waf:vhosts:hosts:exact",
+    vhost_hosts_wildcard = "waf:vhosts:hosts:wildcard",
 }
 
 -- Shared dictionaries
@@ -149,6 +156,32 @@ local function sync_thresholds(red)
         local cjson = require "cjson.safe"
         config_cache:set("thresholds", cjson.encode(thresholds), 120)
         ngx.log(ngx.DEBUG, "Synced thresholds")
+    end
+end
+
+-- Sync routing configuration
+local function sync_routing(red)
+    local config, err = red:hgetall(KEYS.routing)
+    if not config then
+        ngx.log(ngx.WARN, "Failed to get routing config: ", err)
+        return
+    end
+
+    if type(config) == "table" and #config > 0 then
+        local routing = {}
+        for i = 1, #config, 2 do
+            local key = config[i]
+            local value = config[i + 1]
+            if key and value then
+                -- Try to convert to number if applicable
+                local num_value = tonumber(value)
+                routing[key] = num_value or value
+            end
+        end
+
+        -- Store as JSON
+        config_cache:set("routing", cjson.encode(routing), 120)
+        ngx.log(ngx.DEBUG, "Synced routing config")
     end
 end
 
@@ -339,6 +372,142 @@ local function sync_endpoints(red)
     ngx.log(ngx.DEBUG, "Synced ", synced_count, " endpoint configurations")
 end
 
+-- ============================================================================
+-- Virtual Host Sync Functions
+-- ============================================================================
+
+-- Sync vhost index (list of all vhost IDs)
+local function sync_vhost_index(red)
+    -- Get all vhost IDs from sorted set (ordered by priority)
+    local vhosts, err = red:zrange(KEYS.vhost_index, 0, -1)
+    if not vhosts then
+        ngx.log(ngx.WARN, "Failed to get vhost index: ", err)
+        return {}
+    end
+
+    if type(vhosts) == "table" and #vhosts > 0 then
+        local json_data = cjson.encode(vhosts)
+        vhost_matcher.update_cache("vhost_index", json_data, 120)
+        ngx.log(ngx.DEBUG, "Synced ", #vhosts, " vhost IDs")
+        return vhosts
+    else
+        vhost_matcher.update_cache("vhost_index", "[]", 120)
+        return {}
+    end
+end
+
+-- Sync exact hostname mappings
+local function sync_exact_hosts(red)
+    local hosts, err = red:hgetall(KEYS.vhost_hosts_exact)
+    if not hosts then
+        ngx.log(ngx.WARN, "Failed to get exact hosts: ", err)
+        return
+    end
+
+    local host_map = {}
+    if type(hosts) == "table" then
+        for i = 1, #hosts, 2 do
+            local hostname = hosts[i]
+            local vhost_id = hosts[i + 1]
+            if hostname and vhost_id then
+                host_map[hostname:lower()] = vhost_id
+            end
+        end
+    end
+
+    local json_data = cjson.encode(host_map)
+    vhost_matcher.update_cache("exact_hosts", json_data, 120)
+    ngx.log(ngx.DEBUG, "Synced exact host mappings")
+end
+
+-- Sync wildcard host patterns
+local function sync_wildcard_patterns(red)
+    -- Wildcard patterns stored as sorted set with format "pattern|vhost_id"
+    local patterns, err = red:zrange(KEYS.vhost_hosts_wildcard, 0, -1, "WITHSCORES")
+    if not patterns then
+        ngx.log(ngx.WARN, "Failed to get wildcard patterns: ", err)
+        return
+    end
+
+    local wildcard_list = {}
+    if type(patterns) == "table" then
+        -- Patterns come as [value, score, value, score, ...]
+        for i = 1, #patterns, 2 do
+            local pattern_str = patterns[i]
+            local priority = tonumber(patterns[i + 1]) or 100
+
+            -- Parse pattern: "*.example.com|vhost_id"
+            local pattern, vhost_id = pattern_str:match("^(.+)|([^|]+)$")
+            if pattern and vhost_id then
+                table.insert(wildcard_list, {
+                    pattern = pattern:lower(),
+                    vhost_id = vhost_id,
+                    priority = priority
+                })
+            end
+        end
+
+        -- Sort by pattern specificity (longer patterns first, then by priority)
+        table.sort(wildcard_list, function(a, b)
+            if #a.pattern == #b.pattern then
+                return a.priority < b.priority
+            end
+            return #a.pattern > #b.pattern
+        end)
+    end
+
+    local json_data = cjson.encode(wildcard_list)
+    vhost_matcher.update_cache("wildcard_patterns", json_data, 120)
+    ngx.log(ngx.DEBUG, "Synced ", #wildcard_list, " wildcard host patterns")
+end
+
+-- Sync individual vhost configuration
+local function sync_vhost_config(red, vhost_id)
+    local config_key = KEYS.vhost_config_prefix .. vhost_id
+    local config_json, err = red:get(config_key)
+
+    if not config_json or config_json == ngx.null then
+        ngx.log(ngx.DEBUG, "No config found for vhost: ", vhost_id)
+        return nil
+    end
+
+    local config = cjson.decode(config_json)
+    if config then
+        vhost_matcher.cache_config(vhost_id, config, 120)
+        ngx.log(ngx.DEBUG, "Synced config for vhost: ", vhost_id)
+        return config
+    end
+
+    return nil
+end
+
+-- Sync all vhost configurations
+local function sync_vhosts(red)
+    -- First sync the index to get all vhost IDs
+    local vhost_ids = sync_vhost_index(red)
+
+    -- Sync host mappings
+    sync_exact_hosts(red)
+    sync_wildcard_patterns(red)
+
+    -- Sync individual vhost configs
+    local synced_count = 0
+    for _, vhost_id in ipairs(vhost_ids) do
+        local config = sync_vhost_config(red, vhost_id)
+        if config then
+            synced_count = synced_count + 1
+        end
+    end
+
+    -- Also sync the default vhost if it exists
+    local default_config = sync_vhost_config(red, "_default")
+    if default_config then
+        synced_count = synced_count + 1
+    end
+
+    ngx.log(ngx.DEBUG, "Synced ", synced_count, " vhost configurations")
+end
+
 -- Main sync function
 local function do_sync()
     local red, err = get_redis_connection()
@@ -352,10 +521,14 @@ local function do_sync()
     sync_flagged_keywords(red)
     sync_blocked_hashes(red)
     sync_thresholds(red)
+    sync_routing(red)
     sync_ip_whitelist(red)
 
     -- Sync endpoint configurations
     sync_endpoints(red)
+
+    -- Sync vhost configurations
+    sync_vhosts(red)
 
     close_redis(red)
 
@@ -406,6 +579,7 @@ function _M.get_status()
         sync_interval = SYNC_INTERVAL,
         filter_stats = keyword_filter.get_stats(),
         endpoint_stats = endpoint_matcher.get_stats(),
+        vhost_stats = vhost_matcher.get_stats(),
     }
 end
 
@@ -425,6 +599,124 @@ function _M.sync_endpoint(endpoint_id)
     close_redis(red)
 
     return config
+end
+
+-- Sync single vhost (for admin API)
+function _M.sync_vhost(vhost_id)
+    local red, err = get_redis_connection()
+    if not red then
+        return nil, err
+    end
+
+    local config = sync_vhost_config(red, vhost_id)
+    close_redis(red)
+
+    return config
+end
+
+-- Sync all vhosts (for admin API)
+function _M.sync_all_vhosts()
+    local red, err = get_redis_connection()
+    if not red then
+        return nil, err
+    end
+
+    sync_vhosts(red)
+    close_redis(red)
+
+    return true
+end
+
+-- Get Redis connection (exposed for admin API direct operations)
+function _M.get_connection()
+    return get_redis_connection()
+end
+
+-- Return connection to pool (exposed for admin API)
+function _M.return_connection(red)
+    close_redis(red)
+end
+
+-- Default values for seeding Redis
+local DEFAULT_THRESHOLDS = {
+    spam_score_block = 80,
+    spam_score_flag = 50,
+    hash_count_block = 10,
+    hash_unique_ips_block = 5,
+    ip_rate_limit = 30,
+    ip_daily_limit = 500,
+}
+
+local DEFAULT_ROUTING = {
+    haproxy_upstream = "haproxy:80",
+    haproxy_timeout = 30,
+}
+
+local DEFAULT_VHOST = {
+    id = "_default",
+    name = "Default Virtual Host",
+    enabled = true,
+    hostnames = {},
+    waf = {
+        enabled = true,
+        default_mode = "monitoring",
+    },
+    routing = {
+        use_haproxy = true,
+    },
+    priority = 1000,
+}
+
+-- Initialize Redis with default values if keys don't exist
+-- This ensures sensible defaults are present without requiring external init scripts
+function _M.initialize_defaults()
+    local red, err = get_redis_connection()
+    if not red then
+        ngx.log(ngx.ERR, "Failed to connect to Redis for initialization: ", err)
+        return false, err
+    end
+
+    local initialized = {}
+
+    -- Initialize thresholds if empty
+    local thresholds_count = red:hlen(KEYS.thresholds)
+    if not thresholds_count or thresholds_count == 0 then
+        ngx.log(ngx.INFO, "Initializing default thresholds in Redis")
+        for key, value in pairs(DEFAULT_THRESHOLDS) do
+            red:hset(KEYS.thresholds, key, value)
+        end
+        table.insert(initialized, "thresholds")
+    end
+
+    -- Initialize routing config if empty
+    local routing_count = red:hlen(KEYS.routing)
+    if not routing_count or routing_count == 0 then
+        ngx.log(ngx.INFO, "Initializing default routing config in Redis")
+        for key, value in pairs(DEFAULT_ROUTING) do
+            red:hset(KEYS.routing, key, value)
+        end
+        table.insert(initialized, "routing")
+    end
+
+    -- Initialize default vhost if no vhosts exist
+    local vhost_count = red:zcard(KEYS.vhost_index)
+    if not vhost_count or vhost_count == 0 then
+        ngx.log(ngx.INFO, "Initializing default virtual host in Redis")
+        local config_json = cjson.encode(DEFAULT_VHOST)
+        red:set(KEYS.vhost_config_prefix .. DEFAULT_VHOST.id, config_json)
+        red:zadd(KEYS.vhost_index, DEFAULT_VHOST.priority, DEFAULT_VHOST.id)
+        table.insert(initialized, "default_vhost")
+    end
+
+    close_redis(red)
+
+    if #initialized > 0 then
+        ngx.log(ngx.INFO, "Redis initialized with defaults: ", table.concat(initialized, ", "))
+    else
+        ngx.log(ngx.DEBUG, "Redis already initialized, no defaults needed")
+    end
+
+    return true, initialized
 end
 
 return _M

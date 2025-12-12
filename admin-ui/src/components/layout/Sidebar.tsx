@@ -1,0 +1,88 @@
+import { NavLink } from 'react-router-dom'
+import { cn } from '@/lib/utils'
+import {
+  LayoutDashboard,
+  Globe,
+  Route,
+  Ban,
+  Flag,
+  Settings,
+  Shield,
+  Network,
+} from 'lucide-react'
+
+const navigation = [
+  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+  { name: 'Virtual Hosts', href: '/vhosts', icon: Globe },
+  { name: 'Endpoints', href: '/endpoints', icon: Route },
+  {
+    name: 'Keywords',
+    children: [
+      { name: 'Blocked', href: '/keywords/blocked', icon: Ban },
+      { name: 'Flagged', href: '/keywords/flagged', icon: Flag },
+    ],
+  },
+  {
+    name: 'Configuration',
+    children: [
+      { name: 'Thresholds', href: '/config/thresholds', icon: Settings },
+      { name: 'IP Whitelist', href: '/config/whitelist', icon: Network },
+    ],
+  },
+]
+
+export function Sidebar() {
+  return (
+    <div className="flex h-full w-64 flex-col border-r bg-background">
+      <div className="flex h-16 items-center border-b px-6">
+        <Shield className="h-6 w-6 text-primary" />
+        <span className="ml-2 text-lg font-semibold">Forms WAF</span>
+      </div>
+      <nav className="flex-1 space-y-1 px-3 py-4">
+        {navigation.map((item) =>
+          item.children ? (
+            <div key={item.name} className="space-y-1">
+              <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                {item.name}
+              </div>
+              {item.children.map((child) => (
+                <NavLink
+                  key={child.href}
+                  to={child.href}
+                  className={({ isActive }) =>
+                    cn(
+                      'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                      isActive
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    )
+                  }
+                >
+                  <child.icon className="h-4 w-4" />
+                  {child.name}
+                </NavLink>
+              ))}
+            </div>
+          ) : (
+            <NavLink
+              key={item.href}
+              to={item.href}
+              end={item.href === '/'}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                  isActive
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                )
+              }
+            >
+              <item.icon className="h-4 w-4" />
+              {item.name}
+            </NavLink>
+          )
+        )}
+      </nav>
+    </div>
+  )
+}

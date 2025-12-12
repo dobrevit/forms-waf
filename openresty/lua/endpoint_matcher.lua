@@ -68,6 +68,62 @@ local function get_regex_patterns()
     return {}
 end
 
+-- ============================================================================
+-- Vhost-specific cache functions
+-- ============================================================================
+
+-- Get cached vhost-specific endpoint index
+local function get_vhost_endpoint_index(vhost_id)
+    if not vhost_id or vhost_id == "" then
+        return {}
+    end
+    local cache_key = "vhost_endpoint_index:" .. vhost_id
+    local cached = endpoint_cache:get(cache_key)
+    if cached then
+        return cjson.decode(cached)
+    end
+    return {}
+end
+
+-- Get cached vhost-specific exact path mappings
+local function get_vhost_exact_paths(vhost_id)
+    if not vhost_id or vhost_id == "" then
+        return {}
+    end
+    local cache_key = "vhost_exact_paths:" .. vhost_id
+    local cached = endpoint_cache:get(cache_key)
+    if cached then
+        return cjson.decode(cached)
+    end
+    return {}
+end
+
+-- Get cached vhost-specific prefix patterns
+local function get_vhost_prefix_patterns(vhost_id)
+    if not vhost_id or vhost_id == "" then
+        return {}
+    end
+    local cache_key = "vhost_prefix_patterns:" .. vhost_id
+    local cached = endpoint_cache:get(cache_key)
+    if cached then
+        return cjson.decode(cached)
+    end
+    return {}
+end
+
+-- Get cached vhost-specific regex patterns
+local function get_vhost_regex_patterns(vhost_id)
+    if not vhost_id or vhost_id == "" then
+        return {}
+    end
+    local cache_key = "vhost_regex_patterns:" .. vhost_id
+    local cached = endpoint_cache:get(cache_key)
+    if cached then
+        return cjson.decode(cached)
+    end
+    return {}
+end
+
 -- Normalize path for matching (remove trailing slash, lowercase)
 local function normalize_path(path)
     if not path then
@@ -182,6 +238,76 @@ local function match_regex(path, method)
     return nil
 end
 
+-- ============================================================================
+-- Vhost-specific matching functions
+-- ============================================================================
+
+-- Match request against vhost-specific exact paths
+-- Returns: endpoint_id or nil
+local function match_vhost_exact(path, method, vhost_id)
+    local exact_paths = get_vhost_exact_paths(vhost_id)
+
+    -- Try exact path + method first
+    local key = path .. ":" .. method:upper()
+    if exact_paths[key] then
+        return exact_paths[key]
+    end
+
+    -- Try exact path with wildcard method
+    key = path .. ":*"
+    if exact_paths[key] then
+        return exact_paths[key]
+    end
+
+    return nil
+end
+
+-- Match request against vhost-specific prefix patterns
+-- Returns: endpoint_id or nil
+local function match_vhost_prefix(path, method, vhost_id)
+    local prefix_patterns = get_vhost_prefix_patterns(vhost_id)
+
+    -- Prefix patterns are sorted by length (longest first) for specificity
+    for _, pattern in ipairs(prefix_patterns) do
+        local prefix = pattern.prefix
+        local endpoint_method = pattern.method or "*"
+
+        -- Check if path starts with prefix
+        if path:sub(1, #prefix) == prefix then
+            -- Check method
+            if endpoint_method == "*" or endpoint_method:upper() == method:upper() then
+                return pattern.endpoint_id
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Match request against vhost-specific regex patterns
+-- Returns: endpoint_id or nil
+local function match_vhost_regex(path, method, vhost_id)
+    local regex_patterns = get_vhost_regex_patterns(vhost_id)
+
+    for _, pattern in ipairs(regex_patterns) do
+        local regex = pattern.pattern
+        local endpoint_method = pattern.method or "*"
+
+        -- Check regex match
+        local match, err = ngx.re.match(path, regex, "jo")
+        if match then
+            -- Check method
+            if endpoint_method == "*" or endpoint_method:upper() == method:upper() then
+                return pattern.endpoint_id
+            end
+        elseif err then
+            ngx.log(ngx.WARN, "Regex match error for pattern '", regex, "': ", err)
+        end
+    end
+
+    return nil
+end
+
 -- Main matching function
 -- Returns: endpoint_id, match_type
 function _M.match(path, method)
@@ -208,6 +334,44 @@ function _M.match(path, method)
 
     -- 4. No match found
     return nil, MATCH_TYPE.NONE
+end
+
+-- Vhost-aware matching function
+-- Tries vhost-specific endpoints first, then falls back to global
+-- Returns: endpoint_id, match_type, scope ("vhost" or "global" or nil)
+function _M.match_with_vhost(path, method, vhost_id)
+    local normalized_path = normalize_path(path)
+    local request_method = method or ngx.req.get_method()
+
+    -- 1. Try vhost-specific endpoints first (if vhost_id provided)
+    if vhost_id and vhost_id ~= "" then
+        -- 1a. Try vhost-specific exact match
+        local endpoint_id = match_vhost_exact(normalized_path, request_method, vhost_id)
+        if endpoint_id then
+            return endpoint_id, MATCH_TYPE.EXACT, "vhost"
+        end
+
+        -- 1b. Try vhost-specific prefix match
+        endpoint_id = match_vhost_prefix(normalized_path, request_method, vhost_id)
+        if endpoint_id then
+            return endpoint_id, MATCH_TYPE.PREFIX, "vhost"
+        end
+
+        -- 1c. Try vhost-specific regex match
+        endpoint_id = match_vhost_regex(normalized_path, request_method, vhost_id)
+        if endpoint_id then
+            return endpoint_id, MATCH_TYPE.REGEX, "vhost"
+        end
+    end
+
+    -- 2. Fall back to global endpoints
+    local endpoint_id, match_type = _M.match(path, method)
+    if endpoint_id then
+        return endpoint_id, match_type, "global"
+    end
+
+    -- 3. No match found
+    return nil, MATCH_TYPE.NONE, nil
 end
 
 -- Get endpoint configuration by ID
@@ -258,6 +422,14 @@ function _M.update_cache(cache_type, data, ttl)
     elseif cache_type == "regex_patterns" then
         endpoint_cache:set("regex_patterns", data, actual_ttl)
     elseif cache_type:match("^config:") then
+        endpoint_cache:set(cache_type, data, actual_ttl)
+    elseif cache_type:match("^vhost_endpoint_index:") then
+        endpoint_cache:set(cache_type, data, actual_ttl)
+    elseif cache_type:match("^vhost_exact_paths:") then
+        endpoint_cache:set(cache_type, data, actual_ttl)
+    elseif cache_type:match("^vhost_prefix_patterns:") then
+        endpoint_cache:set(cache_type, data, actual_ttl)
+    elseif cache_type:match("^vhost_regex_patterns:") then
         endpoint_cache:set(cache_type, data, actual_ttl)
     end
 end

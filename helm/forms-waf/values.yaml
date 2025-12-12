@@ -213,6 +213,60 @@ redis:
     maxmemory-policy allkeys-lru
     notify-keyspace-events KEA
 
+# Admin UI configuration
+adminUI:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: forms-waf/admin-ui
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi
+
+  # Pod annotations
+  podAnnotations: {}
+
+  # Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    fsGroup: 101
+
+  # Container security context
+  securityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+
+  # Node selector
+  nodeSelector: {}
+
+  # Tolerations
+  tolerations: []
+
+  # Affinity rules
+  affinity: {}
+
+  # Authentication settings
+  auth:
+    enabled: true
+    # Default credentials (change in production!)
+    defaultUsername: admin
+    defaultPassword: changeme
+    # Session timeout in seconds
+    sessionTimeout: 86400
+
 # Redis initialization job
 redisInit:
   enabled: true
@@ -252,6 +306,91 @@ redisInit:
     - "10.0.0.0/8"
     - "172.16.0.0/12"
     - "192.168.0.0/16"
+
+  # Initial virtual host configurations
+  # Each vhost defines how to handle traffic for specific hostnames
+  vhosts:
+    # Default catch-all vhost (required)
+    - id: "_default"
+      hostnames: []  # No hostnames - catches all unmatched
+      priority: 0    # Lowest priority
+      config:
+        id: "_default"
+        name: "Default Virtual Host"
+        description: "Catch-all configuration for unmatched hosts"
+        enabled: true
+        hostnames: []
+        waf:
+          enabled: true
+          mode: "monitoring"  # monitoring, blocking, passthrough, strict
+        routing:
+          use_haproxy: true
+        thresholds:
+          spam_score_block: 80
+          spam_score_flag: 50
+        keywords:
+          inherit_global: true
+          additional_blocked: []
+          additional_flagged: []
+          exclusions: []
+        endpoints:
+          inherit_global: true
+
+    # Example: Add more vhosts for multi-tenant support
+    # - id: "example-site"
+    #   hostnames:
+    #     - "example.com"
+    #     - "www.example.com"
+    #   priority: 100
+    #   config:
+    #     id: "example-site"
+    #     name: "Example Website"
+    #     enabled: true
+    #     hostnames: ["example.com", "www.example.com"]
+    #     waf:
+    #       enabled: true
+    #       mode: "blocking"
+    #     routing:
+    #       use_haproxy: true
+    #       haproxy_backend: "website_backend"
+    #     thresholds:
+    #       spam_score_block: 60
+    #     keywords:
+    #       inherit_global: true
+    #       additional_blocked: ["competitor-spam"]
+    #
+    # - id: "api-subdomain"
+    #   hostnames:
+    #     - "api.example.com"
+    #   priority: 100
+    #   config:
+    #     id: "api-subdomain"
+    #     name: "API Subdomain"
+    #     enabled: true
+    #     hostnames: ["api.example.com"]
+    #     waf:
+    #       enabled: true
+    #       mode: "blocking"
+    #     routing:
+    #       use_haproxy: false
+    #       upstream:
+    #         servers: ["10.0.1.10:8080", "10.0.1.11:8080"]
+    #
+    # - id: "customer-wildcard"
+    #   hostnames:
+    #     - "*.customers.example.com"  # Wildcard pattern
+    #   priority: 90
+    #   config:
+    #     id: "customer-wildcard"
+    #     name: "Customer Sites"
+    #     enabled: true
+    #     hostnames: ["*.customers.example.com"]
+    #     waf:
+    #       enabled: true
+    #       mode: "monitoring"
+    #     routing:
+    #       use_haproxy: true
+    #       haproxy_backend: "customer_backend"
 
 # Ingress configuration
 ingress:

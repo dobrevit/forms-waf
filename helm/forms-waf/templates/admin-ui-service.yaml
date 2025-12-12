@@ -1,0 +1,19 @@
+{{- if .Values.adminUI.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "forms-waf.fullname" . }}-admin-ui
+  labels:
+    {{- include "forms-waf.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-ui
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "forms-waf.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-ui
+{{- end }}
