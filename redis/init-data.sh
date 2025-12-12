@@ -92,6 +92,101 @@ redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:whitelist:ips \
 
 echo "Loaded IP whitelist"
 
+# ============================================================================
+# Example Endpoint Configurations
+# ============================================================================
+
+echo "Loading example endpoint configurations..."
+
+# Example 1: Passthrough endpoint for health checks and webhooks
+HEALTH_ENDPOINT='{
+  "id": "health-endpoints",
+  "name": "Health Check Endpoints",
+  "description": "Skip WAF for health check and monitoring endpoints",
+  "enabled": true,
+  "mode": "passthrough",
+  "matching": {
+    "paths": ["/health", "/ready", "/live", "/metrics"],
+    "methods": ["GET", "HEAD"]
+  }
+}'
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:endpoints:config:health-endpoints" "$HEALTH_ENDPOINT"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:index" 10 "health-endpoints"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:endpoints:paths:exact" "/health:GET" "health-endpoints"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:endpoints:paths:exact" "/ready:GET" "health-endpoints"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:endpoints:paths:exact" "/live:GET" "health-endpoints"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:endpoints:paths:exact" "/metrics:GET" "health-endpoints"
+
+# Example 2: Strict contact form protection
+CONTACT_ENDPOINT='{
+  "id": "contact-form",
+  "name": "Contact Form",
+  "description": "Public contact form with strict spam protection",
+  "enabled": true,
+  "mode": "blocking",
+  "matching": {
+    "paths": ["/api/contact", "/contact/submit"],
+    "methods": ["POST"],
+    "content_types": ["application/json", "application/x-www-form-urlencoded"]
+  },
+  "thresholds": {
+    "spam_score_block": 60,
+    "spam_score_flag": 30,
+    "ip_rate_limit": 5
+  },
+  "keywords": {
+    "inherit_global": true,
+    "additional_blocked": [],
+    "additional_flagged": ["website:5", "seo:10", "backlink:15"]
+  },
+  "fields": {
+    "required": ["email", "message"],
+    "max_length": {"message": 5000, "name": 100}
+  }
+}'
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:endpoints:config:contact-form" "$CONTACT_ENDPOINT"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:index" 50 "contact-form"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:endpoints:paths:exact" "/api/contact:POST" "contact-form"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:endpoints:paths:exact" "/contact/submit:POST" "contact-form"
+
+# Example 3: Monitoring mode for new API endpoints
+MONITORING_ENDPOINT='{
+  "id": "api-monitoring",
+  "name": "API Monitoring",
+  "description": "Monitor API endpoints without blocking (for testing)",
+  "enabled": true,
+  "mode": "monitoring",
+  "matching": {
+    "path_prefix": "/api/v2/"
+  },
+  "thresholds": {
+    "spam_score_block": 80
+  },
+  "keywords": {
+    "inherit_global": true
+  }
+}'
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:endpoints:config:api-monitoring" "$MONITORING_ENDPOINT"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:index" 80 "api-monitoring"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:paths:prefix" 80 "/api/v2/|*|api-monitoring"
+
+# Example 4: Webhook passthrough
+WEBHOOK_ENDPOINT='{
+  "id": "webhooks",
+  "name": "Webhook Endpoints",
+  "description": "Allow external webhooks without WAF filtering",
+  "enabled": true,
+  "mode": "passthrough",
+  "matching": {
+    "path_prefix": "/webhooks/"
+  }
+}'
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:endpoints:config:webhooks" "$WEBHOOK_ENDPOINT"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:index" 20 "webhooks"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:paths:prefix" 20 "/webhooks/|*|webhooks"
+
+echo "Loaded example endpoint configurations"
+
 echo "Redis initialization complete!"
 
 # Show loaded data
@@ -100,5 +195,9 @@ echo "=== Loaded Data Summary ==="
 echo "Blocked keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:blocked)"
 echo "Flagged keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:flagged)"
 echo "Whitelisted IPs: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:whitelist:ips)"
+echo "Endpoint configs: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZCARD waf:endpoints:index)"
 echo "Thresholds:"
 redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HGETALL waf:config:thresholds
+echo ""
+echo "Endpoints:"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZRANGE waf:endpoints:index 0 -1 WITHSCORES

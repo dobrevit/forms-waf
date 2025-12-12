@@ -1,10 +1,12 @@
 -- redis_sync.lua
--- Synchronizes keyword lists and configuration from Redis
+-- Synchronizes keyword lists, configuration, and endpoint configs from Redis
 
 local _M = {}
 
 local redis = require "resty.redis"
+local cjson = require "cjson.safe"
 local keyword_filter = require "keyword_filter"
+local endpoint_matcher = require "endpoint_matcher"
 
 -- Configuration
 local REDIS_HOST = os.getenv("REDIS_HOST") or "redis"
@@ -22,6 +24,12 @@ local KEYS = {
     blocked_hashes = "waf:hashes:blocked",
     thresholds = "waf:config:thresholds",
     ip_whitelist = "waf:whitelist:ips",
+    -- Endpoint configuration keys
+    endpoint_index = "waf:endpoints:index",
+    endpoint_config_prefix = "waf:endpoints:config:",
+    endpoint_paths_exact = "waf:endpoints:paths:exact",
+    endpoint_paths_prefix = "waf:endpoints:paths:prefix",
+    endpoint_paths_regex = "waf:endpoints:paths:regex",
 }
 
 -- Shared dictionaries
@@ -163,6 +171,174 @@ local function sync_ip_whitelist(red)
     end
 end
 
+-- Sync endpoint index (list of all endpoint IDs)
+local function sync_endpoint_index(red)
+    -- Get all endpoint IDs from sorted set (ordered by priority)
+    local endpoints, err = red:zrange(KEYS.endpoint_index, 0, -1)
+    if not endpoints then
+        ngx.log(ngx.WARN, "Failed to get endpoint index: ", err)
+        return {}
+    end
+
+    if type(endpoints) == "table" and #endpoints > 0 then
+        local json_data = cjson.encode(endpoints)
+        endpoint_matcher.update_cache("endpoint_index", json_data, 120)
+        ngx.log(ngx.DEBUG, "Synced ", #endpoints, " endpoint IDs")
+        return endpoints
+    else
+        endpoint_matcher.update_cache("endpoint_index", "[]", 120)
+        return {}
+    end
+end
+
+-- Sync exact path mappings
+local function sync_exact_paths(red)
+    local paths, err = red:hgetall(KEYS.endpoint_paths_exact)
+    if not paths then
+        ngx.log(ngx.WARN, "Failed to get exact paths: ", err)
+        return
+    end
+
+    local path_map = {}
+    if type(paths) == "table" then
+        for i = 1, #paths, 2 do
+            local path_key = paths[i]
+            local endpoint_id = paths[i + 1]
+            if path_key and endpoint_id then
+                path_map[path_key] = endpoint_id
+            end
+        end
+    end
+
+    local json_data = cjson.encode(path_map)
+    endpoint_matcher.update_cache("exact_paths", json_data, 120)
+    ngx.log(ngx.DEBUG, "Synced exact path mappings")
+end
+
+-- Sync prefix patterns
+local function sync_prefix_patterns(red)
+    -- Prefix patterns stored as sorted set with format "prefix:method:endpoint_id"
+    local patterns, err = red:zrange(KEYS.endpoint_paths_prefix, 0, -1, "WITHSCORES")
+    if not patterns then
+        ngx.log(ngx.WARN, "Failed to get prefix patterns: ", err)
+        return
+    end
+
+    local prefix_list = {}
+    if type(patterns) == "table" then
+        -- Patterns come as [value, score, value, score, ...]
+        for i = 1, #patterns, 2 do
+            local pattern_str = patterns[i]
+            local priority = tonumber(patterns[i + 1]) or 100
+
+            -- Parse pattern: "prefix|method|endpoint_id"
+            local prefix, method, endpoint_id = pattern_str:match("^(.+)|([^|]+)|([^|]+)$")
+            if prefix and endpoint_id then
+                table.insert(prefix_list, {
+                    prefix = prefix,
+                    method = method or "*",
+                    endpoint_id = endpoint_id,
+                    priority = priority
+                })
+            end
+        end
+
+        -- Sort by prefix length (longest first) for specificity
+        table.sort(prefix_list, function(a, b)
+            if #a.prefix == #b.prefix then
+                return a.priority < b.priority
+            end
+            return #a.prefix > #b.prefix
+        end)
+    end
+
+    local json_data = cjson.encode(prefix_list)
+    endpoint_matcher.update_cache("prefix_patterns", json_data, 120)
+    ngx.log(ngx.DEBUG, "Synced ", #prefix_list, " prefix patterns")
+end
+
+-- Sync regex patterns
+local function sync_regex_patterns(red)
+    -- Regex patterns stored as list with JSON objects
+    local patterns, err = red:lrange(KEYS.endpoint_paths_regex, 0, -1)
+    if not patterns then
+        ngx.log(ngx.WARN, "Failed to get regex patterns: ", err)
+        return
+    end
+
+    local regex_list = {}
+    if type(patterns) == "table" then
+        for _, pattern_json in ipairs(patterns) do
+            local pattern = cjson.decode(pattern_json)
+            if pattern and pattern.pattern and pattern.endpoint_id then
+                -- Validate regex pattern
+                local ok, err = pcall(ngx.re.match, "", pattern.pattern)
+                if ok then
+                    table.insert(regex_list, {
+                        pattern = pattern.pattern,
+                        method = pattern.method or "*",
+                        endpoint_id = pattern.endpoint_id,
+                        priority = pattern.priority or 100
+                    })
+                else
+                    ngx.log(ngx.WARN, "Invalid regex pattern: ", pattern.pattern, " - ", err)
+                end
+            end
+        end
+
+        -- Sort by priority
+        table.sort(regex_list, function(a, b)
+            return a.priority < b.priority
+        end)
+    end
+
+    local json_data = cjson.encode(regex_list)
+    endpoint_matcher.update_cache("regex_patterns", json_data, 120)
+    ngx.log(ngx.DEBUG, "Synced ", #regex_list, " regex patterns")
+end
+
+-- Sync individual endpoint configuration
+local function sync_endpoint_config(red, endpoint_id)
+    local config_key = KEYS.endpoint_config_prefix .. endpoint_id
+    local config_json, err = red:get(config_key)
+
+    if not config_json or config_json == ngx.null then
+        ngx.log(ngx.DEBUG, "No config found for endpoint: ", endpoint_id)
+        return nil
+    end
+
+    local config = cjson.decode(config_json)
+    if config then
+        endpoint_matcher.cache_config(endpoint_id, config, 120)
+        ngx.log(ngx.DEBUG, "Synced config for endpoint: ", endpoint_id)
+        return config
+    end
+
+    return nil
+end
+
+-- Sync all endpoint configurations
+local function sync_endpoints(red)
+    -- First sync the index to get all endpoint IDs
+    local endpoint_ids = sync_endpoint_index(red)
+
+    -- Sync path mappings
+    sync_exact_paths(red)
+    sync_prefix_patterns(red)
+    sync_regex_patterns(red)
+
+    -- Sync individual endpoint configs
+    local synced_count = 0
+    for _, endpoint_id in ipairs(endpoint_ids) do
+        local config = sync_endpoint_config(red, endpoint_id)
+        if config then
+            synced_count = synced_count + 1
+        end
+    end
+
+    ngx.log(ngx.DEBUG, "Synced ", synced_count, " endpoint configurations")
+end
+
 -- Main sync function
 local function do_sync()
     local red, err = get_redis_connection()
@@ -177,6 +353,9 @@ local function do_sync()
     sync_blocked_hashes(red)
     sync_thresholds(red)
     sync_ip_whitelist(red)
+
+    -- Sync endpoint configurations
+    sync_endpoints(red)
 
     close_redis(red)
 
@@ -226,7 +405,26 @@ function _M.get_status()
         redis_port = REDIS_PORT,
         sync_interval = SYNC_INTERVAL,
         filter_stats = keyword_filter.get_stats(),
+        endpoint_stats = endpoint_matcher.get_stats(),
     }
+end
+
+-- Get Redis keys (for admin API)
+function _M.get_keys()
+    return KEYS
+end
+
+-- Expose sync functions for admin API
+function _M.sync_endpoint(endpoint_id)
+    local red, err = get_redis_connection()
+    if not red then
+        return nil, err
+    end
+
+    local config = sync_endpoint_config(red, endpoint_id)
+    close_redis(red)
+
+    return config
 end
 
 return _M
