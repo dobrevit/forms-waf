@@ -5,8 +5,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
-import { Save, Settings, Info } from 'lucide-react'
+import { Save, Info, Clock, Hash, AlertTriangle, Shield } from 'lucide-react'
 
 interface ThresholdConfig {
   spam_score_block: number
@@ -15,6 +16,8 @@ interface ThresholdConfig {
   ip_rate_limit: number
   ip_daily_limit?: number
   hash_unique_ips_block?: number
+  rate_limiting_enabled?: boolean
+  expose_waf_headers?: boolean
 }
 
 export function Thresholds() {
@@ -28,6 +31,8 @@ export function Thresholds() {
     ip_rate_limit: 30,
     ip_daily_limit: 500,
     hash_unique_ips_block: 5,
+    rate_limiting_enabled: true,
+    expose_waf_headers: false,
   })
 
   const { data, isLoading } = useQuery({
@@ -36,15 +41,17 @@ export function Thresholds() {
   })
 
   useEffect(() => {
-    const thresholds = (data as { thresholds: Record<string, number> } | undefined)?.thresholds
+    const thresholds = (data as { thresholds: Record<string, number | boolean> } | undefined)?.thresholds
     if (thresholds) {
       setValues({
-        spam_score_block: thresholds.spam_score_block || 80,
-        spam_score_flag: thresholds.spam_score_flag || 50,
-        hash_count_block: thresholds.hash_count_block || 10,
-        ip_rate_limit: thresholds.ip_rate_limit || 30,
-        ip_daily_limit: thresholds.ip_daily_limit || 500,
-        hash_unique_ips_block: thresholds.hash_unique_ips_block || 5,
+        spam_score_block: (thresholds.spam_score_block as number) || 80,
+        spam_score_flag: (thresholds.spam_score_flag as number) || 50,
+        hash_count_block: (thresholds.hash_count_block as number) || 10,
+        ip_rate_limit: (thresholds.ip_rate_limit as number) || 30,
+        ip_daily_limit: (thresholds.ip_daily_limit as number) || 500,
+        hash_unique_ips_block: (thresholds.hash_unique_ips_block as number) || 5,
+        rate_limiting_enabled: thresholds.rate_limiting_enabled !== false,
+        expose_waf_headers: thresholds.expose_waf_headers === true,
       })
     }
   }, [data])
@@ -102,7 +109,7 @@ export function Thresholds() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
-              <Settings className="h-5 w-5" />
+              <AlertTriangle className="h-5 w-5" />
               Spam Score Thresholds
             </CardTitle>
             <CardDescription>
@@ -144,7 +151,7 @@ export function Thresholds() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
-              <Settings className="h-5 w-5" />
+              <Clock className="h-5 w-5" />
               Rate Limiting
             </CardTitle>
             <CardDescription>
@@ -152,6 +159,21 @@ export function Thresholds() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="rate_limiting_enabled">Enable Rate Limiting</Label>
+                <p className="text-xs text-muted-foreground">
+                  Global on/off for rate limiting (can be overridden per endpoint)
+                </p>
+              </div>
+              <Switch
+                id="rate_limiting_enabled"
+                checked={values.rate_limiting_enabled}
+                onCheckedChange={(checked) =>
+                  setValues({ ...values, rate_limiting_enabled: checked })
+                }
+              />
+            </div>
             <div className="space-y-2">
               <Label htmlFor="ip_rate_limit">Requests per Minute</Label>
               <Input
@@ -161,6 +183,7 @@ export function Thresholds() {
                 onChange={(e) =>
                   setValues({ ...values, ip_rate_limit: parseInt(e.target.value) || 0 })
                 }
+                disabled={!values.rate_limiting_enabled}
               />
               <p className="text-xs text-muted-foreground">
                 Maximum form submissions per IP per minute
@@ -175,6 +198,7 @@ export function Thresholds() {
                 onChange={(e) =>
                   setValues({ ...values, ip_daily_limit: parseInt(e.target.value) || 0 })
                 }
+                disabled={!values.rate_limiting_enabled}
               />
               <p className="text-xs text-muted-foreground">
                 Maximum form submissions per IP per day
@@ -186,7 +210,7 @@ export function Thresholds() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
-              <Settings className="h-5 w-5" />
+              <Hash className="h-5 w-5" />
               Content Hash Thresholds
             </CardTitle>
             <CardDescription>
@@ -225,6 +249,44 @@ export function Thresholds() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Shield className="h-5 w-5" />
+            Security Settings
+          </CardTitle>
+          <CardDescription>
+            Control WAF visibility and security behavior
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div className="space-y-0.5">
+              <Label htmlFor="expose_waf_headers">Expose WAF Headers</Label>
+              <p className="text-xs text-muted-foreground">
+                Show debug headers (X-WAF-*, X-Spam-*, X-Form-Hash) in responses.
+                Disable in production to hide WAF presence from clients.
+              </p>
+            </div>
+            <Switch
+              id="expose_waf_headers"
+              checked={values.expose_waf_headers}
+              onCheckedChange={(checked) =>
+                setValues({ ...values, expose_waf_headers: checked })
+              }
+            />
+          </div>
+          {values.expose_waf_headers && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm text-amber-700">
+                <strong>Warning:</strong> WAF headers are exposed to clients. This reveals
+                your WAF configuration and should only be enabled for debugging.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="flex justify-end">
         <Button onClick={handleSave} disabled={saveMutation.isPending}>

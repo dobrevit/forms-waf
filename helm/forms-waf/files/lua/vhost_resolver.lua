@@ -160,7 +160,7 @@ end
 local function resolve_waf_settings(vhost_config)
     local result = {
         enabled = true,
-        default_mode = "blocking"
+        mode = "blocking"
     }
 
     if not vhost_config or not vhost_config.waf then
@@ -171,8 +171,11 @@ local function resolve_waf_settings(vhost_config)
         result.enabled = vhost_config.waf.enabled
     end
 
-    if vhost_config.waf.default_mode then
-        result.default_mode = vhost_config.waf.default_mode
+    -- Support both "mode" and "default_mode" for backward compatibility
+    if vhost_config.waf.mode then
+        result.mode = vhost_config.waf.mode
+    elseif vhost_config.waf.default_mode then
+        result.mode = vhost_config.waf.default_mode
     end
 
     return result
@@ -343,12 +346,14 @@ function _M.get_mode(context)
         return "blocking"
     end
 
-    if context.endpoint then
-        return context.endpoint.mode or "blocking"
+    -- Endpoint mode takes priority
+    if context.endpoint and context.endpoint.mode then
+        return context.endpoint.mode
     end
 
-    if context.vhost then
-        return context.vhost.waf.default_mode or "blocking"
+    -- Fall back to vhost mode
+    if context.vhost and context.vhost.waf then
+        return context.vhost.waf.mode or context.vhost.waf.default_mode or "blocking"
     end
 
     return "blocking"
@@ -428,6 +433,49 @@ function _M.get_routing(context)
     return context.vhost.routing
 end
 
+-- Get rate limiting config for request
+function _M.get_rate_limiting(context)
+    -- Get global thresholds
+    local thresholds = waf_config.get_thresholds()
+
+    -- Default rate limiting config based on global settings
+    local default_rate_limiting = {
+        enabled = thresholds.rate_limiting_enabled ~= false,  -- default true
+        requests_per_minute = thresholds.ip_rate_limit or 30
+    }
+
+    -- Check endpoint-level rate limiting first (most specific)
+    if context and context.endpoint and context.endpoint.rate_limiting then
+        local endpoint_rl = context.endpoint.rate_limiting
+        -- Endpoint can override global enabled state
+        -- Use explicit check to handle false value correctly
+        local enabled = default_rate_limiting.enabled
+        if endpoint_rl.enabled ~= nil then
+            enabled = endpoint_rl.enabled
+        end
+        return {
+            enabled = enabled,
+            requests_per_minute = endpoint_rl.requests_per_minute or default_rate_limiting.requests_per_minute
+        }
+    end
+
+    -- Check vhost-level rate limiting
+    if context and context.vhost and context.vhost.rate_limiting then
+        local vhost_rl = context.vhost.rate_limiting
+        local enabled = default_rate_limiting.enabled
+        if vhost_rl.enabled ~= nil then
+            enabled = vhost_rl.enabled
+        end
+        return {
+            enabled = enabled,
+            requests_per_minute = vhost_rl.requests_per_minute or default_rate_limiting.requests_per_minute
+        }
+    end
+
+    -- Return global defaults
+    return default_rate_limiting
+end
+
 -- Get upstream URL based on routing config
 -- For HAProxy routing: returns HAProxy address
 -- For direct routing: returns one of the configured upstream servers
@@ -486,6 +534,42 @@ function _M.get_hash_content_config(context)
     end
     -- Default: disabled (user must explicitly enable and specify fields)
     return { enabled = false, fields = {} }
+end
+
+-- Get expected fields for the endpoint (optional fields that are allowed)
+-- Returns: array of expected field names, or empty array if not configured
+function _M.get_expected_fields(context)
+    if context and context.endpoint and context.endpoint.fields then
+        local fields_config = context.endpoint.fields
+        if fields_config.expected and type(fields_config.expected) == "table" then
+            return fields_config.expected
+        end
+    end
+    return {}
+end
+
+-- Get required fields for the endpoint (these are also implicitly expected)
+-- Returns: array of required field names, or empty array if not configured
+function _M.get_required_fields(context)
+    if context and context.endpoint and context.endpoint.fields then
+        local fields_config = context.endpoint.fields
+        if fields_config.required and type(fields_config.required) == "table" then
+            return fields_config.required
+        end
+    end
+    return {}
+end
+
+-- Get action for unexpected fields
+-- Returns: "flag" (default), "block", or "ignore"
+function _M.get_unexpected_fields_action(context)
+    if context and context.endpoint and context.endpoint.fields then
+        local fields_config = context.endpoint.fields
+        if fields_config.unexpected_action then
+            return fields_config.unexpected_action
+        end
+    end
+    return "flag"  -- Default: flag but don't block
 end
 
 -- Validate form fields

@@ -8,6 +8,7 @@ local cjson = require "cjson.safe"
 local keyword_filter = require "keyword_filter"
 local endpoint_matcher = require "endpoint_matcher"
 local vhost_matcher = require "vhost_matcher"
+local field_learner = require "field_learner"
 
 -- Configuration
 local REDIS_HOST = os.getenv("REDIS_HOST") or "redis"
@@ -134,6 +135,17 @@ local function sync_blocked_hashes(red)
     end
 end
 
+-- Helper to parse threshold value (handles numbers and booleans)
+local function parse_threshold_value(value_str)
+    if value_str == "true" then
+        return true
+    elseif value_str == "false" then
+        return false
+    else
+        return tonumber(value_str)
+    end
+end
+
 -- Sync configuration thresholds
 local function sync_thresholds(red)
     local config, err = red:hgetall(KEYS.thresholds)
@@ -146,8 +158,8 @@ local function sync_thresholds(red)
         local thresholds = {}
         for i = 1, #config, 2 do
             local key = config[i]
-            local value = tonumber(config[i + 1])
-            if key and value then
+            local value = parse_threshold_value(config[i + 1])
+            if key and value ~= nil then
                 thresholds[key] = value
             end
         end
@@ -722,6 +734,49 @@ function _M.start_sync_timer()
         return
     end
     ngx.log(ngx.INFO, "Redis sync timer started with interval: ", SYNC_INTERVAL, "s")
+
+    -- Start learning flush timer (only on worker 0)
+    if ngx.worker.id() == 0 then
+        local flush_interval = field_learner.get_flush_interval()
+        local function learning_flush_handler(premature)
+            if premature then
+                return
+            end
+
+            -- Connect to Redis and flush learning data
+            local red = redis:new()
+            red:set_timeouts(1000, 1000, 1000)
+
+            local ok, err = red:connect(REDIS_HOST, REDIS_PORT)
+            if ok then
+                if REDIS_PASSWORD then
+                    red:auth(REDIS_PASSWORD)
+                end
+                if REDIS_DB > 0 then
+                    red:select(REDIS_DB)
+                end
+
+                local flushed, flush_err = field_learner.flush_to_redis(red)
+                if flushed and flushed > 0 then
+                    ngx.log(ngx.DEBUG, "Flushed ", flushed, " learning entries to Redis")
+                end
+
+                red:set_keepalive(10000, 100)
+            else
+                ngx.log(ngx.WARN, "Learning flush: failed to connect to Redis: ", err)
+            end
+
+            -- Reschedule
+            ngx.timer.at(flush_interval, learning_flush_handler)
+        end
+
+        local ok, err = ngx.timer.at(flush_interval, learning_flush_handler)
+        if ok then
+            ngx.log(ngx.INFO, "Field learning flush timer started with interval: ", flush_interval, "s")
+        else
+            ngx.log(ngx.WARN, "Failed to start learning flush timer: ", err)
+        end
+    end
 end
 
 -- Manual sync trigger
@@ -731,14 +786,50 @@ end
 
 -- Get sync status
 function _M.get_status()
-    return {
+    local status = {
         redis_host = REDIS_HOST,
         redis_port = REDIS_PORT,
         sync_interval = SYNC_INTERVAL,
         filter_stats = keyword_filter.get_stats(),
         endpoint_stats = endpoint_matcher.get_stats(),
         vhost_stats = vhost_matcher.get_stats(),
+        redis_connected = false,
+        blocked_hashes_count = 0,
+        whitelisted_ips_count = 0,
+        endpoints_count = 0,
+        vhosts_count = 0,
     }
+
+    -- Try to get counts from Redis
+    local red, err = get_redis_connection()
+    if red then
+        status.redis_connected = true
+
+        -- Get counts
+        local blocked_hashes = red:scard(KEYS.blocked_hashes)
+        if blocked_hashes and blocked_hashes ~= ngx.null then
+            status.blocked_hashes_count = blocked_hashes
+        end
+
+        local whitelisted_ips = red:scard(KEYS.ip_whitelist)
+        if whitelisted_ips and whitelisted_ips ~= ngx.null then
+            status.whitelisted_ips_count = whitelisted_ips
+        end
+
+        local endpoints = red:zcard(KEYS.endpoint_index)
+        if endpoints and endpoints ~= ngx.null then
+            status.endpoints_count = endpoints
+        end
+
+        local vhosts = red:zcard(KEYS.vhost_index)
+        if vhosts and vhosts ~= ngx.null then
+            status.vhosts_count = vhosts
+        end
+
+        close_redis(red)
+    end
+
+    return status
 end
 
 -- Get Redis keys (for admin API)

@@ -53,6 +53,7 @@ data:
         lua_shared_dict rate_limit 20m;
         lua_shared_dict endpoint_cache 10m;
         lua_shared_dict vhost_cache 10m;
+        lua_shared_dict learning_cache 5m;
 
         init_worker_by_lua_block {
             local redis_sync = require "redis_sync"

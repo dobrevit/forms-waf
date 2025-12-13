@@ -13,6 +13,7 @@ local config_resolver = require "config_resolver"
 local vhost_matcher = require "vhost_matcher"
 local vhost_resolver = require "vhost_resolver"
 local admin_auth = require "admin_auth"
+local field_learner = require "field_learner"
 
 -- Configuration
 local REQUIRE_AUTH = os.getenv("WAF_ADMIN_AUTH") ~= "false"  -- Default: require auth
@@ -435,6 +436,26 @@ handlers["POST:/sync"] = function()
     return json_response({synced = true})
 end
 
+-- Helper to parse threshold value (handles numbers and booleans)
+local function parse_threshold_value(value_str)
+    if value_str == "true" then
+        return true
+    elseif value_str == "false" then
+        return false
+    else
+        return tonumber(value_str)
+    end
+end
+
+-- Helper to serialize threshold value for Redis
+local function serialize_threshold_value(value)
+    if type(value) == "boolean" then
+        return value and "true" or "false"
+    else
+        return tostring(value)
+    end
+end
+
 -- GET /waf-admin/config/thresholds - Get thresholds
 handlers["GET:/config/thresholds"] = function()
     local red, err = get_redis()
@@ -448,7 +469,7 @@ handlers["GET:/config/thresholds"] = function()
     local thresholds = {}
     if type(config) == "table" then
         for i = 1, #config, 2 do
-            thresholds[config[i]] = tonumber(config[i + 1])
+            thresholds[config[i]] = parse_threshold_value(config[i + 1])
         end
     end
 
@@ -464,7 +485,7 @@ handlers["POST:/config/thresholds"] = function()
     local body = ngx.req.get_body_data()
     local data = cjson.decode(body or "{}")
 
-    if not data or not data.name or not data.value then
+    if not data or not data.name or data.value == nil then
         return error_response("Missing 'name' or 'value' field")
     end
 
@@ -473,7 +494,8 @@ handlers["POST:/config/thresholds"] = function()
         return error_response("Redis error: " .. (err or "unknown"), 500)
     end
 
-    red:hset("waf:config:thresholds", data.name, tonumber(data.value))
+    local redis_value = serialize_threshold_value(data.value)
+    red:hset("waf:config:thresholds", data.name, redis_value)
     close_redis(red)
 
     redis_sync.sync_now()
@@ -779,6 +801,149 @@ handlers["GET:/endpoints/match"] = function()
     end
 
     return json_response(result)
+end
+
+-- ===============================
+-- Field Learning API
+-- ===============================
+
+-- GET /waf-admin/endpoints/{id}/learned-fields - Get learned fields for endpoint
+handlers["GET:/endpoints/learned-fields"] = function()
+    local args = ngx.req.get_uri_args()
+    local endpoint_id = args.endpoint_id
+
+    if not endpoint_id then
+        return error_response("Missing 'endpoint_id' query parameter")
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis error: " .. (err or "unknown"), 500)
+    end
+
+    local fields = field_learner.get_endpoint_fields(red, endpoint_id)
+    close_redis(red)
+
+    -- Convert to sorted array for consistent output
+    local field_list = {}
+    for name, data in pairs(fields) do
+        table.insert(field_list, data)
+    end
+
+    -- Sort by count (most frequent first)
+    table.sort(field_list, function(a, b)
+        return (a.count or 0) > (b.count or 0)
+    end)
+
+    local field_count = #field_list
+
+    -- Use cjson.empty_array to ensure empty tables encode as [] not {}
+    if field_count == 0 then
+        field_list = cjson.empty_array
+    end
+
+    return json_response({
+        endpoint_id = endpoint_id,
+        fields = field_list,
+        count = field_count,
+        learning_stats = field_learner.get_stats()
+    })
+end
+
+-- DELETE /waf-admin/endpoints/{id}/learned-fields - Clear learned fields for endpoint
+handlers["DELETE:/endpoints/learned-fields"] = function()
+    local args = ngx.req.get_uri_args()
+    local endpoint_id = args.endpoint_id
+
+    if not endpoint_id then
+        return error_response("Missing 'endpoint_id' query parameter")
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis error: " .. (err or "unknown"), 500)
+    end
+
+    local cleared = field_learner.clear_endpoint_fields(red, endpoint_id)
+    close_redis(red)
+
+    return json_response({
+        cleared = cleared,
+        endpoint_id = endpoint_id
+    })
+end
+
+-- GET /waf-admin/vhosts/learned-fields - Get learned fields for vhost
+handlers["GET:/vhosts/learned-fields"] = function()
+    local args = ngx.req.get_uri_args()
+    local vhost_id = args.vhost_id
+
+    if not vhost_id then
+        return error_response("Missing 'vhost_id' query parameter")
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis error: " .. (err or "unknown"), 500)
+    end
+
+    local fields = field_learner.get_vhost_fields(red, vhost_id)
+    close_redis(red)
+
+    -- Convert to sorted array for consistent output
+    local field_list = {}
+    for name, data in pairs(fields) do
+        table.insert(field_list, data)
+    end
+
+    -- Sort by count (most frequent first)
+    table.sort(field_list, function(a, b)
+        return (a.count or 0) > (b.count or 0)
+    end)
+
+    local field_count = #field_list
+
+    -- Use cjson.empty_array to ensure empty tables encode as [] not {}
+    if field_count == 0 then
+        field_list = cjson.empty_array
+    end
+
+    return json_response({
+        vhost_id = vhost_id,
+        fields = field_list,
+        count = field_count,
+        learning_stats = field_learner.get_stats()
+    })
+end
+
+-- DELETE /waf-admin/vhosts/learned-fields - Clear learned fields for vhost
+handlers["DELETE:/vhosts/learned-fields"] = function()
+    local args = ngx.req.get_uri_args()
+    local vhost_id = args.vhost_id
+
+    if not vhost_id then
+        return error_response("Missing 'vhost_id' query parameter")
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis error: " .. (err or "unknown"), 500)
+    end
+
+    local cleared = field_learner.clear_vhost_fields(red, vhost_id)
+    close_redis(red)
+
+    return json_response({
+        cleared = cleared,
+        vhost_id = vhost_id
+    })
+end
+
+-- GET /waf-admin/learning/stats - Get learning statistics
+handlers["GET:/learning/stats"] = function()
+    return json_response({
+        stats = field_learner.get_stats()
+    })
 end
 
 -- Parameterized endpoint handlers (called from main handler)

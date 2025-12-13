@@ -10,7 +10,7 @@ import { EndpointForm } from '@/pages/endpoints/EndpointForm'
 import { BlockedKeywords } from '@/pages/keywords/BlockedKeywords'
 import { FlaggedKeywords } from '@/pages/keywords/FlaggedKeywords'
 import { Thresholds } from '@/pages/config/Thresholds'
-import { IpWhitelist } from '@/pages/config/IpWhitelist'
+import { IpAllowList } from '@/pages/config/IpAllowList'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -50,7 +50,7 @@ export default function App() {
                 <Route path="/keywords/blocked" element={<BlockedKeywords />} />
                 <Route path="/keywords/flagged" element={<FlaggedKeywords />} />
                 <Route path="/config/thresholds" element={<Thresholds />} />
-                <Route path="/config/whitelist" element={<IpWhitelist />} />
+                <Route path="/config/allowlist" element={<IpAllowList />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </AppLayout>

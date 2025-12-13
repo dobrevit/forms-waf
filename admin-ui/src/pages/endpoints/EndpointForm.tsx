@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { endpointsApi, vhostsApi, configApi } from '@/api/client'
+import { endpointsApi, vhostsApi, configApi, learningApi, LearnedField } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowLeft, Save, Plus, X, Globe, Server, Info } from 'lucide-react'
+import { ArrowLeft, Save, Plus, X, Globe, Server, Info, BookOpen, Trash2, CheckCircle, Hash, EyeOff, ShieldCheck } from 'lucide-react'
 import type { Endpoint, Vhost, Thresholds } from '@/api/types'
 
 const defaultEndpoint: Partial<Endpoint> = {
@@ -37,6 +37,8 @@ const defaultEndpoint: Partial<Endpoint> = {
     required: [],
     max_length: {},
     ignore_fields: [],
+    expected: [],
+    unexpected_action: 'flag',
   },
   rate_limiting: {
     enabled: true,
@@ -103,6 +105,7 @@ export function EndpointForm() {
   const [newMaxLengthValue, setNewMaxLengthValue] = useState('')
   const [newIgnoreField, setNewIgnoreField] = useState('')
   const [newHashField, setNewHashField] = useState('')
+  const [newExpectedField, setNewExpectedField] = useState('')
 
   // Fetch vhosts for dropdown
   const { data: vhostsData } = useQuery({
@@ -119,6 +122,13 @@ export function EndpointForm() {
   const { data, isLoading } = useQuery({
     queryKey: ['endpoint', id],
     queryFn: () => endpointsApi.get(id!),
+    enabled: !!id,
+  })
+
+  // Fetch learned fields for existing endpoints
+  const { data: learnedFieldsData, isLoading: learnedFieldsLoading, refetch: refetchLearnedFields } = useQuery({
+    queryKey: ['endpoint-learned-fields', id],
+    queryFn: () => learningApi.getEndpointFields(id!),
     enabled: !!id,
   })
 
@@ -177,10 +187,87 @@ export function EndpointForm() {
     },
   })
 
+  const clearLearningMutation = useMutation({
+    mutationFn: () => learningApi.clearEndpointFields(id!),
+    onSuccess: () => {
+      refetchLearnedFields()
+      toast({ title: 'Learning data cleared' })
+    },
+    onError: (error) => {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to clear learning data',
+        variant: 'destructive',
+      })
+    },
+  })
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     saveMutation.mutate(formData)
   }
+
+  // Helper functions for adding learned fields to configuration
+  const addToRequiredFields = (fieldName: string) => {
+    const required = Array.isArray(formData.fields?.required) ? formData.fields.required : []
+    if (!required.includes(fieldName)) {
+      setFormData({
+        ...formData,
+        fields: {
+          ...formData.fields,
+          required: [...required, fieldName],
+        },
+      })
+      toast({ title: `Added "${fieldName}" to required fields` })
+    }
+  }
+
+  const addToHashFields = (fieldName: string) => {
+    const hashFields = Array.isArray(formData.hash_content?.fields) ? formData.hash_content.fields : []
+    if (!hashFields.includes(fieldName)) {
+      setFormData({
+        ...formData,
+        hash_content: {
+          ...formData.hash_content,
+          enabled: true,
+          fields: [...hashFields, fieldName],
+        },
+      })
+      toast({ title: `Added "${fieldName}" to hash fields` })
+    }
+  }
+
+  const addToIgnoreFields = (fieldName: string) => {
+    const ignoreFields = Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []
+    if (!ignoreFields.includes(fieldName)) {
+      setFormData({
+        ...formData,
+        fields: {
+          ...formData.fields,
+          ignore_fields: [...ignoreFields, fieldName],
+        },
+      })
+      toast({ title: `Added "${fieldName}" to ignored fields` })
+    }
+  }
+
+  const addToExpectedFields = (fieldName: string) => {
+    const expectedFields = Array.isArray(formData.fields?.expected) ? formData.fields.expected : []
+    if (!expectedFields.includes(fieldName)) {
+      setFormData({
+        ...formData,
+        fields: {
+          ...formData.fields,
+          expected: [...expectedFields, fieldName],
+        },
+      })
+      toast({ title: `Added "${fieldName}" to expected fields` })
+    }
+  }
+
+  // Extract learned fields from response (ensure array - Lua cjson may encode empty arrays as objects)
+  const learnedFields: LearnedField[] = Array.isArray(learnedFieldsData?.fields) ? learnedFieldsData.fields : []
+  const learningStats = learnedFieldsData?.learning_stats
 
   const addPath = () => {
     if (!newPath) return
@@ -272,6 +359,17 @@ export function EndpointForm() {
             <TabsTrigger value="fields">Fields</TabsTrigger>
             <TabsTrigger value="waf">WAF Settings</TabsTrigger>
             <TabsTrigger value="rate-limiting">Rate Limiting</TabsTrigger>
+            {!isNew && (
+              <TabsTrigger value="learned-fields" className="flex items-center gap-1">
+                <BookOpen className="h-3 w-3" />
+                Learned Fields
+                {learnedFields.length > 0 && (
+                  <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+                    {learnedFields.length}
+                  </span>
+                )}
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="general">
@@ -915,6 +1013,172 @@ export function EndpointForm() {
 
             <Card>
               <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ShieldCheck className="h-5 w-5" />
+                  Optional Expected Fields (Anti-Stuffing)
+                </CardTitle>
+                <CardDescription>
+                  Define optional fields that are allowed in addition to required fields. Any other fields trigger the configured action.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                  <div className="flex items-start gap-3">
+                    <Info className="h-5 w-5 text-amber-500 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-amber-800">Prevent Form Stuffing Attacks</p>
+                      <p className="text-sm text-amber-700 mt-1">
+                        Bots often add extra fields to forms to confuse spam detection or inject malicious data.
+                        <strong> Required fields are automatically expected.</strong> Use this section to add optional
+                        fields that are allowed but not required. Any field not in required, expected, or ignored lists
+                        will trigger the action below.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <Label>Optional Expected Fields</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Optional fields allowed in addition to required fields (ignored fields are always allowed)
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      value={newExpectedField}
+                      onChange={(e) => setNewExpectedField(e.target.value)}
+                      placeholder="Field name (e.g., email, message)"
+                      className="flex-1"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newExpectedField) {
+                          e.preventDefault()
+                          const expectedFields = Array.isArray(formData.fields?.expected) ? formData.fields.expected : []
+                          if (!expectedFields.includes(newExpectedField)) {
+                            setFormData({
+                              ...formData,
+                              fields: {
+                                ...formData.fields,
+                                expected: [...expectedFields, newExpectedField],
+                              },
+                            })
+                          }
+                          setNewExpectedField('')
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        if (newExpectedField) {
+                          const expectedFields = Array.isArray(formData.fields?.expected) ? formData.fields.expected : []
+                          if (!expectedFields.includes(newExpectedField)) {
+                            setFormData({
+                              ...formData,
+                              fields: {
+                                ...formData.fields,
+                                expected: [...expectedFields, newExpectedField],
+                              },
+                            })
+                          }
+                          setNewExpectedField('')
+                        }
+                      }}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  {(() => {
+                    const expectedFields = Array.isArray(formData.fields?.expected) ? formData.fields.expected : []
+                    return expectedFields.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {expectedFields.map((field) => (
+                          <div
+                            key={field}
+                            className="flex items-center gap-1 rounded-md bg-amber-100 px-2 py-1 text-sm text-amber-800"
+                          >
+                            <code>{field}</code>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setFormData({
+                                  ...formData,
+                                  fields: {
+                                    ...formData.fields,
+                                    expected: expectedFields.filter((f) => f !== field),
+                                  },
+                                })
+                              }
+                              className="ml-1 hover:text-red-600"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground italic">
+                        No optional expected fields defined. If required fields are set, only those (plus ignored) will be allowed.
+                      </p>
+                    )
+                  })()}
+                </div>
+
+                {(() => {
+                  const expectedFields = Array.isArray(formData.fields?.expected) ? formData.fields.expected : []
+                  const requiredFields = Array.isArray(formData.fields?.required) ? formData.fields.required : []
+                  const hasFieldRestrictions = expectedFields.length > 0 || requiredFields.length > 0
+                  return hasFieldRestrictions ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="unexpected_action">Action for Unexpected Fields</Label>
+                      <Select
+                        value={formData.fields?.unexpected_action || 'flag'}
+                        onValueChange={(value) =>
+                          setFormData({
+                            ...formData,
+                            fields: {
+                              ...formData.fields,
+                              unexpected_action: value as 'flag' | 'block' | 'ignore' | 'filter',
+                            },
+                          })
+                        }
+                      >
+                        <SelectTrigger className="w-64">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="flag">
+                            Flag (+5 score per field)
+                          </SelectItem>
+                          <SelectItem value="block">
+                            Block immediately
+                          </SelectItem>
+                          <SelectItem value="filter">
+                            Filter (remove from request)
+                          </SelectItem>
+                          <SelectItem value="ignore">
+                            Ignore (allow anyway)
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        What to do when a form contains fields not in required, expected, or ignored lists
+                      </p>
+                      {formData.fields?.unexpected_action === 'filter' && (
+                        <div className="rounded-lg border border-red-200 bg-red-50 p-3 mt-2">
+                          <p className="text-sm text-red-700">
+                            <strong>Warning:</strong> Filtering modifies the request body, which may break form
+                            signing/CSRF protections that hash all fields. Use only if you understand the implications.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : null
+                })()}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
                 <CardTitle>Content Hashing</CardTitle>
                 <CardDescription>
                   Hash specific form fields for duplicate detection via HAProxy stick-tables
@@ -1372,6 +1636,243 @@ export function EndpointForm() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {!isNew && (
+            <TabsContent value="learned-fields">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <BookOpen className="h-5 w-5" />
+                        Learned Fields
+                      </CardTitle>
+                      <CardDescription>
+                        Form fields automatically discovered from traffic. Use these to configure field requirements.
+                      </CardDescription>
+                    </div>
+                    {learnedFields.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (confirm('Clear all learning data for this endpoint? This cannot be undone.')) {
+                            clearLearningMutation.mutate()
+                          }
+                        }}
+                        disabled={clearLearningMutation.isPending}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4 mr-1" />
+                        Clear Data
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {learnedFieldsLoading ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      Loading learned fields...
+                    </div>
+                  ) : learnedFields.length === 0 ? (
+                    <div className="text-center py-8 space-y-2">
+                      <BookOpen className="h-12 w-12 mx-auto text-muted-foreground/50" />
+                      <p className="text-muted-foreground">No fields learned yet</p>
+                      <p className="text-sm text-muted-foreground">
+                        Field names will be automatically discovered as requests flow through this endpoint.
+                        Learning uses 10% sampling to minimize performance impact.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Learning stats */}
+                      {learningStats && (
+                        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                          <div className="flex items-center gap-4 text-sm text-blue-700">
+                            <span>
+                              <strong>{learnedFields.length}</strong> unique fields discovered
+                            </span>
+                            <span className="text-blue-300">|</span>
+                            <span>
+                              <strong>{learningStats.batch_count || 0}</strong> batches processed
+                            </span>
+                            {learningStats.cache_available && (
+                              <>
+                                <span className="text-blue-300">|</span>
+                                <span className="text-green-600">Cache active</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Fields table */}
+                      <div className="rounded-md border">
+                        <table className="w-full">
+                          <thead className="bg-muted/50">
+                            <tr>
+                              <th className="px-4 py-3 text-left text-sm font-medium">Field Name</th>
+                              <th className="px-4 py-3 text-left text-sm font-medium">Type</th>
+                              <th className="px-4 py-3 text-left text-sm font-medium">Count</th>
+                              <th className="px-4 py-3 text-left text-sm font-medium">Last Seen</th>
+                              <th className="px-4 py-3 text-right text-sm font-medium">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {learnedFields.map((field) => {
+                              const required = Array.isArray(formData.fields?.required) ? formData.fields.required : []
+                              const hashFields = Array.isArray(formData.hash_content?.fields) ? formData.hash_content.fields : []
+                              const ignoreFields = Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []
+                              const expectedFields = Array.isArray(formData.fields?.expected) ? formData.fields.expected : []
+
+                              const isRequired = required.includes(field.name)
+                              const isHashed = hashFields.includes(field.name)
+                              const isIgnored = ignoreFields.includes(field.name)
+                              const isExpected = expectedFields.includes(field.name)
+
+                              return (
+                                <tr key={field.name} className="hover:bg-muted/30">
+                                  <td className="px-4 py-3">
+                                    <code className="text-sm bg-muted px-1.5 py-0.5 rounded">{field.name}</code>
+                                    <div className="flex gap-1 mt-1">
+                                      {isRequired && (
+                                        <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Required</span>
+                                      )}
+                                      {isHashed && (
+                                        <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Hashed</span>
+                                      )}
+                                      {isExpected && (
+                                        <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Expected</span>
+                                      )}
+                                      {isIgnored && (
+                                        <span className="text-xs bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded">Ignored</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                                    {field.type || 'text'}
+                                  </td>
+                                  <td className="px-4 py-3 text-sm">
+                                    {field.count.toLocaleString()}
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-muted-foreground">
+                                    {field.last_seen
+                                      ? new Date(field.last_seen * 1000).toLocaleDateString()
+                                      : '—'}
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <div className="flex justify-end gap-1">
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => addToRequiredFields(field.name)}
+                                        disabled={isRequired}
+                                        title="Add to Required Fields"
+                                        className={isRequired ? 'text-green-600' : ''}
+                                      >
+                                        <CheckCircle className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => addToHashFields(field.name)}
+                                        disabled={isHashed}
+                                        title="Add to Hash Fields"
+                                        className={isHashed ? 'text-purple-600' : ''}
+                                      >
+                                        <Hash className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => addToExpectedFields(field.name)}
+                                        disabled={isExpected}
+                                        title="Add to Expected Fields"
+                                        className={isExpected ? 'text-amber-600' : ''}
+                                      >
+                                        <ShieldCheck className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => addToIgnoreFields(field.name)}
+                                        disabled={isIgnored}
+                                        title="Add to Ignored Fields"
+                                        className={isIgnored ? 'text-gray-600' : ''}
+                                      >
+                                        <EyeOff className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Bulk actions */}
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            learnedFields.forEach(f => addToRequiredFields(f.name))
+                          }}
+                        >
+                          <CheckCircle className="h-4 w-4 mr-1" />
+                          Add All to Required
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            learnedFields.forEach(f => addToHashFields(f.name))
+                          }}
+                        >
+                          <Hash className="h-4 w-4 mr-1" />
+                          Add All to Hash
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            learnedFields.forEach(f => addToExpectedFields(f.name))
+                          }}
+                        >
+                          <ShieldCheck className="h-4 w-4 mr-1" />
+                          Add All to Expected
+                        </Button>
+                      </div>
+
+                      {/* Info note */}
+                      <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4">
+                        <div className="flex items-start gap-3">
+                          <Info className="h-5 w-5 text-yellow-600 mt-0.5" />
+                          <div>
+                            <p className="font-medium text-yellow-800">About Field Learning</p>
+                            <p className="text-sm text-yellow-700 mt-1">
+                              Field names are automatically discovered using 10% probabilistic sampling to minimize
+                              performance impact. Types are inferred from field names only (no values stored for compliance).
+                              Data is retained for 30 days of inactivity. Click the icons to add fields to your configuration.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
         </Tabs>
 
         <div className="flex justify-end gap-4 mt-6">

@@ -166,7 +166,7 @@ export function Dashboard() {
               <span className="font-medium">{status?.blocked_hashes_count || 0}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Whitelisted IPs</span>
+              <span className="text-muted-foreground">Allowed IPs</span>
               <span className="font-medium">{status?.whitelisted_ips_count || 0}</span>
             </div>
             <div className="flex justify-between">
@@ -183,33 +183,44 @@ export function Dashboard() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5" />
-              Recent Virtual Hosts
+              <Globe className="h-5 w-5" />
+              Virtual Hosts
             </CardTitle>
-            <CardDescription>Recently configured hosts</CardDescription>
+            <CardDescription>Configured hosts overview</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
               {vhosts.slice(0, 5).map((vhost: unknown) => {
-                const v = vhost as { id: string; name: string; enabled: boolean; hostnames: unknown }
+                const v = vhost as { id: string; name: string; enabled: boolean; hostnames: unknown; waf?: { mode?: string } }
                 const hostnames = Array.isArray(v.hostnames) ? v.hostnames : []
+                const mode = v.waf?.mode || 'monitoring'
                 return (
                   <div key={v.id} className="flex items-center justify-between">
                     <div>
                       <p className="font-medium">{v.name || v.id}</p>
                       <p className="text-xs text-muted-foreground">
                         {hostnames.slice(0, 2).join(', ')}
-                        {hostnames.length > 2 && '...'}
+                        {hostnames.length > 2 && ` +${hostnames.length - 2} more`}
                       </p>
                     </div>
-                    <Badge variant={v.enabled ? 'success' : 'secondary'}>
-                      {v.enabled ? 'Active' : 'Disabled'}
-                    </Badge>
+                    <div className="flex gap-2">
+                      <Badge variant="outline" className="text-xs">
+                        {mode}
+                      </Badge>
+                      <Badge variant={v.enabled ? 'success' : 'secondary'}>
+                        {v.enabled ? 'Active' : 'Disabled'}
+                      </Badge>
+                    </div>
                   </div>
                 )
               })}
               {vhosts.length === 0 && (
                 <p className="text-sm text-muted-foreground">No virtual hosts configured</p>
+              )}
+              {vhosts.length > 5 && (
+                <p className="text-xs text-muted-foreground pt-2">
+                  +{vhosts.length - 5} more virtual hosts
+                </p>
               )}
             </div>
           </CardContent>

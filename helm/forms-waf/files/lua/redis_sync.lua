@@ -8,6 +8,7 @@ local cjson = require "cjson.safe"
 local keyword_filter = require "keyword_filter"
 local endpoint_matcher = require "endpoint_matcher"
 local vhost_matcher = require "vhost_matcher"
+local field_learner = require "field_learner"
 
 -- Configuration
 local REDIS_HOST = os.getenv("REDIS_HOST") or "redis"
@@ -134,6 +135,17 @@ local function sync_blocked_hashes(red)
     end
 end
 
+-- Helper to parse threshold value (handles numbers and booleans)
+local function parse_threshold_value(value_str)
+    if value_str == "true" then
+        return true
+    elseif value_str == "false" then
+        return false
+    else
+        return tonumber(value_str)
+    end
+end
+
 -- Sync configuration thresholds
 local function sync_thresholds(red)
     local config, err = red:hgetall(KEYS.thresholds)
@@ -146,8 +158,8 @@ local function sync_thresholds(red)
         local thresholds = {}
         for i = 1, #config, 2 do
             local key = config[i]
-            local value = tonumber(config[i + 1])
-            if key and value then
+            local value = parse_threshold_value(config[i + 1])
+            if key and value ~= nil then
                 thresholds[key] = value
             end
         end
@@ -373,6 +385,161 @@ local function sync_endpoints(red)
 end
 
 -- ============================================================================
+-- Vhost-specific Endpoint Sync Functions
+-- ============================================================================
+
+-- Sync vhost-specific endpoint index
+local function sync_vhost_endpoint_index(red, vhost_id)
+    local key = "waf:vhosts:endpoints:" .. vhost_id .. ":index"
+    local endpoints, err = red:zrange(key, 0, -1)
+    if not endpoints then
+        ngx.log(ngx.DEBUG, "Failed to get vhost endpoint index for ", vhost_id, ": ", err)
+        return {}
+    end
+
+    local cache_key = "vhost_endpoint_index:" .. vhost_id
+    if type(endpoints) == "table" and #endpoints > 0 then
+        local json_data = cjson.encode(endpoints)
+        endpoint_matcher.update_cache(cache_key, json_data, 120)
+        ngx.log(ngx.DEBUG, "Synced ", #endpoints, " vhost-specific endpoint IDs for ", vhost_id)
+        return endpoints
+    else
+        endpoint_matcher.update_cache(cache_key, "[]", 120)
+        return {}
+    end
+end
+
+-- Sync vhost-specific exact path mappings
+local function sync_vhost_exact_paths(red, vhost_id)
+    local key = "waf:vhosts:endpoints:" .. vhost_id .. ":paths:exact"
+    local paths, err = red:hgetall(key)
+    if not paths then
+        ngx.log(ngx.DEBUG, "Failed to get vhost exact paths for ", vhost_id, ": ", err)
+        return
+    end
+
+    local path_map = {}
+    if type(paths) == "table" then
+        for i = 1, #paths, 2 do
+            local path_key = paths[i]
+            local endpoint_id = paths[i + 1]
+            if path_key and endpoint_id then
+                path_map[path_key] = endpoint_id
+            end
+        end
+    end
+
+    local cache_key = "vhost_exact_paths:" .. vhost_id
+    local json_data = cjson.encode(path_map)
+    endpoint_matcher.update_cache(cache_key, json_data, 120)
+    ngx.log(ngx.DEBUG, "Synced vhost exact path mappings for ", vhost_id)
+end
+
+-- Sync vhost-specific prefix patterns
+local function sync_vhost_prefix_patterns(red, vhost_id)
+    local key = "waf:vhosts:endpoints:" .. vhost_id .. ":paths:prefix"
+    local patterns, err = red:zrange(key, 0, -1, "WITHSCORES")
+    if not patterns then
+        ngx.log(ngx.DEBUG, "Failed to get vhost prefix patterns for ", vhost_id, ": ", err)
+        return
+    end
+
+    local prefix_list = {}
+    if type(patterns) == "table" then
+        for i = 1, #patterns, 2 do
+            local pattern_str = patterns[i]
+            local priority = tonumber(patterns[i + 1]) or 100
+
+            -- Parse pattern: "prefix|method|endpoint_id"
+            local prefix, method, endpoint_id = pattern_str:match("^(.+)|([^|]+)|([^|]+)$")
+            if prefix and endpoint_id then
+                table.insert(prefix_list, {
+                    prefix = prefix,
+                    method = method or "*",
+                    endpoint_id = endpoint_id,
+                    priority = priority
+                })
+            end
+        end
+
+        -- Sort by prefix length (longest first) for specificity
+        table.sort(prefix_list, function(a, b)
+            if #a.prefix == #b.prefix then
+                return a.priority < b.priority
+            end
+            return #a.prefix > #b.prefix
+        end)
+    end
+
+    local cache_key = "vhost_prefix_patterns:" .. vhost_id
+    local json_data = cjson.encode(prefix_list)
+    endpoint_matcher.update_cache(cache_key, json_data, 120)
+    ngx.log(ngx.DEBUG, "Synced ", #prefix_list, " vhost prefix patterns for ", vhost_id)
+end
+
+-- Sync vhost-specific regex patterns
+local function sync_vhost_regex_patterns(red, vhost_id)
+    local key = "waf:vhosts:endpoints:" .. vhost_id .. ":paths:regex"
+    local patterns, err = red:lrange(key, 0, -1)
+    if not patterns then
+        ngx.log(ngx.DEBUG, "Failed to get vhost regex patterns for ", vhost_id, ": ", err)
+        return
+    end
+
+    local regex_list = {}
+    if type(patterns) == "table" then
+        for _, pattern_json in ipairs(patterns) do
+            local pattern = cjson.decode(pattern_json)
+            if pattern and pattern.pattern and pattern.endpoint_id then
+                -- Validate regex pattern
+                local ok, err = pcall(ngx.re.match, "", pattern.pattern)
+                if ok then
+                    table.insert(regex_list, {
+                        pattern = pattern.pattern,
+                        method = pattern.method or "*",
+                        endpoint_id = pattern.endpoint_id,
+                        priority = pattern.priority or 100
+                    })
+                else
+                    ngx.log(ngx.WARN, "Invalid vhost regex pattern: ", pattern.pattern, " - ", err)
+                end
+            end
+        end
+
+        -- Sort by priority
+        table.sort(regex_list, function(a, b)
+            return a.priority < b.priority
+        end)
+    end
+
+    local cache_key = "vhost_regex_patterns:" .. vhost_id
+    local json_data = cjson.encode(regex_list)
+    endpoint_matcher.update_cache(cache_key, json_data, 120)
+    ngx.log(ngx.DEBUG, "Synced ", #regex_list, " vhost regex patterns for ", vhost_id)
+end
+
+-- Sync all vhost-specific endpoint data for a single vhost
+local function sync_vhost_endpoints(red, vhost_id)
+    sync_vhost_endpoint_index(red, vhost_id)
+    sync_vhost_exact_paths(red, vhost_id)
+    sync_vhost_prefix_patterns(red, vhost_id)
+    sync_vhost_regex_patterns(red, vhost_id)
+end
+
+-- Sync all vhost-specific endpoints for all vhosts
+local function sync_all_vhost_endpoints(red, vhost_ids)
+    if not vhost_ids or #vhost_ids == 0 then
+        return
+    end
+
+    for _, vhost_id in ipairs(vhost_ids) do
+        sync_vhost_endpoints(red, vhost_id)
+    end
+
+    ngx.log(ngx.DEBUG, "Synced vhost-specific endpoints for ", #vhost_ids, " vhosts")
+end
+
+-- ============================================================================
 -- Virtual Host Sync Functions
 -- ============================================================================
 
@@ -505,6 +672,9 @@ local function sync_vhosts(red)
         synced_count = synced_count + 1
     end
 
+    -- Sync vhost-specific endpoints for all vhosts
+    sync_all_vhost_endpoints(red, vhost_ids)
+
     ngx.log(ngx.DEBUG, "Synced ", synced_count, " vhost configurations")
 end
 
@@ -564,6 +734,49 @@ function _M.start_sync_timer()
         return
     end
     ngx.log(ngx.INFO, "Redis sync timer started with interval: ", SYNC_INTERVAL, "s")
+
+    -- Start learning flush timer (only on worker 0)
+    if ngx.worker.id() == 0 then
+        local flush_interval = field_learner.get_flush_interval()
+        local function learning_flush_handler(premature)
+            if premature then
+                return
+            end
+
+            -- Connect to Redis and flush learning data
+            local red = redis:new()
+            red:set_timeouts(1000, 1000, 1000)
+
+            local ok, err = red:connect(REDIS_HOST, REDIS_PORT)
+            if ok then
+                if REDIS_PASSWORD then
+                    red:auth(REDIS_PASSWORD)
+                end
+                if REDIS_DB > 0 then
+                    red:select(REDIS_DB)
+                end
+
+                local flushed, flush_err = field_learner.flush_to_redis(red)
+                if flushed and flushed > 0 then
+                    ngx.log(ngx.DEBUG, "Flushed ", flushed, " learning entries to Redis")
+                end
+
+                red:set_keepalive(10000, 100)
+            else
+                ngx.log(ngx.WARN, "Learning flush: failed to connect to Redis: ", err)
+            end
+
+            -- Reschedule
+            ngx.timer.at(flush_interval, learning_flush_handler)
+        end
+
+        local ok, err = ngx.timer.at(flush_interval, learning_flush_handler)
+        if ok then
+            ngx.log(ngx.INFO, "Field learning flush timer started with interval: ", flush_interval, "s")
+        else
+            ngx.log(ngx.WARN, "Failed to start learning flush timer: ", err)
+        end
+    end
 end
 
 -- Manual sync trigger
@@ -573,14 +786,50 @@ end
 
 -- Get sync status
 function _M.get_status()
-    return {
+    local status = {
         redis_host = REDIS_HOST,
         redis_port = REDIS_PORT,
         sync_interval = SYNC_INTERVAL,
         filter_stats = keyword_filter.get_stats(),
         endpoint_stats = endpoint_matcher.get_stats(),
         vhost_stats = vhost_matcher.get_stats(),
+        redis_connected = false,
+        blocked_hashes_count = 0,
+        whitelisted_ips_count = 0,
+        endpoints_count = 0,
+        vhosts_count = 0,
     }
+
+    -- Try to get counts from Redis
+    local red, err = get_redis_connection()
+    if red then
+        status.redis_connected = true
+
+        -- Get counts
+        local blocked_hashes = red:scard(KEYS.blocked_hashes)
+        if blocked_hashes and blocked_hashes ~= ngx.null then
+            status.blocked_hashes_count = blocked_hashes
+        end
+
+        local whitelisted_ips = red:scard(KEYS.ip_whitelist)
+        if whitelisted_ips and whitelisted_ips ~= ngx.null then
+            status.whitelisted_ips_count = whitelisted_ips
+        end
+
+        local endpoints = red:zcard(KEYS.endpoint_index)
+        if endpoints and endpoints ~= ngx.null then
+            status.endpoints_count = endpoints
+        end
+
+        local vhosts = red:zcard(KEYS.vhost_index)
+        if vhosts and vhosts ~= ngx.null then
+            status.vhosts_count = vhosts
+        end
+
+        close_redis(red)
+    end
+
+    return status
 end
 
 -- Get Redis keys (for admin API)

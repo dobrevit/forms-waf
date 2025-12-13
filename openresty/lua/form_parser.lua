@@ -219,4 +219,68 @@ function _M.get_combined_text(form_data)
     return table.concat(parts, " ")
 end
 
+-- Reconstruct request body from form_data
+-- Used when filtering unexpected fields
+-- Returns: body string or nil (if content type not supported for reconstruction)
+function _M.reconstruct_body(form_data, content_type)
+    if not form_data or not content_type then
+        return nil
+    end
+
+    content_type = content_type:lower()
+
+    if content_type:find("application/x%-www%-form%-urlencoded") then
+        -- Reconstruct URL-encoded body
+        local parts = {}
+        for key, value in pairs(form_data) do
+            if type(value) == "table" then
+                -- Array values: repeat the key
+                for _, v in ipairs(value) do
+                    table.insert(parts, ngx.escape_uri(key) .. "=" .. ngx.escape_uri(tostring(v)))
+                end
+            else
+                table.insert(parts, ngx.escape_uri(key) .. "=" .. ngx.escape_uri(tostring(value)))
+            end
+        end
+        return table.concat(parts, "&")
+
+    elseif content_type:find("application/json") then
+        -- Reconstruct JSON body
+        -- Note: We work with flattened data, so we need to unflatten it
+        local result = {}
+        for key, value in pairs(form_data) do
+            -- Handle flattened keys like "user.name" -> {user: {name: value}}
+            local parts_list = {}
+            for part in key:gmatch("[^.]+") do
+                table.insert(parts_list, part)
+            end
+
+            if #parts_list == 1 then
+                -- Simple key
+                result[key] = value
+            else
+                -- Nested key - rebuild structure
+                local current = result
+                for i = 1, #parts_list - 1 do
+                    local part = parts_list[i]
+                    if not current[part] then
+                        current[part] = {}
+                    end
+                    current = current[part]
+                end
+                current[parts_list[#parts_list]] = value
+            end
+        end
+        return cjson.encode(result)
+
+    elseif content_type:find("multipart/form%-data") then
+        -- Multipart reconstruction is complex (boundaries, files, etc.)
+        -- Not supported - return nil to skip filtering
+        ngx.log(ngx.WARN, "Cannot filter multipart/form-data requests - filtering skipped")
+        return nil
+    end
+
+    return nil
+end
+
 return _M

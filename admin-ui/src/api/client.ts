@@ -210,16 +210,17 @@ export const configApi = {
       body: JSON.stringify(data),
     }),
 
-  getWhitelistedIps: () =>
+  // IP Allow List (backend endpoint still uses /whitelist for compatibility)
+  getAllowedIps: () =>
     request<ApiResponse<{ ips: string[] }>>('/whitelist/ips'),
 
-  addWhitelistedIp: (ip: string) =>
+  addAllowedIp: (ip: string) =>
     request<ApiResponse<null>>('/whitelist/ips', {
       method: 'POST',
       body: JSON.stringify({ ip }),
     }),
 
-  removeWhitelistedIp: (ip: string) =>
+  removeAllowedIp: (ip: string) =>
     request<ApiResponse<null>>('/whitelist/ips', {
       method: 'DELETE',
       body: JSON.stringify({ ip }),
@@ -229,4 +230,49 @@ export const configApi = {
 // Sync API
 export const syncApi = {
   force: () => request<ApiResponse<null>>('/sync', { method: 'POST' }),
+}
+
+// Learning API - Field learning data
+export interface LearnedField {
+  name: string
+  type: string
+  count: number
+  first_seen?: number
+  last_seen?: number
+  endpoints?: string[]  // Only for vhost-level
+}
+
+export interface LearnedFieldsResponse {
+  endpoint_id?: string
+  vhost_id?: string
+  fields: LearnedField[]
+  count: number
+  learning_stats: {
+    batch_count: number
+    cache_available: boolean
+  }
+}
+
+export const learningApi = {
+  // Endpoint learning
+  getEndpointFields: (endpointId: string) =>
+    request<LearnedFieldsResponse>(`/endpoints/learned-fields?endpoint_id=${encodeURIComponent(endpointId)}`),
+
+  clearEndpointFields: (endpointId: string) =>
+    request<{ cleared: boolean; endpoint_id: string }>(`/endpoints/learned-fields?endpoint_id=${encodeURIComponent(endpointId)}`, {
+      method: 'DELETE',
+    }),
+
+  // Vhost learning
+  getVhostFields: (vhostId: string) =>
+    request<LearnedFieldsResponse>(`/vhosts/learned-fields?vhost_id=${encodeURIComponent(vhostId)}`),
+
+  clearVhostFields: (vhostId: string) =>
+    request<{ cleared: boolean; vhost_id: string }>(`/vhosts/learned-fields?vhost_id=${encodeURIComponent(vhostId)}`, {
+      method: 'DELETE',
+    }),
+
+  // Stats
+  getStats: () =>
+    request<{ stats: { batch_count: number; cache_available: boolean } }>('/learning/stats'),
 }

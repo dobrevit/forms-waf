@@ -12,6 +12,7 @@ local endpoint_matcher = require "endpoint_matcher"
 local config_resolver = require "config_resolver"
 local vhost_matcher = require "vhost_matcher"
 local vhost_resolver = require "vhost_resolver"
+local field_learner = require "field_learner"
 local cjson = require "cjson.safe"
 
 -- Process incoming request
@@ -25,21 +26,40 @@ function _M.process_request()
     local context = vhost_resolver.resolve_request_context(host, path, method)
     local summary = vhost_resolver.get_context_summary(context)
 
-    -- Set context headers early (useful for debugging and downstream services)
-    ngx.header["X-WAF-Vhost"] = summary.vhost_id
-    ngx.header["X-WAF-Vhost-Match"] = summary.vhost_match
-    ngx.header["X-WAF-Endpoint"] = summary.endpoint_id or "global"
-    ngx.header["X-WAF-Match-Type"] = summary.endpoint_match
-    ngx.header["X-WAF-Mode"] = summary.mode
+    -- Check if WAF debug headers should be exposed to clients
+    local expose_headers = waf_config.expose_waf_headers()
+
+    -- Always set X-WAF-Debug header for HAProxy (even for non-form requests)
+    ngx.req.set_header("X-WAF-Debug", expose_headers and "on" or "off")
+
+    -- Set context headers early (only if expose_waf_headers is enabled)
+    if expose_headers then
+        ngx.header["X-WAF-Vhost"] = summary.vhost_id
+        ngx.header["X-WAF-Vhost-Match"] = summary.vhost_match
+        ngx.header["X-WAF-Endpoint"] = summary.endpoint_id or "global"
+        ngx.header["X-WAF-Match-Type"] = summary.endpoint_match
+        ngx.header["X-WAF-Mode"] = summary.mode
+    end
 
     -- Store context for use in balancer phase
     ngx.ctx.waf_context = context
     ngx.ctx.waf_routing = vhost_resolver.get_routing(context)
 
+    -- Set rate limiting headers for HAProxy (request headers, not response)
+    local rate_limiting = vhost_resolver.get_rate_limiting(context)
+    if rate_limiting and rate_limiting.enabled then
+        ngx.req.set_header("X-WAF-Rate-Limit", "on")
+        ngx.req.set_header("X-WAF-Rate-Limit-Value", tostring(rate_limiting.requests_per_minute or 30))
+    else
+        ngx.req.set_header("X-WAF-Rate-Limit", "off")
+    end
+
     -- Check if WAF should be skipped
     if vhost_resolver.should_skip_waf(context) then
-        ngx.header["X-WAF-Skipped"] = "true"
-        ngx.header["X-WAF-Skip-Reason"] = context.reason or "unknown"
+        if expose_headers then
+            ngx.header["X-WAF-Skipped"] = "true"
+            ngx.header["X-WAF-Skip-Reason"] = context.reason or "unknown"
+        end
         ngx.log(ngx.DEBUG, string.format(
             "WAF SKIPPED: host=%s path=%s vhost=%s endpoint=%s reason=%s",
             host, path, summary.vhost_id, summary.endpoint_id or "none", context.reason or "unknown"
@@ -95,10 +115,12 @@ function _M.process_request()
         client_ip = client_ip:match("([^,]+)")
     end
 
-    -- Check IP whitelist first
-    local whitelist = ngx.shared.ip_whitelist
-    if whitelist and whitelist:get(client_ip) then
-        ngx.header["X-Whitelisted"] = "true"
+    -- Check IP allow list first
+    local allowlist = ngx.shared.ip_whitelist
+    if allowlist and allowlist:get(client_ip) then
+        if expose_headers then
+            ngx.header["X-Allowed-IP"] = "true"
+        end
         return
     end
 
@@ -113,6 +135,12 @@ function _M.process_request()
     if not form_data or next(form_data) == nil then
         return
     end
+
+    -- Field learning: Record observed fields for configuration assistance
+    -- Uses probabilistic sampling and batching to minimize performance impact
+    local endpoint_id = summary.endpoint_id
+    local vhost_id = summary.vhost_id
+    field_learner.record_fields(form_data, endpoint_id, vhost_id)
 
     -- Validate required fields if configured
     local valid, field_errors = vhost_resolver.validate_fields(context, form_data)
@@ -195,21 +223,102 @@ function _M.process_request()
         end
     end
 
-    -- Step 2: Content hashing (only if enabled and fields specified)
+    -- Step 2: Content hashing
+    -- Inverted paradigm: if specific fields configured, hash ONLY those
+    -- This prevents bots from changing hash by adding random fields
     local hash_config = vhost_resolver.get_hash_content_config(context)
-    local form_hash = nil
+    local form_hash
 
     if hash_config.enabled and hash_config.fields and #hash_config.fields > 0 then
-        -- Hash only specified fields
+        -- Hash ONLY the specified fields (sorted alphabetically in hash_fields)
         form_hash = content_hasher.hash_fields(form_data, hash_config.fields)
+    else
+        -- Hash all fields, excluding configured ignored fields (CSRF tokens, etc.)
+        local ignore_fields = vhost_resolver.get_ignore_fields(context)
+        local exclude_set = {}
+        for _, f in ipairs(ignore_fields) do
+            exclude_set[f:lower()] = true
+        end
+        form_hash = content_hasher.hash_form(form_data, { exclude_fields = exclude_set })
+    end
 
-        -- Check if hash is in blocklist
-        if form_hash then
-            local hash_blocked = keyword_filter.is_hash_blocked(form_hash)
-            if hash_blocked then
+    -- Check if hash is in blocklist
+    if form_hash and form_hash ~= "empty" then
+        local hash_blocked = keyword_filter.is_hash_blocked(form_hash)
+        if hash_blocked then
+            blocked = true
+            block_reason = "blocked_hash"
+            table.insert(spam_flags, "hash:blocked")
+        end
+    end
+
+    -- Step 2b: Expected fields validation
+    -- If endpoint specifies expected_fields (optional) or required fields, flag/block any unexpected fields
+    -- Required fields are inherently expected, so we combine both lists
+    local expected_fields = vhost_resolver.get_expected_fields(context)
+    local required_fields = vhost_resolver.get_required_fields(context)
+
+    -- Build combined set of allowed fields (required + expected + ignored)
+    local has_field_restrictions = (expected_fields and #expected_fields > 0) or (required_fields and #required_fields > 0)
+
+    if has_field_restrictions then
+        local allowed_set = {}
+
+        -- Required fields are expected
+        if required_fields then
+            for _, f in ipairs(required_fields) do
+                allowed_set[f:lower()] = true
+            end
+        end
+
+        -- Optional expected fields
+        if expected_fields then
+            for _, f in ipairs(expected_fields) do
+                allowed_set[f:lower()] = true
+            end
+        end
+
+        -- Ignored fields (CSRF tokens etc.) are always allowed
+        local ignore_fields = vhost_resolver.get_ignore_fields(context)
+        for _, f in ipairs(ignore_fields) do
+            allowed_set[f:lower()] = true
+        end
+
+        local unexpected_fields = {}
+        for field_name, _ in pairs(form_data) do
+            if type(field_name) == "string" then
+                local field_lower = field_name:lower()
+                -- Field is unexpected if not in allowed set
+                if not allowed_set[field_lower] then
+                    table.insert(unexpected_fields, field_name)
+                end
+            end
+        end
+
+        if #unexpected_fields > 0 then
+            -- Get action for unexpected fields (default: flag)
+            local unexpected_action = vhost_resolver.get_unexpected_fields_action(context)
+            if unexpected_action == "block" then
                 blocked = true
-                block_reason = "blocked_hash"
-                table.insert(spam_flags, "hash:blocked")
+                block_reason = "unexpected_fields"
+            elseif unexpected_action == "filter" then
+                -- Remove unexpected fields from form_data and reconstruct request body
+                for _, f in ipairs(unexpected_fields) do
+                    form_data[f] = nil
+                end
+                -- Reconstruct request body based on content type
+                local new_body = form_parser.reconstruct_body(form_data, content_type)
+                if new_body then
+                    ngx.req.set_body_data(new_body)
+                    ngx.req.set_header("X-WAF-Filtered", "true")
+                    ngx.req.set_header("X-WAF-Filtered-Fields", table.concat(unexpected_fields, ","))
+                end
+            elseif unexpected_action ~= "ignore" then
+                -- Default: flag (add score)
+                spam_score = spam_score + (5 * #unexpected_fields)
+            end
+            for _, f in ipairs(unexpected_fields) do
+                table.insert(spam_flags, "unexpected:" .. f)
             end
         end
     end
@@ -268,21 +377,33 @@ function _M.process_request()
         table.insert(spam_flags, "score:exceeded")
     end
 
-    -- Set response headers for HAProxy
-    if form_hash then
-        ngx.header["X-Form-Hash"] = form_hash
+    -- Set request headers for HAProxy (upstream) - always set for internal use
+    if form_hash and form_hash ~= "empty" then
+        ngx.req.set_header("X-Form-Hash", form_hash)
     end
-    ngx.header["X-Spam-Score"] = tostring(spam_score)
-    ngx.header["X-Spam-Flags"] = table.concat(spam_flags, ",")
-    ngx.header["X-Client-IP"] = client_ip
+    ngx.req.set_header("X-Spam-Score", tostring(spam_score))
+    ngx.req.set_header("X-Spam-Flags", table.concat(spam_flags, ","))
+    ngx.req.set_header("X-Client-IP", client_ip)
+
+    -- Set response headers for debugging (only if expose_waf_headers is enabled)
+    if expose_headers then
+        if form_hash and form_hash ~= "empty" then
+            ngx.header["X-Form-Hash"] = form_hash
+        end
+        ngx.header["X-Spam-Score"] = tostring(spam_score)
+        ngx.header["X-Spam-Flags"] = table.concat(spam_flags, ",")
+        ngx.header["X-Client-IP"] = client_ip
+    end
 
     -- Determine if we should actually block
     local should_block = blocked and vhost_resolver.should_block(context)
 
     -- In monitoring mode, log but don't block
     if blocked and not should_block then
-        ngx.header["X-WAF-Would-Block"] = "true"
-        ngx.header["X-WAF-Block-Reason"] = block_reason
+        if expose_headers then
+            ngx.header["X-WAF-Would-Block"] = "true"
+            ngx.header["X-WAF-Block-Reason"] = block_reason
+        end
         ngx.log(ngx.WARN, string.format(
             "MONITORING (would block): ip=%s host=%s path=%s vhost=%s endpoint=%s reason=%s score=%d hash=%s flags=%s",
             client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
@@ -293,8 +414,10 @@ function _M.process_request()
 
     -- If blocked at OpenResty level, respond immediately
     if should_block then
-        ngx.header["X-Blocked"] = "true"
-        ngx.header["X-Block-Reason"] = block_reason
+        if expose_headers then
+            ngx.header["X-Blocked"] = "true"
+            ngx.header["X-Block-Reason"] = block_reason
+        end
 
         -- Log the block
         ngx.log(ngx.WARN, string.format(
@@ -303,16 +426,17 @@ function _M.process_request()
             block_reason, spam_score, form_hash, table.concat(spam_flags, ",")
         ))
 
-        -- Return 403 with JSON error
+        -- Return 403 with JSON error (minimal info to client)
         ngx.status = ngx.HTTP_FORBIDDEN
         ngx.header["Content-Type"] = "application/json"
-        ngx.say(cjson.encode({
-            error = "Request blocked",
-            reason = block_reason,
-            vhost = summary.vhost_id,
-            endpoint = summary.endpoint_id,
-            request_id = ngx.var.request_id or ngx.now()
-        }))
+        local error_response = { error = "Request blocked" }
+        if expose_headers then
+            error_response.reason = block_reason
+            error_response.vhost = summary.vhost_id
+            error_response.endpoint = summary.endpoint_id
+            error_response.request_id = ngx.var.request_id or ngx.now()
+        end
+        ngx.say(cjson.encode(error_response))
         return ngx.exit(ngx.HTTP_FORBIDDEN)
     end
 

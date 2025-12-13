@@ -25,7 +25,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Search, Trash2, Network, Shield } from 'lucide-react'
 
-export function IpWhitelist() {
+export function IpAllowList() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [search, setSearch] = useState('')
@@ -33,15 +33,15 @@ export function IpWhitelist() {
   const [deleteIp, setDeleteIp] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery({
-    queryKey: ['config', 'whitelist', 'ips'],
-    queryFn: configApi.getWhitelistedIps,
+    queryKey: ['config', 'allowlist', 'ips'],
+    queryFn: configApi.getAllowedIps,
   })
 
   const addMutation = useMutation({
-    mutationFn: configApi.addWhitelistedIp,
+    mutationFn: configApi.addAllowedIp,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['config', 'whitelist', 'ips'] })
-      toast({ title: 'IP added to whitelist' })
+      queryClient.invalidateQueries({ queryKey: ['config', 'allowlist', 'ips'] })
+      toast({ title: 'IP added to allow list' })
       setNewIp('')
     },
     onError: (error) => {
@@ -54,10 +54,10 @@ export function IpWhitelist() {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: configApi.removeWhitelistedIp,
+    mutationFn: configApi.removeAllowedIp,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['config', 'whitelist', 'ips'] })
-      toast({ title: 'IP removed from whitelist' })
+      queryClient.invalidateQueries({ queryKey: ['config', 'allowlist', 'ips'] })
+      toast({ title: 'IP removed from allow list' })
       setDeleteIp(null)
     },
     onError: (error) => {
@@ -95,7 +95,7 @@ export function IpWhitelist() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">IP Whitelist</h2>
+        <h2 className="text-3xl font-bold tracking-tight">IP Allow List</h2>
         <p className="text-muted-foreground">
           IP addresses and ranges that bypass WAF filtering
         </p>
@@ -107,7 +107,7 @@ export function IpWhitelist() {
           <div>
             <p className="font-medium text-green-800">Bypass WAF Processing</p>
             <p className="text-sm text-green-600">
-              Traffic from whitelisted IPs skips all WAF checks. Use carefully.
+              Traffic from allowed IPs skips all WAF checks. Use carefully.
             </p>
           </div>
         </CardContent>
@@ -121,7 +121,7 @@ export function IpWhitelist() {
             Add IP Address
           </CardTitle>
           <CardDescription>
-            Add an IP address or CIDR range to the whitelist
+            Add an IP address or CIDR range to the allow list
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -180,7 +180,7 @@ export function IpWhitelist() {
             ) : filteredIps.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={3} className="text-center">
-                  No IPs in whitelist
+                  No IPs in allow list
                 </TableCell>
               </TableRow>
             ) : (
@@ -219,9 +219,9 @@ export function IpWhitelist() {
       <AlertDialog open={!!deleteIp} onOpenChange={() => setDeleteIp(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove from Whitelist</AlertDialogTitle>
+            <AlertDialogTitle>Remove from Allow List</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to remove "{deleteIp}" from the whitelist?
+              Are you sure you want to remove "{deleteIp}" from the allow list?
               Traffic from this IP will be subject to WAF processing.
             </AlertDialogDescription>
           </AlertDialogHeader>

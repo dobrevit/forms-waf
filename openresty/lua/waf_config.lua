@@ -16,6 +16,8 @@ local DEFAULT_THRESHOLDS = {
     hash_unique_ips_block = 5,   -- Block hash if seen from this many unique IPs
     ip_rate_limit = 30,          -- Max form submissions per minute per IP
     ip_daily_limit = 500,        -- Max form submissions per day per IP
+    rate_limiting_enabled = true, -- Global rate limiting toggle
+    expose_waf_headers = false,  -- Expose WAF debug headers to clients (X-WAF-*, X-Spam-*)
 }
 
 -- Default routing settings
@@ -80,6 +82,18 @@ end
 function _M.get_haproxy_timeout()
     local routing = _M.get_routing()
     return routing.haproxy_timeout or DEFAULT_ROUTING.haproxy_timeout
+end
+
+-- Check if WAF headers should be exposed to clients
+function _M.expose_waf_headers()
+    local thresholds = _M.get_thresholds()
+    return thresholds.expose_waf_headers == true
+end
+
+-- Check if rate limiting is globally enabled
+function _M.rate_limiting_enabled()
+    local thresholds = _M.get_thresholds()
+    return thresholds.rate_limiting_enabled ~= false
 end
 
 -- Get all config (for admin API)

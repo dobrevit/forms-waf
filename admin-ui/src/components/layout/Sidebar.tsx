@@ -26,7 +26,7 @@ const navigation = [
     name: 'Configuration',
     children: [
       { name: 'Thresholds', href: '/config/thresholds', icon: Settings },
-      { name: 'IP Whitelist', href: '/config/whitelist', icon: Network },
+      { name: 'IP Allow List', href: '/config/allowlist', icon: Network },
     ],
   },
 ]

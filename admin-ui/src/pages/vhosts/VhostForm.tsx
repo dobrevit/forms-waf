@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { vhostsApi, configApi } from '@/api/client'
+import { vhostsApi, configApi, learningApi, LearnedField } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowLeft, Save, Plus, X, Server } from 'lucide-react'
+import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info } from 'lucide-react'
 import type { Vhost } from '@/api/types'
 
 const defaultVhost: Partial<Vhost> = {
@@ -73,6 +73,17 @@ export function VhostForm() {
   })
   const globalRouting = globalRoutingData?.routing || globalRoutingData?.defaults || { haproxy_upstream: 'haproxy:80' }
 
+  // Fetch learned fields for existing vhosts
+  const { data: learnedFieldsData, isLoading: learnedFieldsLoading, refetch: refetchLearnedFields } = useQuery({
+    queryKey: ['vhost-learned-fields', id],
+    queryFn: () => learningApi.getVhostFields(id!),
+    enabled: !!id,
+  })
+
+  // Extract learned fields from response (ensure array - Lua cjson may encode empty arrays as objects)
+  const learnedFields: LearnedField[] = Array.isArray(learnedFieldsData?.fields) ? learnedFieldsData.fields : []
+  const learningStats = learnedFieldsData?.learning_stats
+
   useEffect(() => {
     // API returns vhost directly (not wrapped in .data)
     const vhost = (data as { vhost?: Vhost } | undefined)?.vhost || data as Vhost | undefined
@@ -111,6 +122,21 @@ export function VhostForm() {
       toast({
         title: 'Error',
         description: error instanceof Error ? error.message : 'Failed to save',
+        variant: 'destructive',
+      })
+    },
+  })
+
+  const clearLearningMutation = useMutation({
+    mutationFn: () => learningApi.clearVhostFields(id!),
+    onSuccess: () => {
+      refetchLearnedFields()
+      toast({ title: 'Learning data cleared for this vhost' })
+    },
+    onError: (error) => {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to clear learning data',
         variant: 'destructive',
       })
     },
@@ -246,6 +272,17 @@ export function VhostForm() {
             <TabsTrigger value="routing">Routing</TabsTrigger>
             <TabsTrigger value="waf">WAF Settings</TabsTrigger>
             <TabsTrigger value="keywords">Keywords</TabsTrigger>
+            {!isNew && (
+              <TabsTrigger value="learned-fields" className="flex items-center gap-1">
+                <BookOpen className="h-3 w-3" />
+                Learned Fields
+                {learnedFields.length > 0 && (
+                  <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+                    {learnedFields.length}
+                  </span>
+                )}
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="general">
@@ -692,6 +729,153 @@ export function VhostForm() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {!isNew && (
+            <TabsContent value="learned-fields">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <BookOpen className="h-5 w-5" />
+                        Learned Fields
+                      </CardTitle>
+                      <CardDescription>
+                        Form fields aggregated across all endpoints in this virtual host.
+                      </CardDescription>
+                    </div>
+                    {learnedFields.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (confirm('Clear all learning data for this virtual host? This cannot be undone.')) {
+                            clearLearningMutation.mutate()
+                          }
+                        }}
+                        disabled={clearLearningMutation.isPending}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4 mr-1" />
+                        Clear Data
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {learnedFieldsLoading ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      Loading learned fields...
+                    </div>
+                  ) : learnedFields.length === 0 ? (
+                    <div className="text-center py-8 space-y-2">
+                      <BookOpen className="h-12 w-12 mx-auto text-muted-foreground/50" />
+                      <p className="text-muted-foreground">No fields learned yet</p>
+                      <p className="text-sm text-muted-foreground">
+                        Field names will be automatically discovered as requests flow through endpoints
+                        belonging to this virtual host. Learning uses 10% sampling.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Learning stats */}
+                      {learningStats && (
+                        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                          <div className="flex items-center gap-4 text-sm text-blue-700">
+                            <span>
+                              <strong>{learnedFields.length}</strong> unique fields discovered
+                            </span>
+                            <span className="text-blue-300">|</span>
+                            <span>
+                              <strong>{learningStats.batch_count || 0}</strong> batches processed
+                            </span>
+                            {learningStats.cache_available && (
+                              <>
+                                <span className="text-blue-300">|</span>
+                                <span className="text-green-600">Cache active</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Fields table */}
+                      <div className="rounded-md border">
+                        <table className="w-full">
+                          <thead className="bg-muted/50">
+                            <tr>
+                              <th className="px-4 py-3 text-left text-sm font-medium">Field Name</th>
+                              <th className="px-4 py-3 text-left text-sm font-medium">Type</th>
+                              <th className="px-4 py-3 text-left text-sm font-medium">Count</th>
+                              <th className="px-4 py-3 text-left text-sm font-medium">Last Seen</th>
+                              <th className="px-4 py-3 text-left text-sm font-medium">Endpoints</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {learnedFields.map((field) => (
+                              <tr key={field.name} className="hover:bg-muted/30">
+                                <td className="px-4 py-3">
+                                  <code className="text-sm bg-muted px-1.5 py-0.5 rounded">{field.name}</code>
+                                </td>
+                                <td className="px-4 py-3 text-sm text-muted-foreground">
+                                  {field.type || 'text'}
+                                </td>
+                                <td className="px-4 py-3 text-sm">
+                                  {field.count.toLocaleString()}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-muted-foreground">
+                                  {field.last_seen
+                                    ? new Date(field.last_seen * 1000).toLocaleDateString()
+                                    : '—'}
+                                </td>
+                                <td className="px-4 py-3">
+                                  {field.endpoints && field.endpoints.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1">
+                                      {field.endpoints.slice(0, 3).map((ep) => (
+                                        <span
+                                          key={ep}
+                                          className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded"
+                                        >
+                                          {ep}
+                                        </span>
+                                      ))}
+                                      {field.endpoints.length > 3 && (
+                                        <span className="text-xs text-muted-foreground">
+                                          +{field.endpoints.length - 3} more
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-sm text-muted-foreground">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Info note */}
+                      <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4">
+                        <div className="flex items-start gap-3">
+                          <Info className="h-5 w-5 text-yellow-600 mt-0.5" />
+                          <div>
+                            <p className="font-medium text-yellow-800">About Vhost-Level Learning</p>
+                            <p className="text-sm text-yellow-700 mt-1">
+                              This view shows fields aggregated across all endpoints in this virtual host.
+                              To configure field requirements for a specific endpoint, visit that endpoint's
+                              configuration page. Learning data is retained for 30 days of inactivity.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
         </Tabs>
 
         <div className="flex justify-end gap-4 mt-6">

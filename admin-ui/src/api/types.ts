@@ -107,6 +107,8 @@ export interface EndpointFields {
   required?: string[] | Record<string, unknown>
   max_length?: Record<string, number>
   ignore_fields?: string[]
+  expected?: string[]  // Expected fields - unexpected fields will trigger action
+  unexpected_action?: 'flag' | 'block' | 'ignore' | 'filter'  // Action for unexpected fields
 }
 
 export interface EndpointRateLimiting {
