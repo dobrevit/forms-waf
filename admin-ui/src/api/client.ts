@@ -232,6 +232,24 @@ export const syncApi = {
   force: () => request<ApiResponse<null>>('/sync', { method: 'POST' }),
 }
 
+// Metrics API
+export interface MetricsSummary {
+  total_requests: number
+  blocked_requests: number
+  monitored_requests: number
+  allowed_requests: number
+  skipped_requests: number
+  form_submissions: number
+  validation_errors: number
+  by_vhost: Record<string, { total: number; blocked: number; monitored: number; allowed: number }>
+  by_endpoint: Record<string, { total: number; blocked: number; monitored: number; allowed: number }>
+}
+
+export const metricsApi = {
+  get: () => request<MetricsSummary>('/metrics'),
+  reset: () => request<{ success: boolean; message: string }>('/metrics/reset', { method: 'POST' }),
+}
+
 // Learning API - Field learning data
 export interface LearnedField {
   name: string
@@ -275,4 +293,69 @@ export const learningApi = {
   // Stats
   getStats: () =>
     request<{ stats: { batch_count: number; cache_available: boolean } }>('/learning/stats'),
+}
+
+// CAPTCHA API - Provider and configuration management
+import type {
+  CaptchaProvider,
+  CaptchaGlobalConfig,
+  CaptchaConfigResponse,
+} from './types'
+
+export interface CaptchaProviderTestResult {
+  provider_id: string
+  success: boolean
+  message: string
+}
+
+export const captchaApi = {
+  // Provider CRUD
+  listProviders: () =>
+    request<{ providers: CaptchaProvider[] }>('/captcha/providers'),
+
+  getProvider: (id: string) =>
+    request<{ provider: CaptchaProvider }>(`/captcha/providers/${id}`),
+
+  createProvider: (data: Omit<CaptchaProvider, 'id' | 'metadata'>) =>
+    request<{ created: boolean; provider: CaptchaProvider }>('/captcha/providers', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateProvider: (id: string, data: Partial<CaptchaProvider>) =>
+    request<{ updated: boolean; provider: CaptchaProvider }>(`/captcha/providers/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  deleteProvider: (id: string) =>
+    request<{ deleted: boolean; provider_id: string }>(`/captcha/providers/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // Provider actions
+  enableProvider: (id: string) =>
+    request<{ enabled: boolean; provider_id: string }>(`/captcha/providers/${id}/enable`, {
+      method: 'POST',
+    }),
+
+  disableProvider: (id: string) =>
+    request<{ disabled: boolean; provider_id: string }>(`/captcha/providers/${id}/disable`, {
+      method: 'POST',
+    }),
+
+  testProvider: (id: string) =>
+    request<CaptchaProviderTestResult>(`/captcha/providers/${id}/test`, {
+      method: 'POST',
+    }),
+
+  // Global configuration
+  getConfig: () =>
+    request<CaptchaConfigResponse>('/captcha/config'),
+
+  updateConfig: (data: Partial<CaptchaGlobalConfig>) =>
+    request<{ updated: boolean; fields: string[] }>('/captcha/config', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 }

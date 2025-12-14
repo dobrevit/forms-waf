@@ -14,6 +14,7 @@ local vhost_matcher = require "vhost_matcher"
 local vhost_resolver = require "vhost_resolver"
 local admin_auth = require "admin_auth"
 local field_learner = require "field_learner"
+local metrics = require "metrics"
 
 -- Configuration
 local REQUIRE_AUTH = os.getenv("WAF_ADMIN_AUTH") ~= "false"  -- Default: require auth
@@ -70,6 +71,18 @@ handlers["GET:/status"] = function()
     local status = redis_sync.get_status()
     status.config = waf_config.get_all()
     return json_response(status)
+end
+
+-- GET /waf-admin/metrics - Get WAF metrics summary
+handlers["GET:/metrics"] = function()
+    local summary = metrics.get_summary()
+    return json_response(summary)
+end
+
+-- POST /waf-admin/metrics/reset - Reset all metrics (for testing)
+handlers["POST:/metrics/reset"] = function()
+    metrics.reset()
+    return json_response({success = true, message = "Metrics reset"})
 end
 
 -- GET /waf-admin/keywords/blocked - List blocked keywords

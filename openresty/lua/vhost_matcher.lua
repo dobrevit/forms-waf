@@ -266,16 +266,21 @@ function _M.validate_config(config)
 
     -- Validate routing
     if config.routing then
-        -- Validate routing.upstream if provided
-        if config.routing.upstream then
-            validate_upstream(config.routing.upstream, "routing.upstream")
+        -- Only validate routing.upstream when NOT using HAProxy
+        -- When use_haproxy is true or unset (default), upstream servers are optional
+        if config.routing.use_haproxy == false then
+            -- Direct routing - upstream is required
+            local upstream = config.routing.upstream or config.upstream
+            if not upstream then
+                table.insert(errors, "upstream configuration required when not using HAProxy")
+            elseif upstream.servers and #upstream.servers > 0 then
+                -- Validate the upstream config only if servers are provided
+                validate_upstream(upstream, "routing.upstream")
+            else
+                table.insert(errors, "routing.upstream.servers must have at least one server when not using HAProxy")
+            end
         end
-
-        -- Check upstream is required when not using HAProxy
-        local upstream = config.routing.upstream or config.upstream
-        if config.routing.use_haproxy == false and not upstream then
-            table.insert(errors, "upstream configuration required when not using HAProxy")
-        end
+        -- When use_haproxy is true/unset, upstream config is ignored (HAProxy handles routing)
     end
 
     -- Validate WAF settings

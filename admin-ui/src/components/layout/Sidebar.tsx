@@ -9,6 +9,8 @@ import {
   Settings,
   Shield,
   Network,
+  ShieldCheck,
+  Cog,
 } from 'lucide-react'
 
 const navigation = [
@@ -20,6 +22,13 @@ const navigation = [
     children: [
       { name: 'Blocked', href: '/keywords/blocked', icon: Ban },
       { name: 'Flagged', href: '/keywords/flagged', icon: Flag },
+    ],
+  },
+  {
+    name: 'CAPTCHA',
+    children: [
+      { name: 'Providers', href: '/captcha/providers', icon: ShieldCheck },
+      { name: 'Settings', href: '/captcha/settings', icon: Cog },
     ],
   },
   {

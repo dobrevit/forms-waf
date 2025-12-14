@@ -1,7 +1,10 @@
 FROM openresty/openresty:1.27.1.2-alpine
 USER root
-# Install additional Lua modules
-RUN apk add --no-cache curl
+# Install additional Lua modules and dependencies
+RUN apk add --no-cache curl perl
+
+# Install lua-resty-http for CAPTCHA provider verification
+RUN opm get ledgetech/lua-resty-http
 
 # Copy configuration
 COPY conf/nginx.conf /etc/nginx/nginx.conf

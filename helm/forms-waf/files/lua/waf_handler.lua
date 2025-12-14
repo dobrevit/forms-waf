@@ -13,6 +13,7 @@ local config_resolver = require "config_resolver"
 local vhost_matcher = require "vhost_matcher"
 local vhost_resolver = require "vhost_resolver"
 local field_learner = require "field_learner"
+local metrics = require "metrics"
 local cjson = require "cjson.safe"
 
 -- Process incoming request
@@ -54,6 +55,10 @@ function _M.process_request()
         ngx.req.set_header("X-WAF-Rate-Limit", "off")
     end
 
+    -- Send WAF mode to HAProxy so it knows whether to block or just track
+    -- In monitoring/passthrough mode, HAProxy should track but not block
+    ngx.req.set_header("X-WAF-Mode", summary.mode)
+
     -- Check if WAF should be skipped
     if vhost_resolver.should_skip_waf(context) then
         if expose_headers then
@@ -64,6 +69,7 @@ function _M.process_request()
             "WAF SKIPPED: host=%s path=%s vhost=%s endpoint=%s reason=%s",
             host, path, summary.vhost_id, summary.endpoint_id or "none", context.reason or "unknown"
         ))
+        metrics.record_request(summary.vhost_id, summary.endpoint_id, "skipped", 0)
         return
     end
 
@@ -86,6 +92,8 @@ function _M.process_request()
     end
 
     if not method_allowed then
+        -- Not a form submission method, record as allowed passthrough
+        metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", 0)
         return
     end
 
@@ -105,6 +113,8 @@ function _M.process_request()
     end
 
     if not valid_content_type then
+        -- Not a form content type, record as allowed passthrough
+        metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", 0)
         return
     end
 
@@ -121,6 +131,7 @@ function _M.process_request()
         if expose_headers then
             ngx.header["X-Allowed-IP"] = "true"
         end
+        metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", 0)
         return
     end
 
@@ -129,12 +140,18 @@ function _M.process_request()
     if err then
         ngx.log(ngx.WARN, "Form parsing error: ", err)
         -- Continue without blocking on parse errors
+        metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", 0)
         return
     end
 
     if not form_data or next(form_data) == nil then
+        -- Empty form, allow through
+        metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", 0)
         return
     end
+
+    -- Record form submission for metrics
+    metrics.record_form_submission(summary.vhost_id, summary.endpoint_id)
 
     -- Field learning: Record observed fields for configuration assistance
     -- Uses probabilistic sampling and batching to minimize performance impact
@@ -145,6 +162,8 @@ function _M.process_request()
     -- Validate required fields if configured
     local valid, field_errors = vhost_resolver.validate_fields(context, form_data)
     if not valid and vhost_resolver.should_block(context) then
+        metrics.record_validation_error(summary.vhost_id, summary.endpoint_id)
+        metrics.record_request(summary.vhost_id, summary.endpoint_id, "blocked", 0)
         ngx.status = ngx.HTTP_BAD_REQUEST
         ngx.header["Content-Type"] = "application/json"
         ngx.say(cjson.encode({
@@ -409,6 +428,7 @@ function _M.process_request()
             client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
             block_reason, spam_score, form_hash, table.concat(spam_flags, ",")
         ))
+        metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", spam_score)
         return
     end
 
@@ -425,6 +445,9 @@ function _M.process_request()
             client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
             block_reason, spam_score, form_hash, table.concat(spam_flags, ",")
         ))
+
+        -- Record blocked request in metrics
+        metrics.record_request(summary.vhost_id, summary.endpoint_id, "blocked", spam_score)
 
         -- Return 403 with JSON error (minimal info to client)
         ngx.status = ngx.HTTP_FORBIDDEN
@@ -446,6 +469,9 @@ function _M.process_request()
         client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
         summary.mode, spam_score, form_hash, table.concat(spam_flags, ",")
     ))
+
+    -- Record allowed request in metrics
+    metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", spam_score)
 end
 
 -- Get routing decision for balancer phase

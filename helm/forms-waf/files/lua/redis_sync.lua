@@ -146,6 +146,15 @@ local function parse_threshold_value(value_str)
     end
 end
 
+-- Helper to serialize threshold value for Redis (handles booleans properly)
+local function serialize_threshold_value(value)
+    if type(value) == "boolean" then
+        return value and "true" or "false"
+    else
+        return tostring(value)
+    end
+end
+
 -- Sync configuration thresholds
 local function sync_thresholds(red)
     local config, err = red:hgetall(KEYS.thresholds)
@@ -894,6 +903,7 @@ local DEFAULT_THRESHOLDS = {
     hash_unique_ips_block = 5,
     ip_rate_limit = 30,
     ip_daily_limit = 500,
+    expose_waf_headers = false,
 }
 
 local DEFAULT_ROUTING = {
@@ -932,7 +942,7 @@ function _M.initialize_defaults()
     if not thresholds_count or thresholds_count == 0 then
         ngx.log(ngx.INFO, "Initializing default thresholds in Redis")
         for key, value in pairs(DEFAULT_THRESHOLDS) do
-            red:hset(KEYS.thresholds, key, value)
+            red:hset(KEYS.thresholds, key, serialize_threshold_value(value))
         end
         table.insert(initialized, "thresholds")
     end

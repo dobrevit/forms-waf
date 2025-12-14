@@ -5,6 +5,12 @@ metadata:
   name: {{ include "forms-waf.fullname" . }}-openresty
   labels:
     {{- include "forms-waf.openresty.labels" . | nindent 4 }}
+  {{- if .Values.monitoring.enabled }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "{{ .Values.openresty.service.metricsPort }}"
+    prometheus.io/path: "/metrics"
+  {{- end }}
 spec:
   type: {{ .Values.openresty.service.type }}
   ports:

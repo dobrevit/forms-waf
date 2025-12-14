@@ -11,6 +11,8 @@ import { BlockedKeywords } from '@/pages/keywords/BlockedKeywords'
 import { FlaggedKeywords } from '@/pages/keywords/FlaggedKeywords'
 import { Thresholds } from '@/pages/config/Thresholds'
 import { IpAllowList } from '@/pages/config/IpAllowList'
+import { CaptchaProviders } from '@/pages/captcha/CaptchaProviders'
+import { CaptchaSettings } from '@/pages/captcha/CaptchaSettings'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -51,6 +53,8 @@ export default function App() {
                 <Route path="/keywords/flagged" element={<FlaggedKeywords />} />
                 <Route path="/config/thresholds" element={<Thresholds />} />
                 <Route path="/config/allowlist" element={<IpAllowList />} />
+                <Route path="/captcha/providers" element={<CaptchaProviders />} />
+                <Route path="/captcha/settings" element={<CaptchaSettings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </AppLayout>

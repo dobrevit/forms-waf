@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { statusApi, vhostsApi, endpointsApi, keywordsApi } from '@/api/client'
+import { statusApi, vhostsApi, endpointsApi, keywordsApi, metricsApi } from '@/api/client'
+import type { MetricsSummary } from '@/api/client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -10,7 +11,12 @@ import {
   Shield,
   CheckCircle,
   XCircle,
-  Activity
+  Activity,
+  ShieldAlert,
+  ShieldCheck,
+  Eye,
+  FileText,
+  AlertTriangle
 } from 'lucide-react'
 
 interface StatCardProps {
@@ -65,6 +71,12 @@ export function Dashboard() {
     queryFn: keywordsApi.getFlagged,
   })
 
+  const { data: metricsData } = useQuery({
+    queryKey: ['metrics'],
+    queryFn: metricsApi.get,
+    refetchInterval: 10000, // Refresh every 10 seconds
+  })
+
   const status = statusData as Record<string, unknown> | undefined
   const rawVhosts = (vhostsData as { vhosts: unknown[] } | undefined)?.vhosts
   const rawEndpoints = (endpointsData as { endpoints: unknown[] } | undefined)?.endpoints
@@ -79,6 +91,8 @@ export function Dashboard() {
 
   const enabledVhosts = vhosts.filter((v: unknown) => (v as { enabled: boolean }).enabled).length
   const enabledEndpoints = endpoints.filter((e: unknown) => (e as { enabled: boolean }).enabled).length
+
+  const metrics = metricsData as MetricsSummary | undefined
 
   return (
     <div className="space-y-6">
@@ -149,6 +163,75 @@ export function Dashboard() {
           icon={Flag}
         />
       </div>
+
+      {/* Request Metrics */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Activity className="h-5 w-5" />
+            Request Metrics
+          </CardTitle>
+          <CardDescription>Live request statistics (refreshes every 10s)</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+            <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
+              <FileText className="h-5 w-5 text-blue-500 mb-1" />
+              <span className="text-2xl font-bold">{metrics?.total_requests || 0}</span>
+              <span className="text-xs text-muted-foreground">Total Requests</span>
+            </div>
+            <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
+              <ShieldAlert className="h-5 w-5 text-red-500 mb-1" />
+              <span className="text-2xl font-bold text-red-600">{metrics?.blocked_requests || 0}</span>
+              <span className="text-xs text-muted-foreground">Blocked</span>
+            </div>
+            <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
+              <Eye className="h-5 w-5 text-yellow-500 mb-1" />
+              <span className="text-2xl font-bold text-yellow-600">{metrics?.monitored_requests || 0}</span>
+              <span className="text-xs text-muted-foreground">Monitored</span>
+            </div>
+            <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
+              <ShieldCheck className="h-5 w-5 text-green-500 mb-1" />
+              <span className="text-2xl font-bold text-green-600">{metrics?.allowed_requests || 0}</span>
+              <span className="text-xs text-muted-foreground">Allowed</span>
+            </div>
+            <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
+              <FileText className="h-5 w-5 text-purple-500 mb-1" />
+              <span className="text-2xl font-bold">{metrics?.form_submissions || 0}</span>
+              <span className="text-xs text-muted-foreground">Form Submissions</span>
+            </div>
+            <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
+              <AlertTriangle className="h-5 w-5 text-orange-500 mb-1" />
+              <span className="text-2xl font-bold text-orange-600">{metrics?.validation_errors || 0}</span>
+              <span className="text-xs text-muted-foreground">Validation Errors</span>
+            </div>
+          </div>
+
+          {/* Block rate indicator */}
+          {(metrics?.total_requests || 0) > 0 && (
+            <div className="mt-4 pt-4 border-t">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Block Rate</span>
+                <span className="font-medium">
+                  {((((metrics?.blocked_requests || 0) + (metrics?.monitored_requests || 0)) / (metrics?.total_requests || 1)) * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="mt-2 h-2 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-red-500 transition-all"
+                  style={{
+                    width: `${((metrics?.blocked_requests || 0) / (metrics?.total_requests || 1)) * 100}%`
+                  }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                <span>Blocked: {metrics?.blocked_requests || 0}</span>
+                <span>Would Block: {metrics?.monitored_requests || 0}</span>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Quick Info */}
       <div className="grid gap-4 md:grid-cols-2">

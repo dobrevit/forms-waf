@@ -35,54 +35,128 @@ data:
     frontend ft_waf
         bind *:8080
 
+        # ACL definitions for WAF headers
         acl has_form_hash req.hdr(X-Form-Hash) -m found
         acl has_spam_score req.hdr(X-Spam-Score) -m found
         acl has_client_ip req.hdr(X-Client-IP) -m found
-        acl spam_score_high req.hdr(X-Spam-Score),int ge 80
+
+        # WAF mode check - only block when in blocking or strict mode
+        # In monitoring/passthrough mode, HAProxy should track but not block
+        acl waf_should_block req.hdr(X-WAF-Mode) -m str blocking strict
+
+        # High spam score (blocked at HAProxy level)
+        acl spam_score_high req.hdr(X-Spam-Score) -m int ge 80
+
+        # Already blocked by OpenResty
         acl blocked_by_openresty req.hdr(X-Blocked) -m str true
 
-        http-request deny deny_status 403 if blocked_by_openresty
-        http-request deny deny_status 403 if spam_score_high
+        # Deny already blocked requests (only in blocking mode)
+        http-request deny deny_status 403 if blocked_by_openresty waf_should_block
 
+        # Deny high spam scores (only in blocking mode)
+        http-request deny deny_status 403 if spam_score_high waf_should_block
+
+        #-----------------------------------------------------------------
+        # Rate limiting ACL (must be defined before tracking)
+        #-----------------------------------------------------------------
+
+        # Check if rate limiting is enabled via OpenResty header
+        acl rate_limit_enabled req.hdr(X-WAF-Rate-Limit) -m str on
+
+        #-----------------------------------------------------------------
+        # Stick-table tracking
+        #-----------------------------------------------------------------
+
+        # Track form hash submissions globally (always, for duplicate detection)
         http-request track-sc0 req.hdr(X-Form-Hash) table st_form_hashes if has_form_hash
-        http-request track-sc1 req.hdr(X-Client-IP) table st_client_ips if has_client_ip
+
+        # Track client IP submissions (only when rate limiting is enabled for this request)
+        http-request track-sc1 req.hdr(X-Client-IP) table st_client_ips if has_client_ip rate_limit_enabled
+
+        # Track spam scores per IP (always, for abuse tracking)
         http-request track-sc2 req.hdr(X-Client-IP) table st_spam_scores if has_client_ip
 
+        #-----------------------------------------------------------------
+        # Stick-table based blocking rules
+        #-----------------------------------------------------------------
+
+        # Get rate limit value from header (default to 30 if not set)
+        http-request set-var(txn.rate_limit) req.hdr(X-WAF-Rate-Limit-Value),regsub(^$,30)
+
+        # Block if form hash seen too many times (global duplicate detection)
+        # Only block in blocking/strict mode
         acl hash_flood sc0_gpc0_rate(st_form_hashes) gt 10
-        http-request deny deny_status 429 if hash_flood
+        http-request deny deny_status 429 if hash_flood rate_limit_enabled waf_should_block
 
-        acl hash_flagged sc0_gpc1(st_form_hashes) gt 0
-        http-request deny deny_status 403 if hash_flagged
+        # Block if form hash has been manually flagged
+        # Only block in blocking/strict mode
+        acl hash_flagged sc0_get_gpc1(st_form_hashes) gt 0
+        http-request deny deny_status 403 if hash_flagged waf_should_block
 
-        acl ip_rate_exceeded sc1_http_req_rate(st_client_ips) gt 30
-        http-request deny deny_status 429 if ip_rate_exceeded
+        # Block if client IP submission rate too high (respects per-request rate limit)
+        # Uses dynamic comparison with header value
+        # Only block in blocking/strict mode
+        acl ip_rate_exceeded sc1_http_req_rate(st_client_ips),sub(txn.rate_limit) gt 0
+        http-request deny deny_status 429 if ip_rate_exceeded rate_limit_enabled waf_should_block
 
-        acl ip_spam_score sc2_gpc0(st_spam_scores) gt 500
-        http-request deny deny_status 403 if ip_spam_score
+        # Block if client IP has accumulated too many spam submissions
+        # Only block in blocking/strict mode
+        acl ip_spam_score sc2_get_gpc0(st_spam_scores) gt 500
+        http-request deny deny_status 403 if ip_spam_score rate_limit_enabled waf_should_block
 
+        #-----------------------------------------------------------------
+        # Update counters
+        #-----------------------------------------------------------------
+
+        # Increment form hash counter
         http-request sc-inc-gpc0(0) if has_form_hash
-        http-request set-var(txn.spam_score) req.hdr(X-Spam-Score),int if has_spam_score
 
-        http-response set-header X-WAF-Hash-Count %[sc0_gpc0(st_form_hashes)]
-        http-response set-header X-WAF-IP-Rate %[sc1_http_req_rate(st_client_ips)]
+        # Add spam score to IP's cumulative score
+        http-request set-var(txn.spam_score) req.hdr(X-Spam-Score) if has_spam_score
+        # Note: GPC increment is by 1, for weighted scoring we'd use a map
+
+        #-----------------------------------------------------------------
+        # Add response headers for debugging (only when X-WAF-Debug: on)
+        # Store the debug flag in a txn variable for use in response phase
+        #-----------------------------------------------------------------
+        http-request set-var(txn.waf_debug) req.hdr(X-WAF-Debug)
+        http-response set-header X-WAF-Hash-Count %[sc0_get_gpc0(st_form_hashes)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-IP-Rate %[sc1_http_req_rate(st_client_ips)] if { var(txn.waf_debug) -m str "on" }
 
         default_backend bk_application
 
+    #---------------------------------------------------------------------
+    # Stick Tables
+    #---------------------------------------------------------------------
+
+    # Form hash tracking - detects duplicate/spam content globally
     backend st_form_hashes
         stick-table type string len 64 size 100k expire 1h peers haproxy_peers store gpc0,gpc0_rate(60s),gpc1,conn_cnt
 
+    # Client IP tracking - rate limiting per IP
     backend st_client_ips
         stick-table type string len 45 size 50k expire 1h peers haproxy_peers store http_req_rate(60s),http_req_cnt,gpc0,conn_cnt
 
+    # Spam score accumulation per IP
     backend st_spam_scores
         stick-table type string len 45 size 50k expire 24h peers haproxy_peers store gpc0,gpc1
 
+    #---------------------------------------------------------------------
+    # Backend - forwards to actual application
+    #---------------------------------------------------------------------
     backend bk_application
         balance roundrobin
+
+        # Health check
         option httpchk GET /health
         http-check expect status 200
+
+        # Backend servers (configured via environment/discovery)
         server app1 {{ include "forms-waf.backend.serviceName" . }}:{{ include "forms-waf.backend.servicePort" . }} check inter 5s fall 3 rise 2
 
+    #---------------------------------------------------------------------
+    # Stats frontend
+    #---------------------------------------------------------------------
     frontend stats
         bind *:8404
         mode http
@@ -90,8 +164,13 @@ data:
         stats uri /stats
         stats refresh 10s
         stats admin if TRUE
+
+        # Prometheus metrics endpoint
         http-request use-service prometheus-exporter if { path /metrics }
 
+    #---------------------------------------------------------------------
+    # Health check frontend
+    #---------------------------------------------------------------------
     frontend health
         bind *:8405
         mode http

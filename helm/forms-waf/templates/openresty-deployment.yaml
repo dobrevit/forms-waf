@@ -17,6 +17,11 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/openresty-configmap.yaml") . | sha256sum }}
+        {{- if .Values.monitoring.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.openresty.service.metricsPort }}"
+        prometheus.io/path: "/metrics"
+        {{- end }}
       labels:
         {{- include "forms-waf.openresty.selectorLabels" . | nindent 8 }}
     spec:
@@ -51,6 +56,24 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-redis
                   key: redis-password
+            {{- end }}
+            {{- if .Values.openresty.proxy.httpProxy }}
+            - name: HTTP_PROXY
+              value: {{ .Values.openresty.proxy.httpProxy | quote }}
+            - name: http_proxy
+              value: {{ .Values.openresty.proxy.httpProxy | quote }}
+            {{- end }}
+            {{- if .Values.openresty.proxy.httpsProxy }}
+            - name: HTTPS_PROXY
+              value: {{ .Values.openresty.proxy.httpsProxy | quote }}
+            - name: https_proxy
+              value: {{ .Values.openresty.proxy.httpsProxy | quote }}
+            {{- end }}
+            {{- if .Values.openresty.proxy.noProxy }}
+            - name: NO_PROXY
+              value: {{ .Values.openresty.proxy.noProxy | quote }}
+            - name: no_proxy
+              value: {{ .Values.openresty.proxy.noProxy | quote }}
             {{- end }}
           {{- with .Values.openresty.envFrom }}
           envFrom:

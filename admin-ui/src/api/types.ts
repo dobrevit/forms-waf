@@ -193,3 +193,60 @@ export interface ContextResult {
   reason?: string
   mode: string
 }
+
+// CAPTCHA types
+export type CaptchaProviderType = 'turnstile' | 'recaptcha_v2' | 'recaptcha_v3' | 'hcaptcha'
+
+export interface CaptchaProviderOptions {
+  theme?: 'light' | 'dark' | 'auto'
+  size?: 'normal' | 'compact'
+  min_score?: number  // reCAPTCHA v3 only
+  action?: string     // reCAPTCHA v3 only
+}
+
+export interface CaptchaProvider {
+  id: string
+  name: string
+  type: CaptchaProviderType
+  enabled: boolean
+  priority: number
+  site_key: string
+  secret_key: string  // Will be "***" when fetched from API
+  options?: CaptchaProviderOptions
+  metadata?: {
+    created_at?: string
+    updated_at?: string
+  }
+}
+
+export interface CaptchaGlobalConfig {
+  enabled: boolean
+  default_provider?: string | null
+  trust_duration: number      // seconds (default: 86400 = 24h)
+  challenge_ttl: number       // seconds (default: 600 = 10min)
+  fallback_action: 'block' | 'allow' | 'monitor'
+  cookie_name: string
+  cookie_secure: boolean
+  cookie_httponly: boolean
+  cookie_samesite: 'Strict' | 'Lax' | 'None'
+}
+
+export interface CaptchaConfigResponse {
+  config: CaptchaGlobalConfig
+  defaults: CaptchaGlobalConfig
+}
+
+// Endpoint CAPTCHA configuration
+export interface EndpointCaptchaConfig {
+  enabled?: boolean
+  provider?: string           // Override default provider
+  trigger?: 'on_block' | 'on_flag' | 'always'
+  spam_score_threshold?: number  // For 'on_flag' trigger
+  trust_duration?: number     // Override global trust duration
+  exempt_ips?: string[]       // IPs to skip CAPTCHA
+}
+
+// Extended Endpoint with CAPTCHA
+export interface EndpointWithCaptcha extends Endpoint {
+  captcha?: EndpointCaptchaConfig
+}

@@ -43,6 +43,13 @@ openresty:
     targetCPUUtilizationPercentage: 80
     targetMemoryUtilizationPercentage: 80
 
+  # HTTP proxy for outbound connections (CAPTCHA verification, etc.)
+  # Set these if your cluster requires a proxy for external internet access
+  proxy:
+    httpProxy: ""      # e.g., "http://proxy.example.com:8080"
+    httpsProxy: ""     # e.g., "http://proxy.example.com:8080"
+    noProxy: ""        # e.g., "localhost,127.0.0.1,.cluster.local,10.0.0.0/8"
+
   # Environment variables
   env:
     WAF_SYNC_INTERVAL: "30"
