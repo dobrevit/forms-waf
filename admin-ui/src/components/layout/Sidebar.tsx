@@ -11,6 +11,12 @@ import {
   Network,
   ShieldCheck,
   Cog,
+  Bell,
+  FileJson,
+  Clock,
+  MapPin,
+  ShieldAlert,
+  Info,
 } from 'lucide-react'
 
 const navigation = [
@@ -32,12 +38,28 @@ const navigation = [
     ],
   },
   {
+    name: 'Security',
+    children: [
+      { name: 'Form Timing', href: '/security/timing', icon: Clock },
+      { name: 'GeoIP', href: '/security/geoip', icon: MapPin },
+      { name: 'IP Reputation', href: '/security/reputation', icon: ShieldAlert },
+    ],
+  },
+  {
     name: 'Configuration',
     children: [
       { name: 'Thresholds', href: '/config/thresholds', icon: Settings },
       { name: 'IP Allow List', href: '/config/allowlist', icon: Network },
     ],
   },
+  {
+    name: 'Operations',
+    children: [
+      { name: 'Webhooks', href: '/operations/webhooks', icon: Bell },
+      { name: 'Bulk Import/Export', href: '/operations/bulk', icon: FileJson },
+    ],
+  },
+  { name: 'About', href: '/about', icon: Info },
 ]
 
 export function Sidebar() {

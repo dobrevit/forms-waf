@@ -114,6 +114,7 @@ export interface EndpointFields {
 export interface EndpointRateLimiting {
   enabled: boolean
   requests_per_minute?: number
+  requests_per_day?: number
 }
 
 export interface EndpointPatterns {

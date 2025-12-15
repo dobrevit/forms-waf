@@ -14,7 +14,7 @@ openresty:
   replicaCount: 2
 
   image:
-    repository: forms-waf/openresty
+    repository: ghcr.io/dobrevit/forms-waf-openresty
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -108,7 +108,7 @@ haproxy:
   replicaCount: 3
 
   image:
-    repository: forms-waf/haproxy
+    repository: ghcr.io/dobrevit/forms-waf-haproxy
     tag: latest
     pullPolicy: IfNotPresent
 
@@ -226,7 +226,7 @@ adminUI:
   replicaCount: 1
 
   image:
-    repository: forms-waf/admin-ui
+    repository: ghcr.io/dobrevit/forms-waf-admin-ui
     tag: latest
     pullPolicy: IfNotPresent
 

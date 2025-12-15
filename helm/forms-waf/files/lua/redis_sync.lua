@@ -10,6 +10,15 @@ local endpoint_matcher = require "endpoint_matcher"
 local vhost_matcher = require "vhost_matcher"
 local field_learner = require "field_learner"
 
+-- Lazy load captcha_handler to avoid circular dependency
+local captcha_handler = nil
+local function get_captcha_handler()
+    if not captcha_handler then
+        captcha_handler = require "captcha_handler"
+    end
+    return captcha_handler
+end
+
 -- Configuration
 local REDIS_HOST = os.getenv("REDIS_HOST") or "redis"
 local REDIS_PORT = tonumber(os.getenv("REDIS_PORT")) or 6379
@@ -38,6 +47,10 @@ local KEYS = {
     vhost_config_prefix = "waf:vhosts:config:",
     vhost_hosts_exact = "waf:vhosts:hosts:exact",
     vhost_hosts_wildcard = "waf:vhosts:hosts:wildcard",
+    -- CAPTCHA configuration keys
+    captcha_providers_index = "waf:captcha:providers:index",
+    captcha_providers_config_prefix = "waf:captcha:providers:config:",
+    captcha_config = "waf:captcha:config",
 }
 
 -- Shared dictionaries
@@ -687,6 +700,134 @@ local function sync_vhosts(red)
     ngx.log(ngx.DEBUG, "Synced ", synced_count, " vhost configurations")
 end
 
+-- ============================================================================
+-- CAPTCHA Configuration Sync Functions
+-- ============================================================================
+
+-- Sync CAPTCHA global configuration
+local function sync_captcha_config(red)
+    local config, err = red:hgetall(KEYS.captcha_config)
+    if not config then
+        ngx.log(ngx.DEBUG, "Failed to get CAPTCHA config: ", err)
+        return
+    end
+
+    local captcha_config = {}
+    if type(config) == "table" then
+        for i = 1, #config, 2 do
+            local key = config[i]
+            local value = config[i + 1]
+            if key and value then
+                -- Parse JSON values
+                if value:match("^[%[{]") then
+                    captcha_config[key] = cjson.decode(value) or value
+                elseif value == "true" then
+                    captcha_config[key] = true
+                elseif value == "false" then
+                    captcha_config[key] = false
+                elseif tonumber(value) then
+                    captcha_config[key] = tonumber(value)
+                else
+                    captcha_config[key] = value
+                end
+            end
+        end
+    end
+
+    -- Apply defaults if not set
+    local defaults = {
+        enabled = false,
+        default_provider = nil,
+        trust_duration = 86400,
+        challenge_ttl = 600,
+        fallback_action = "block",
+        cookie_name = "waf_trust",
+        cookie_secure = true,
+        cookie_httponly = true,
+        cookie_samesite = "Strict",
+    }
+
+    for key, default_value in pairs(defaults) do
+        if captcha_config[key] == nil then
+            captcha_config[key] = default_value
+        end
+    end
+
+    -- Update captcha_handler's cached config
+    get_captcha_handler().update_config(captcha_config)
+    ngx.log(ngx.DEBUG, "Synced CAPTCHA global config")
+end
+
+-- Sync individual CAPTCHA provider configuration
+local function sync_captcha_provider(red, provider_id)
+    local config_key = KEYS.captcha_providers_config_prefix .. provider_id
+    local config_json, err = red:get(config_key)
+
+    if not config_json or config_json == ngx.null then
+        ngx.log(ngx.DEBUG, "No config found for CAPTCHA provider: ", provider_id)
+        return nil
+    end
+
+    local config = cjson.decode(config_json)
+    if config then
+        get_captcha_handler().cache_provider(provider_id, config)
+        ngx.log(ngx.DEBUG, "Synced config for CAPTCHA provider: ", provider_id)
+        return config
+    end
+
+    return nil
+end
+
+-- Sync all CAPTCHA providers
+local function sync_captcha_providers(red)
+    -- Get all provider IDs from sorted set (ordered by priority)
+    local provider_ids, err = red:zrange(KEYS.captcha_providers_index, 0, -1)
+    if not provider_ids then
+        ngx.log(ngx.DEBUG, "Failed to get CAPTCHA providers index: ", err)
+        return
+    end
+
+    -- Clear existing cached providers and rebuild
+    get_captcha_handler().clear_providers_cache()
+
+    local synced_count = 0
+    if type(provider_ids) == "table" then
+        for _, provider_id in ipairs(provider_ids) do
+            local config = sync_captcha_provider(red, provider_id)
+            if config then
+                synced_count = synced_count + 1
+            end
+        end
+    end
+
+    -- Also cache the provider index for quick lookups
+    get_captcha_handler().update_provider_index(provider_ids or {})
+
+    ngx.log(ngx.DEBUG, "Synced ", synced_count, " CAPTCHA providers")
+end
+
+-- Sync all CAPTCHA configuration (global config + providers)
+local function sync_captcha(red)
+    sync_captcha_config(red)
+    sync_captcha_providers(red)
+end
+
+-- Sync webhook configuration
+local function sync_webhooks(red)
+    local config_str = red:get("waf:webhooks:config")
+
+    if config_str and config_str ~= ngx.null then
+        local ok, webhooks = pcall(require, "webhooks")
+        if ok and webhooks then
+            local config = cjson.decode(config_str)
+            if config then
+                webhooks.update_config(config)
+                ngx.log(ngx.DEBUG, "Synced webhook configuration")
+            end
+        end
+    end
+end
+
 -- Main sync function
 local function do_sync()
     local red, err = get_redis_connection()
@@ -708,6 +849,12 @@ local function do_sync()
 
     -- Sync vhost configurations
     sync_vhosts(red)
+
+    -- Sync CAPTCHA configuration
+    sync_captcha(red)
+
+    -- Sync webhook configuration
+    sync_webhooks(red)
 
     close_redis(red)
 

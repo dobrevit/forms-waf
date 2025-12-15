@@ -59,6 +59,7 @@ services:
       # Mount lua scripts for development (hot reload with nginx -s reload)
       - ./openresty/lua:/etc/nginx/lua:ro
       - ./openresty/conf/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - ./maxmind:/usr/share/GeoIP:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
       interval: 10s

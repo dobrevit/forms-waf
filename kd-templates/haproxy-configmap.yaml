@@ -8,6 +8,15 @@ metadata:
     app.kubernetes.io/component: haproxy
 data:
   haproxy.cfg: |
+    #---------------------------------------------------------------------
+    # Forms WAF - HAProxy Configuration
+    # Global abuse protection with stick-table synchronization
+    #
+    # Architecture: Chained frontends to support 4 stick-tables with 3 counters
+    #   ft_waf (sc0: hash, sc1: ip rate, sc2: ip spam) -> bk_fingerprint_check
+    #   ft_fingerprint (sc0: fingerprint) -> bk_application
+    #---------------------------------------------------------------------
+
     global
         log stdout format raw local0 info
         maxconn 4096
@@ -26,11 +35,17 @@ data:
         timeout server  30s
         timeout http-request 10s
 
+        log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r form_hash=%[req.hdr(X-Form-Hash)] spam_score=%[req.hdr(X-Spam-Score)]"
+
     peers haproxy_peers
         peer ${RELEASE_NAME:-forms-waf}-haproxy-0 ${RELEASE_NAME:-forms-waf}-haproxy-0.${RELEASE_NAME:-forms-waf}-haproxy-headless:10000
         peer ${RELEASE_NAME:-forms-waf}-haproxy-1 ${RELEASE_NAME:-forms-waf}-haproxy-1.${RELEASE_NAME:-forms-waf}-haproxy-headless:10000
         peer ${RELEASE_NAME:-forms-waf}-haproxy-2 ${RELEASE_NAME:-forms-waf}-haproxy-2.${RELEASE_NAME:-forms-waf}-haproxy-headless:10000
 
+    #---------------------------------------------------------------------
+    # Frontend Stage 1 - Main WAF checks (hash, IP rate, IP spam score)
+    # Uses sc0, sc1, sc2 then forwards to fingerprint check
+    #---------------------------------------------------------------------
     frontend ft_waf
         bind *:8080
 
@@ -63,7 +78,7 @@ data:
         acl rate_limit_enabled req.hdr(X-WAF-Rate-Limit) -m str on
 
         #-----------------------------------------------------------------
-        # Stick-table tracking
+        # Stick-table tracking (Stage 1: hash, IP rate, IP spam)
         #-----------------------------------------------------------------
 
         # Track form hash submissions globally (always, for duplicate detection)
@@ -76,7 +91,7 @@ data:
         http-request track-sc2 req.hdr(X-Client-IP) table st_spam_scores if has_client_ip
 
         #-----------------------------------------------------------------
-        # Stick-table based blocking rules
+        # Stick-table based blocking rules (Stage 1)
         #-----------------------------------------------------------------
 
         # Get rate limit value from header (default to 30 if not set)
@@ -115,12 +130,54 @@ data:
         # Note: GPC increment is by 1, for weighted scoring we'd use a map
 
         #-----------------------------------------------------------------
-        # Add response headers for debugging (only when X-WAF-Debug: on)
-        # Store the debug flag in a txn variable for use in response phase
+        # Store debug values from stage 1 for response headers
         #-----------------------------------------------------------------
         http-request set-var(txn.waf_debug) req.hdr(X-WAF-Debug)
-        http-response set-header X-WAF-Hash-Count %[sc0_get_gpc0(st_form_hashes)] if { var(txn.waf_debug) -m str "on" }
-        http-response set-header X-WAF-IP-Rate %[sc1_http_req_rate(st_client_ips)] if { var(txn.waf_debug) -m str "on" }
+        http-request set-var(txn.hash_count) sc0_get_gpc0(st_form_hashes) if has_form_hash
+        http-request set-var(txn.ip_rate) sc1_http_req_rate(st_client_ips) if has_client_ip
+
+        # Forward to fingerprint check stage
+        default_backend bk_fingerprint_check
+
+    #---------------------------------------------------------------------
+    # Backend - bridges to fingerprint frontend (internal)
+    #---------------------------------------------------------------------
+    backend bk_fingerprint_check
+        server fingerprint_check abns@ft_fingerprint send-proxy
+
+    #---------------------------------------------------------------------
+    # Frontend Stage 2 - Fingerprint tracking (uses sc0)
+    # Receives traffic from ft_waf via internal proxy
+    #---------------------------------------------------------------------
+    frontend ft_fingerprint
+        bind abns@ft_fingerprint accept-proxy
+
+        # ACL for fingerprint header
+        acl has_fingerprint req.hdr(X-Submission-Fingerprint) -m found
+        acl waf_should_block req.hdr(X-WAF-Mode) -m str blocking strict
+
+        #-----------------------------------------------------------------
+        # Stick-table tracking (Stage 2: fingerprint only)
+        #-----------------------------------------------------------------
+
+        # Track submission fingerprints (for coordinated attack detection)
+        http-request track-sc0 req.hdr(X-Submission-Fingerprint) table st_fingerprints if has_fingerprint
+
+        #-----------------------------------------------------------------
+        # Fingerprint-based blocking
+        #-----------------------------------------------------------------
+
+        # Block if submission fingerprint seen too many times (coordinated attack)
+        # High rate from same fingerprint = bot network or scripted attack
+        acl fingerprint_flood sc0_http_req_rate(st_fingerprints) gt 20
+        http-request deny deny_status 429 if fingerprint_flood has_fingerprint waf_should_block
+
+        #-----------------------------------------------------------------
+        # Add response headers for debugging (only when X-WAF-Debug: on)
+        #-----------------------------------------------------------------
+        http-response set-header X-WAF-Hash-Count %[var(txn.hash_count)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-IP-Rate %[var(txn.ip_rate)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Fingerprint-Rate %[sc0_http_req_rate(st_fingerprints)] if { var(txn.waf_debug) -m str "on" }
 
         default_backend bk_application
 
@@ -139,6 +196,11 @@ data:
     # Spam score accumulation per IP
     backend st_spam_scores
         stick-table type string len 45 size 50k expire 24h peers haproxy_peers store gpc0,gpc1
+
+    # Submission fingerprint tracking - detects coordinated spam campaigns
+    # Fingerprint = hash of form structure + user-agent + accept-language
+    backend st_fingerprints
+        stick-table type string len 16 size 100k expire 1h peers haproxy_peers store http_req_rate(60s),http_req_cnt,gpc0
 
     #---------------------------------------------------------------------
     # Backend - forwards to actual application

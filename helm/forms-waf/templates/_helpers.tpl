@@ -148,6 +148,41 @@ Backend service port
 {{- end }}
 
 {{/*
+Admin UI labels
+*/}}
+{{- define "forms-waf.adminUI.labels" -}}
+{{ include "forms-waf.labels" . }}
+app.kubernetes.io/component: admin-ui
+{{- end }}
+
+{{- define "forms-waf.adminUI.selectorLabels" -}}
+{{ include "forms-waf.selectorLabels" . }}
+app.kubernetes.io/component: admin-ui
+{{- end }}
+
+{{/*
+Create the name of the service account for Admin UI
+*/}}
+{{- define "forms-waf.adminUI.serviceAccountName" -}}
+{{- if .Values.adminUI.serviceAccount }}
+{{- if .Values.adminUI.serviceAccount.create }}
+{{- default (printf "%s-admin-ui" (include "forms-waf.fullname" .)) .Values.adminUI.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.adminUI.serviceAccount.name }}
+{{- end }}
+{{- else }}
+{{- "default" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Generic service account name (fallback to default)
+*/}}
+{{- define "forms-waf.serviceAccountName" -}}
+{{- "default" }}
+{{- end }}
+
+{{/*
 Image pull secrets
 */}}
 {{- define "forms-waf.imagePullSecrets" -}}

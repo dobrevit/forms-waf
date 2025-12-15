@@ -15,7 +15,235 @@ local vhost_resolver = require "vhost_resolver"
 local field_learner = require "field_learner"
 local metrics = require "metrics"
 local captcha_handler = require "captcha_handler"
+local webhooks = require "webhooks"
+local timing_token = require "timing_token"
+local geoip = require "geoip"
+local ip_reputation = require "ip_reputation"
 local cjson = require "cjson.safe"
+
+-- Structured audit logging for security events
+-- Outputs JSON formatted log entries for easy parsing by log aggregation tools
+local function audit_log(event_type, event_data)
+    local log_entry = {
+        ["@timestamp"] = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        event_type = event_type,
+        request_id = ngx.var.request_id or tostring(ngx.now()),
+        client_ip = ngx.var.http_x_forwarded_for or ngx.var.remote_addr,
+        host = ngx.var.http_host or ngx.var.host,
+        path = ngx.var.uri,
+        method = ngx.req.get_method(),
+        user_agent = ngx.var.http_user_agent,
+        referer = ngx.var.http_referer,
+    }
+
+    -- Merge event-specific data
+    if event_data then
+        for k, v in pairs(event_data) do
+            log_entry[k] = v
+        end
+    end
+
+    -- Output as JSON to error log (can be parsed by log shippers)
+    ngx.log(ngx.NOTICE, "AUDIT: ", cjson.encode(log_entry))
+end
+
+-- Generate submission fingerprint (client identifier)
+-- Creates a fingerprint based on browser/client characteristics, NOT content
+-- Purpose: Detect bot patterns - same client submitting many different form hashes
+-- Components: User-Agent, Accept headers, form field names (structure only)
+-- Returns: string fingerprint (hex hash)
+local function generate_submission_fingerprint(form_data, ngx_vars)
+    local resty_sha256 = require "resty.sha256"
+    local resty_string = require "resty.string"
+
+    local sha256 = resty_sha256:new()
+    if not sha256 then
+        return nil
+    end
+
+    -- Collect field names only (sorted for consistency)
+    -- Intentionally excludes values and lengths - we're identifying the CLIENT, not content
+    local fields = {}
+    for field_name, _ in pairs(form_data) do
+        if type(field_name) == "string" then
+            table.insert(fields, field_name)
+        end
+    end
+    table.sort(fields)
+
+    -- Build fingerprint from client characteristics
+    local components = {}
+
+    -- 1. User-Agent (primary bot identifier - normalized)
+    local ua = ngx_vars.http_user_agent or ""
+    ua = ua:sub(1, 100):lower():gsub("%s+", " ")
+    table.insert(components, ua)
+
+    -- 2. Accept-Language (browser locale setting)
+    local accept_lang = ngx_vars.http_accept_language or ""
+    accept_lang = accept_lang:sub(1, 50):lower()
+    table.insert(components, accept_lang)
+
+    -- 3. Accept-Encoding (browser capabilities)
+    local accept_enc = ngx_vars.http_accept_encoding or ""
+    accept_enc = accept_enc:sub(1, 50):lower()
+    table.insert(components, accept_enc)
+
+    -- 4. Form field names (structure only, no values)
+    table.insert(components, table.concat(fields, ","))
+
+    -- Generate hash
+    sha256:update(table.concat(components, "|"))
+    local digest = sha256:final()
+
+    -- Return first 16 characters of hex hash (enough for uniqueness)
+    return resty_string.to_hex(digest):sub(1, 16)
+end
+
+-- Field anomaly detection
+-- Returns: { score = number, flags = {} }
+local function detect_field_anomalies(form_data, security_settings)
+    local result = {
+        score = 0,
+        flags = {}
+    }
+
+    if not form_data or type(form_data) ~= "table" then
+        return result
+    end
+
+    -- Gather field statistics
+    local text_fields = {}
+    local field_lengths = {}
+    local total_caps_fields = 0
+    local total_text_fields = 0
+
+    for field_name, value in pairs(form_data) do
+        if type(value) == "string" and #value > 0 then
+            -- Skip obvious non-text fields
+            local name_lower = field_name:lower()
+            if not (name_lower:match("csrf") or name_lower:match("token") or
+                    name_lower:match("captcha") or name_lower:match("password") or
+                    name_lower:match("_id$")) then
+
+                table.insert(text_fields, { name = field_name, value = value })
+                table.insert(field_lengths, #value)
+                total_text_fields = total_text_fields + 1
+
+                -- Check if field is all caps (more than 3 chars and all uppercase letters)
+                if #value > 3 then
+                    local alpha_only = value:gsub("[^%a]", "")
+                    if #alpha_only > 3 and alpha_only:upper() == alpha_only and alpha_only:lower() ~= alpha_only then
+                        total_caps_fields = total_caps_fields + 1
+                    end
+                end
+            end
+        end
+    end
+
+    -- Anomaly 1: All fields same length (bots often generate fixed-length data)
+    if #field_lengths >= 3 then
+        local all_same = true
+        local first_len = field_lengths[1]
+        for i = 2, #field_lengths do
+            if field_lengths[i] ~= first_len then
+                all_same = false
+                break
+            end
+        end
+        if all_same and first_len > 5 then
+            result.score = result.score + 15
+            table.insert(result.flags, "same_length:" .. first_len)
+        end
+    end
+
+    -- Anomaly 2: Check for sequential/incremental patterns
+    -- Look for values like "aaa", "bbb", "ccc" or "111", "222", "333"
+    local sequential_count = 0
+    for _, field in ipairs(text_fields) do
+        local val = field.value
+        -- Check for repeated characters
+        if #val >= 3 then
+            local first_char = val:sub(1, 1)
+            local all_same_char = true
+            for i = 2, #val do
+                if val:sub(i, i) ~= first_char then
+                    all_same_char = false
+                    break
+                end
+            end
+            if all_same_char then
+                sequential_count = sequential_count + 1
+            end
+        end
+
+        -- Check for incrementing numbers (123, 1234, etc.)
+        if val:match("^%d+$") and #val >= 3 then
+            local is_sequential = true
+            for i = 2, #val do
+                local prev = tonumber(val:sub(i - 1, i - 1))
+                local curr = tonumber(val:sub(i, i))
+                if curr ~= (prev + 1) % 10 then
+                    is_sequential = false
+                    break
+                end
+            end
+            if is_sequential then
+                sequential_count = sequential_count + 1
+            end
+        end
+    end
+
+    if sequential_count >= 2 then
+        result.score = result.score + (sequential_count * 5)
+        table.insert(result.flags, "sequential:" .. sequential_count)
+    end
+
+    -- Anomaly 3: Multiple fields all caps (shouting/bot pattern)
+    if total_caps_fields >= 2 then
+        result.score = result.score + (total_caps_fields * 5)
+        table.insert(result.flags, "all_caps:" .. total_caps_fields)
+    end
+
+    -- Anomaly 4: Field value looks like test data (common bot patterns)
+    local test_pattern_count = 0
+    local test_patterns = {
+        "^test[%d]*$", "^asdf+$", "^qwer", "^abc+$", "^xyz+$",
+        "^foo$", "^bar$", "^baz$", "^lorem", "^ipsum",
+        "^sample$", "^example$", "^dummy$"
+    }
+    for _, field in ipairs(text_fields) do
+        local val_lower = field.value:lower()
+        for _, pattern in ipairs(test_patterns) do
+            if val_lower:match(pattern) then
+                test_pattern_count = test_pattern_count + 1
+                break
+            end
+        end
+    end
+
+    if test_pattern_count >= 2 then
+        result.score = result.score + (test_pattern_count * 8)
+        table.insert(result.flags, "test_data:" .. test_pattern_count)
+    end
+
+    -- Anomaly 5: Extremely long field values without spaces (likely encoded/binary data)
+    for _, field in ipairs(text_fields) do
+        if #field.value > 200 then
+            local space_count = 0
+            for _ in field.value:gmatch("%s") do
+                space_count = space_count + 1
+            end
+            -- Less than 1 space per 50 characters is suspicious for text
+            if space_count < (#field.value / 50) then
+                result.score = result.score + 10
+                table.insert(result.flags, "no_spaces:" .. field.name)
+            end
+        end
+    end
+
+    return result
+end
 
 -- Process incoming request
 function _M.process_request()
@@ -93,7 +321,11 @@ function _M.process_request()
     end
 
     if not method_allowed then
-        -- Not a form submission method, record as allowed passthrough
+        -- Not a form submission method
+        -- But if this is a GET request, set timing token for future form submissions
+        if method == "GET" and timing_token.should_set_token(context) then
+            timing_token.set_token()
+        end
         metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", 0)
         return
     end
@@ -136,6 +368,98 @@ function _M.process_request()
         return
     end
 
+    -- Initialize pre-form variables for early IP checks
+    local early_spam_score = 0
+    local early_spam_flags = {}
+    local early_blocked = false
+    local early_block_reason = nil
+
+    -- GeoIP check (optional feature - gracefully degrades if not configured)
+    -- Checks country restrictions, ASN blocking, and datacenter detection
+    if geoip.is_available() then
+        local geo_result = geoip.check_ip(client_ip, effective_config)
+        if geo_result.blocked then
+            early_blocked = true
+            early_block_reason = geo_result.reason
+            if expose_headers then
+                ngx.header["X-GeoIP-Country"] = geo_result.geo.country_code or "unknown"
+                ngx.header["X-GeoIP-ASN"] = tostring(geo_result.geo.asn or "unknown")
+            end
+        else
+            early_spam_score = early_spam_score + geo_result.score
+            for _, flag in ipairs(geo_result.flags) do
+                table.insert(early_spam_flags, flag)
+            end
+        end
+        -- Store geo info in context for later use
+        ngx.ctx.geo_info = geo_result.geo
+    end
+
+    -- IP Reputation check (optional feature - gracefully degrades if not configured)
+    -- Checks AbuseIPDB, local blocklist, custom webhooks
+    if ip_reputation.is_available() then
+        local rep_result = ip_reputation.check_ip(client_ip, effective_config)
+        if rep_result.blocked then
+            early_blocked = true
+            early_block_reason = rep_result.reason
+        else
+            early_spam_score = early_spam_score + rep_result.score
+            for _, flag in ipairs(rep_result.flags) do
+                table.insert(early_spam_flags, flag)
+            end
+        end
+        -- Store reputation info for audit logging
+        ngx.ctx.reputation_info = rep_result.details
+    end
+
+    -- Early block for GeoIP/Reputation (before parsing form body)
+    if early_blocked then
+        local should_block = vhost_resolver.should_block(context)
+
+        if should_block then
+            if expose_headers then
+                ngx.header["X-Blocked"] = "true"
+                ngx.header["X-Block-Reason"] = early_block_reason
+            end
+
+            ngx.log(ngx.WARN, string.format(
+                "BLOCKED_EARLY: ip=%s host=%s path=%s vhost=%s endpoint=%s reason=%s",
+                client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
+                early_block_reason
+            ))
+
+            audit_log("request_blocked_early", {
+                vhost_id = summary.vhost_id,
+                endpoint_id = summary.endpoint_id,
+                reason = early_block_reason,
+                geo_info = ngx.ctx.geo_info,
+                reputation_info = ngx.ctx.reputation_info,
+            })
+
+            metrics.record_request(summary.vhost_id, summary.endpoint_id, "blocked", 0)
+
+            ngx.status = ngx.HTTP_FORBIDDEN
+            ngx.header["Content-Type"] = "application/json"
+            local error_response = { error = "Request blocked" }
+            if expose_headers then
+                error_response.reason = early_block_reason
+            end
+            ngx.say(cjson.encode(error_response))
+            return ngx.exit(ngx.HTTP_FORBIDDEN)
+        else
+            -- Monitoring mode - log but don't block
+            if expose_headers then
+                ngx.header["X-WAF-Would-Block"] = "true"
+                ngx.header["X-WAF-Block-Reason"] = early_block_reason
+            end
+            ngx.log(ngx.WARN, string.format(
+                "MONITORING (would block early): ip=%s host=%s path=%s vhost=%s endpoint=%s reason=%s",
+                client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
+                early_block_reason
+            ))
+        end
+    end
+
     -- Parse form data
     local form_data, err = form_parser.parse()
     if err then
@@ -176,14 +500,69 @@ function _M.process_request()
         return ngx.exit(ngx.HTTP_BAD_REQUEST)
     end
 
-    -- Initialize response tracking
-    local spam_score = 0
-    local spam_flags = {}
+    -- Initialize response tracking (include early scores from GeoIP/reputation)
+    local spam_score = early_spam_score or 0
+    local spam_flags = early_spam_flags or {}
     local blocked = false
     local block_reason = nil
 
     -- Get thresholds from context
     local thresholds = vhost_resolver.get_thresholds(context)
+
+    -- Get security settings
+    local security = vhost_resolver.get_security_settings(context)
+
+    -- Step 0a: Timing token validation
+    -- Check if submission has valid timing (not too fast, has cookie)
+    if timing_token.is_enabled() then
+        local timing_result = timing_token.validate_token(context)
+        if timing_result.score > 0 then
+            spam_score = spam_score + timing_result.score
+            if timing_result.flag then
+                table.insert(spam_flags, timing_result.flag)
+            end
+            ngx.log(ngx.INFO, string.format(
+                "TIMING_CHECK: ip=%s reason=%s score=%d elapsed=%s",
+                client_ip, timing_result.reason, timing_result.score,
+                timing_result.elapsed and string.format("%.2fs", timing_result.elapsed) or "n/a"
+            ))
+        end
+        -- Strip timing cookie before forwarding to backend
+        timing_token.strip_cookie()
+    end
+
+    -- Step 0b: Honeypot field detection
+    -- Check if any configured honeypot fields have values (bots fill hidden fields)
+    local honeypot_fields = vhost_resolver.get_honeypot_fields(context)
+    if #honeypot_fields > 0 then
+        for _, hp_field in ipairs(honeypot_fields) do
+            local hp_value = form_data[hp_field] or form_data[hp_field:lower()]
+            if hp_value and hp_value ~= "" then
+                -- Honeypot triggered!
+                table.insert(spam_flags, "honeypot:" .. hp_field)
+                if security.honeypot_action == "block" then
+                    blocked = true
+                    block_reason = "honeypot_triggered"
+                    ngx.log(ngx.WARN, string.format(
+                        "HONEYPOT: ip=%s host=%s path=%s field=%s value=%s",
+                        client_ip, host, path, hp_field, tostring(hp_value):sub(1, 50)
+                    ))
+                    -- Structured audit log for honeypot
+                    audit_log("honeypot_triggered", {
+                        vhost_id = summary.vhost_id,
+                        endpoint_id = summary.endpoint_id,
+                        honeypot_field = hp_field,
+                        value_preview = tostring(hp_value):sub(1, 50),
+                    })
+                    -- Send webhook notification for honeypot trigger
+                    webhooks.notify_honeypot(context, hp_field)
+                else
+                    -- Flag mode: add score
+                    spam_score = spam_score + security.honeypot_score
+                end
+            end
+        end
+    end
 
     -- Step 1: Keyword filtering
     local keyword_result = keyword_filter.scan(form_data)
@@ -389,6 +768,54 @@ function _M.process_request()
         end
     end
 
+    -- Step 3b: Disposable email detection
+    if security.check_disposable_email then
+        local disposable_result = keyword_filter.check_disposable_emails(form_data)
+        if disposable_result.found then
+            -- Found disposable email(s)
+            for _, email in ipairs(disposable_result.emails) do
+                table.insert(spam_flags, "disposable:" .. email)
+            end
+
+            if security.disposable_email_action == "block" then
+                blocked = true
+                block_reason = "disposable_email"
+                ngx.log(ngx.WARN, string.format(
+                    "DISPOSABLE_EMAIL: ip=%s host=%s path=%s emails=%s",
+                    client_ip, host, path, table.concat(disposable_result.emails, ",")
+                ))
+                -- Structured audit log for disposable email
+                audit_log("disposable_email_blocked", {
+                    vhost_id = summary.vhost_id,
+                    endpoint_id = summary.endpoint_id,
+                    disposable_emails = disposable_result.emails,
+                    domains = disposable_result.domains,
+                })
+                -- Send webhook notification for disposable email
+                webhooks.notify_disposable_email(context, disposable_result.emails)
+            elseif security.disposable_email_action ~= "ignore" then
+                -- Default: flag (add score)
+                spam_score = spam_score + (security.disposable_email_score * #disposable_result.emails)
+            end
+        end
+    end
+
+    -- Step 3c: Field anomaly detection
+    -- Detects bot-like patterns: same field lengths, sequential data, all caps, test data
+    if security.check_field_anomalies ~= false then  -- Enabled by default
+        local anomaly_result = detect_field_anomalies(form_data, security)
+        if anomaly_result.score > 0 then
+            spam_score = spam_score + anomaly_result.score
+            for _, flag in ipairs(anomaly_result.flags) do
+                table.insert(spam_flags, "anomaly:" .. flag)
+            end
+        end
+    end
+
+    -- Step 3d: Generate submission fingerprint
+    -- Fingerprint is based on form structure (not content) for detecting coordinated campaigns
+    local submission_fingerprint = generate_submission_fingerprint(form_data, ngx.var)
+
     -- Step 4: Check spam score threshold
     local block_threshold = vhost_resolver.get_block_threshold(context)
     if spam_score >= block_threshold then
@@ -404,6 +831,9 @@ function _M.process_request()
     ngx.req.set_header("X-Spam-Score", tostring(spam_score))
     ngx.req.set_header("X-Spam-Flags", table.concat(spam_flags, ","))
     ngx.req.set_header("X-Client-IP", client_ip)
+    if submission_fingerprint then
+        ngx.req.set_header("X-Submission-Fingerprint", submission_fingerprint)
+    end
 
     -- Set response headers for debugging (only if expose_waf_headers is enabled)
     if expose_headers then
@@ -413,6 +843,9 @@ function _M.process_request()
         ngx.header["X-Spam-Score"] = tostring(spam_score)
         ngx.header["X-Spam-Flags"] = table.concat(spam_flags, ",")
         ngx.header["X-Client-IP"] = client_ip
+        if submission_fingerprint then
+            ngx.header["X-Submission-Fingerprint"] = submission_fingerprint
+        end
     end
 
     -- Determine if we should actually block
@@ -457,6 +890,10 @@ function _M.process_request()
                     block_reason, spam_score
                 ))
                 metrics.record_request(summary.vhost_id, summary.endpoint_id, "captcha_challenged", spam_score)
+
+                -- Send webhook notification for CAPTCHA challenge (async, non-blocking)
+                webhooks.notify_captcha_triggered(context, block_reason)
+
                 return captcha_handler.serve_challenge(context, form_data, block_reason, client_ip)
             end
         else
@@ -473,8 +910,22 @@ function _M.process_request()
                 block_reason, spam_score, form_hash, table.concat(spam_flags, ",")
             ))
 
+            -- Structured audit log
+            audit_log("request_blocked", {
+                vhost_id = summary.vhost_id,
+                endpoint_id = summary.endpoint_id,
+                reason = block_reason,
+                spam_score = spam_score,
+                form_hash = form_hash,
+                spam_flags = spam_flags,
+                fingerprint = submission_fingerprint,
+            })
+
             -- Record blocked request in metrics
             metrics.record_request(summary.vhost_id, summary.endpoint_id, "blocked", spam_score)
+
+            -- Send webhook notification (async, non-blocking)
+            webhooks.notify_blocked(context, block_reason, spam_score, spam_flags)
 
             -- Return 403 with JSON error (minimal info to client)
             ngx.status = ngx.HTTP_FORBIDDEN

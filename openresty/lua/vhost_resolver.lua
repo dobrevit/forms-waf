@@ -329,10 +329,10 @@ end
 -- Check if request should be blocked (vs monitored)
 function _M.should_block(context)
     if not context or not context.endpoint then
-        -- No endpoint config, use vhost default
-        if context and context.vhost then
-            return context.vhost.waf.default_mode == "blocking" or
-                   context.vhost.waf.default_mode == "strict"
+        -- No endpoint config, use vhost default mode
+        if context and context.vhost and context.vhost.waf then
+            local mode = context.vhost.waf.mode or context.vhost.waf.default_mode or "blocking"
+            return mode == "blocking" or mode == "strict"
         end
         return true  -- Default: blocking
     end
@@ -570,6 +570,45 @@ function _M.get_unexpected_fields_action(context)
         end
     end
     return "flag"  -- Default: flag but don't block
+end
+
+-- Get honeypot fields for the endpoint
+-- Returns: array of honeypot field names, or empty array if not configured
+function _M.get_honeypot_fields(context)
+    if context and context.endpoint and context.endpoint.fields then
+        local fields_config = context.endpoint.fields
+        if fields_config.honeypot and type(fields_config.honeypot) == "table" then
+            return fields_config.honeypot
+        end
+    end
+    return {}
+end
+
+-- Get security settings for the endpoint
+-- Returns: table with security options
+function _M.get_security_settings(context)
+    local defaults = {
+        check_disposable_email = false,
+        disposable_email_action = "flag",  -- "flag", "block", "ignore"
+        disposable_email_score = 20,
+        honeypot_action = "block",  -- "flag", "block"
+        honeypot_score = 50,
+        check_field_anomalies = true,  -- Enabled by default
+    }
+
+    if context and context.endpoint and context.endpoint.security then
+        local sec = context.endpoint.security
+        return {
+            check_disposable_email = sec.check_disposable_email or defaults.check_disposable_email,
+            disposable_email_action = sec.disposable_email_action or defaults.disposable_email_action,
+            disposable_email_score = sec.disposable_email_score or defaults.disposable_email_score,
+            honeypot_action = sec.honeypot_action or defaults.honeypot_action,
+            honeypot_score = sec.honeypot_score or defaults.honeypot_score,
+            check_field_anomalies = sec.check_field_anomalies ~= false,  -- Enabled unless explicitly disabled
+        }
+    end
+
+    return defaults
 end
 
 -- Validate form fields

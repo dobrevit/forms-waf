@@ -812,6 +812,22 @@ local function sync_captcha(red)
     sync_captcha_providers(red)
 end
 
+-- Sync webhook configuration
+local function sync_webhooks(red)
+    local config_str = red:get("waf:webhooks:config")
+
+    if config_str and config_str ~= ngx.null then
+        local ok, webhooks = pcall(require, "webhooks")
+        if ok and webhooks then
+            local config = cjson.decode(config_str)
+            if config then
+                webhooks.update_config(config)
+                ngx.log(ngx.DEBUG, "Synced webhook configuration")
+            end
+        end
+    end
+end
+
 -- Main sync function
 local function do_sync()
     local red, err = get_redis_connection()
@@ -836,6 +852,9 @@ local function do_sync()
 
     -- Sync CAPTCHA configuration
     sync_captcha(red)
+
+    -- Sync webhook configuration
+    sync_webhooks(red)
 
     close_redis(red)
 

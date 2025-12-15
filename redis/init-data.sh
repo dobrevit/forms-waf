@@ -151,6 +151,7 @@ HEALTH_ENDPOINT='{
   "mode": "passthrough",
   "matching": {
     "paths": ["/health", "/ready", "/live", "/metrics"],
+    "path_prefix": "/healthz/",
     "methods": ["GET", "HEAD"]
   }
 }'
@@ -169,7 +170,7 @@ CONTACT_ENDPOINT='{
   "enabled": true,
   "mode": "blocking",
   "matching": {
-    "paths": ["/api/contact", "/contact/submit"],
+    "paths": ["/api/contact", "/contact/submit", "/contact"],
     "methods": ["POST"],
     "content_types": ["application/json", "application/x-www-form-urlencoded"]
   },

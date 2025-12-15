@@ -92,7 +92,9 @@ spec:
                         - haproxy
                 topologyKey: kubernetes.io/hostname
 ---
-# Headless service for StatefulSet
+# Headless service for StatefulSet peer discovery
+# publishNotReadyAddresses ensures DNS returns IPs even for unready pods,
+# which is required for HAProxy peer discovery during parallel pod startup
 apiVersion: v1
 kind: Service
 metadata:
@@ -104,6 +106,7 @@ metadata:
 spec:
   type: ClusterIP
   clusterIP: None
+  publishNotReadyAddresses: true
   ports:
     - port: 8080
       targetPort: http

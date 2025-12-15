@@ -59,6 +59,7 @@ data:
         lua_shared_dict vhost_cache 10m;
         lua_shared_dict learning_cache 5m;
         lua_shared_dict waf_metrics 10m;
+        lua_shared_dict waf_timing 1m;
 
         init_worker_by_lua_block {
             local redis_sync = require "redis_sync"
@@ -190,6 +191,7 @@ data:
                 proxy_set_header X-Spam-Score $http_x_spam_score;
                 proxy_set_header X-Spam-Flags $http_x_spam_flags;
                 proxy_set_header X-Client-IP $http_x_client_ip;
+                proxy_set_header X-Submission-Fingerprint $http_x_submission_fingerprint;
                 proxy_set_header X-WAF-Debug $http_x_waf_debug;
                 proxy_set_header X-WAF-Mode $http_x_waf_mode;
                 proxy_set_header X-WAF-Rate-Limit $http_x_waf_rate_limit;

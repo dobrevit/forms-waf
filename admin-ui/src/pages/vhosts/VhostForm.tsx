@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info } from 'lucide-react'
+import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info, Check } from 'lucide-react'
 import type { Vhost } from '@/api/types'
 
 const defaultVhost: Partial<Vhost> = {
@@ -59,6 +59,7 @@ export function VhostForm() {
   const [newBlockedKeyword, setNewBlockedKeyword] = useState('')
   const [newFlaggedKeyword, setNewFlaggedKeyword] = useState('')
   const [newExclusion, setNewExclusion] = useState('')
+  const [shouldNavigate, setShouldNavigate] = useState(true)
 
   const { data, isLoading } = useQuery({
     queryKey: ['vhost', id],
@@ -113,10 +114,18 @@ export function VhostForm() {
   const saveMutation = useMutation({
     mutationFn: (data: Partial<Vhost>) =>
       isNew ? vhostsApi.create(data) : vhostsApi.update(id!, data),
-    onSuccess: () => {
+    onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['vhosts'] })
+      queryClient.invalidateQueries({ queryKey: ['vhost', id] })
       toast({ title: isNew ? 'Virtual host created' : 'Virtual host updated' })
-      navigate('/vhosts')
+      if (shouldNavigate) {
+        navigate('/vhosts')
+      } else {
+        // If this was a new vhost, navigate to the edit page for the newly created one
+        if (isNew && response?.vhost?.id) {
+          navigate(`/vhosts/${response.vhost.id}`, { replace: true })
+        }
+      }
     },
     onError: (error) => {
       toast({
@@ -142,9 +151,7 @@ export function VhostForm() {
     },
   })
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-
+  const getCleanedFormData = () => {
     // Clean up routing config before saving:
     // - Remove haproxy_upstream if empty or matches global (don't persist redundant data)
     // - Remove empty haproxy_backend
@@ -164,8 +171,18 @@ export function VhostForm() {
 
       cleanedFormData.routing = routing
     }
+    return cleanedFormData
+  }
 
-    saveMutation.mutate(cleanedFormData)
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    setShouldNavigate(true)
+    saveMutation.mutate(getCleanedFormData())
+  }
+
+  const handleApply = () => {
+    setShouldNavigate(false)
+    saveMutation.mutate(getCleanedFormData())
   }
 
   const addHostname = () => {
@@ -882,9 +899,18 @@ export function VhostForm() {
           <Button type="button" variant="outline" onClick={() => navigate('/vhosts')}>
             Cancel
           </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleApply}
+            disabled={saveMutation.isPending}
+          >
+            <Check className="mr-2 h-4 w-4" />
+            {saveMutation.isPending && !shouldNavigate ? 'Applying...' : 'Apply'}
+          </Button>
           <Button type="submit" disabled={saveMutation.isPending}>
             <Save className="mr-2 h-4 w-4" />
-            {saveMutation.isPending ? 'Saving...' : 'Save'}
+            {saveMutation.isPending && shouldNavigate ? 'Saving...' : 'Save'}
           </Button>
         </div>
       </form>

@@ -4,6 +4,7 @@
 local _M = {}
 
 local form_parser = require "form_parser"
+local disposable_domains = require "disposable_domains"
 
 -- Shared dictionaries for caching
 local keyword_cache = ngx.shared.keyword_cache
@@ -11,6 +12,28 @@ local hash_cache = ngx.shared.hash_cache
 
 -- Cache TTL in seconds
 local CACHE_TTL = 60
+
+-- URL shortener domains (often used to hide malicious links)
+local URL_SHORTENERS = {
+    ["bit.ly"] = true, ["bitly.com"] = true, ["t.co"] = true,
+    ["goo.gl"] = true, ["tinyurl.com"] = true, ["ow.ly"] = true,
+    ["is.gd"] = true, ["buff.ly"] = true, ["j.mp"] = true,
+    ["adf.ly"] = true, ["bc.vc"] = true, ["s.id"] = true,
+    ["v.gd"] = true, ["rb.gy"] = true, ["cutt.ly"] = true,
+    ["shorturl.at"] = true, ["tiny.cc"] = true, ["lnkd.in"] = true,
+    ["soo.gd"] = true, ["clck.ru"] = true, ["qps.ru"] = true,
+    ["rebrand.ly"] = true, ["bl.ink"] = true, ["short.io"] = true,
+}
+
+-- Suspicious TLDs (often used by spammers)
+local SUSPICIOUS_TLDS = {
+    ["xyz"] = true, ["top"] = true, ["loan"] = true, ["click"] = true,
+    ["link"] = true, ["work"] = true, ["gq"] = true, ["ml"] = true,
+    ["cf"] = true, ["ga"] = true, ["tk"] = true, ["buzz"] = true,
+    ["monster"] = true, ["icu"] = true, ["cam"] = true, ["rest"] = true,
+    ["fit"] = true, ["beauty"] = true, ["hair"] = true, ["skin"] = true,
+    ["makeup"] = true, ["sbs"] = true, ["cyou"] = true, ["cfd"] = true,
+}
 
 -- Default patterns for common spam indicators
 local DEFAULT_PATTERNS = {
@@ -39,6 +62,12 @@ local DEFAULT_PATTERNS = {
     {pattern = "<script", score = 30, flag = "xss_script"},
     {pattern = "javascript:", score = 30, flag = "xss_js"},
     {pattern = "on%w+%s*=", score = 20, flag = "xss_event"},
+
+    -- Data URLs (potential XSS vector)
+    {pattern = "data:[%w/]+;base64,", score = 30, flag = "data_url"},
+
+    -- IP-based URLs (suspicious)
+    {pattern = "https?://%d+%.%d+%.%d+%.%d+", score = 20, flag = "ip_url"},
 }
 
 -- Get blocked keywords from cache
@@ -200,6 +229,114 @@ function _M.pattern_scan(form_data)
     if text_length < 100 and url_count > 0 then
         result.score = result.score + 15
         table.insert(result.flags, "short_with_url")
+    end
+
+    -- Enhanced URL analysis
+    local url_analysis = _M.analyze_urls(combined_text)
+    result.score = result.score + url_analysis.score
+    for _, flag in ipairs(url_analysis.flags) do
+        table.insert(result.flags, flag)
+    end
+
+    return result
+end
+
+-- Enhanced URL analysis: shorteners, suspicious TLDs
+function _M.analyze_urls(text)
+    local result = {
+        score = 0,
+        flags = {},
+        urls = {}
+    }
+
+    if not text then
+        return result
+    end
+
+    -- Extract all URLs
+    for url in text:gmatch("https?://[%w%.%-/_%?&=%%#@!]+") do
+        table.insert(result.urls, url)
+
+        -- Extract domain from URL
+        local domain = url:match("https?://([^/]+)")
+        if domain then
+            domain = domain:lower()
+
+            -- Check for URL shorteners
+            for shortener, _ in pairs(URL_SHORTENERS) do
+                if domain == shortener or domain:match("%." .. shortener:gsub("%.", "%%.") .. "$") then
+                    result.score = result.score + 15
+                    table.insert(result.flags, "url_shortener:" .. shortener)
+                    break
+                end
+            end
+
+            -- Check for suspicious TLDs
+            local tld = domain:match("%.([%w]+)$")
+            if tld and SUSPICIOUS_TLDS[tld] then
+                result.score = result.score + 10
+                table.insert(result.flags, "suspicious_tld:" .. tld)
+            end
+        end
+    end
+
+    return result
+end
+
+-- Check for disposable email domains in form data
+function _M.check_disposable_emails(form_data)
+    local result = {
+        found = false,
+        emails = {},
+        domains = {}
+    }
+
+    if not form_data then
+        return result
+    end
+
+    -- Check common email field names
+    local email_fields = {"email", "e-mail", "mail", "user_email", "contact_email", "email_address"}
+
+    for _, field_name in ipairs(email_fields) do
+        local value = form_data[field_name] or form_data[field_name:lower()]
+        if value and type(value) == "string" then
+            local is_disposable, source = disposable_domains.check_email(value)
+            if is_disposable then
+                result.found = true
+                table.insert(result.emails, value)
+                local domain = disposable_domains.get_domain(value)
+                if domain then
+                    table.insert(result.domains, domain)
+                end
+            end
+        end
+    end
+
+    -- Also scan all text for email patterns and check them
+    local combined_text = form_parser.get_combined_text(form_data)
+    if combined_text then
+        for email in combined_text:gmatch("[%w%.%-_]+@[%w%.%-]+%.[%w]+") do
+            local is_disposable, _ = disposable_domains.check_email(email)
+            if is_disposable then
+                -- Avoid duplicates
+                local already_found = false
+                for _, e in ipairs(result.emails) do
+                    if e:lower() == email:lower() then
+                        already_found = true
+                        break
+                    end
+                end
+                if not already_found then
+                    result.found = true
+                    table.insert(result.emails, email)
+                    local domain = disposable_domains.get_domain(email)
+                    if domain then
+                        table.insert(result.domains, domain)
+                    end
+                end
+            end
+        end
     end
 
     return result

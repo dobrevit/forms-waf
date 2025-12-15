@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowLeft, Save, Plus, X, Globe, Server, Info, BookOpen, Trash2, CheckCircle, Hash, EyeOff, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Save, Plus, X, Globe, Server, Info, BookOpen, Trash2, CheckCircle, Hash, EyeOff, ShieldCheck, ShieldAlert, Bug, Mail, Check } from 'lucide-react'
 import type { Endpoint, Vhost, Thresholds, EndpointCaptchaConfig, CaptchaProvider } from '@/api/types'
 
 const defaultEndpoint: Partial<Endpoint> = {
@@ -43,6 +43,7 @@ const defaultEndpoint: Partial<Endpoint> = {
   rate_limiting: {
     enabled: true,
     requests_per_minute: 30,
+    requests_per_day: 500,
   },
   patterns: {
     inherit_global: true,
@@ -55,6 +56,15 @@ const defaultEndpoint: Partial<Endpoint> = {
   hash_content: {
     enabled: false,  // Disabled by default - user must explicitly enable and specify fields
     fields: [],
+  },
+  security: {
+    honeypot_fields: [],
+    honeypot_action: 'block',
+    honeypot_score: 50,
+    check_disposable_email: false,
+    disposable_email_action: 'flag',
+    disposable_email_score: 20,
+    check_field_anomalies: true,
   },
 }
 
@@ -106,6 +116,8 @@ export function EndpointForm() {
   const [newIgnoreField, setNewIgnoreField] = useState('')
   const [newHashField, setNewHashField] = useState('')
   const [newExpectedField, setNewExpectedField] = useState('')
+  const [newHoneypotField, setNewHoneypotField] = useState('')
+  const [shouldNavigate, setShouldNavigate] = useState(true)
 
   // Fetch vhosts for dropdown
   const { data: vhostsData } = useQuery({
@@ -190,10 +202,18 @@ export function EndpointForm() {
   const saveMutation = useMutation({
     mutationFn: (data: Partial<Endpoint>) =>
       isNew ? endpointsApi.create(data) : endpointsApi.update(id!, data),
-    onSuccess: () => {
+    onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['endpoints'] })
+      queryClient.invalidateQueries({ queryKey: ['endpoint', id] })
       toast({ title: isNew ? 'Endpoint created' : 'Endpoint updated' })
-      navigate('/endpoints')
+      if (shouldNavigate) {
+        navigate('/endpoints')
+      } else {
+        // If this was a new endpoint, navigate to the edit page for the newly created one
+        if (isNew && response?.endpoint?.id) {
+          navigate(`/endpoints/${response.endpoint.id}`, { replace: true })
+        }
+      }
     },
     onError: (error) => {
       toast({
@@ -221,6 +241,12 @@ export function EndpointForm() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    setShouldNavigate(true)
+    saveMutation.mutate(formData)
+  }
+
+  const handleApply = () => {
+    setShouldNavigate(false)
     saveMutation.mutate(formData)
   }
 
@@ -279,6 +305,20 @@ export function EndpointForm() {
         },
       })
       toast({ title: `Added "${fieldName}" to expected fields` })
+    }
+  }
+
+  const addToHoneypotFields = (fieldName: string) => {
+    const honeypotFields = Array.isArray(formData.security?.honeypot_fields) ? formData.security.honeypot_fields : []
+    if (!honeypotFields.includes(fieldName)) {
+      setFormData({
+        ...formData,
+        security: {
+          ...formData.security,
+          honeypot_fields: [...honeypotFields, fieldName],
+        },
+      })
+      toast({ title: `Added "${fieldName}" to honeypot fields` })
     }
   }
 
@@ -379,6 +419,10 @@ export function EndpointForm() {
             <TabsTrigger value="captcha" className="flex items-center gap-1">
               <ShieldCheck className="h-3 w-3" />
               CAPTCHA
+            </TabsTrigger>
+            <TabsTrigger value="security" className="flex items-center gap-1">
+              <ShieldAlert className="h-3 w-3" />
+              Security
             </TabsTrigger>
             {!isNew && (
               <TabsTrigger value="learned-fields" className="flex items-center gap-1">
@@ -1406,47 +1450,6 @@ export function EndpointForm() {
 
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <Label htmlFor="ip_rate_limit">IP Rate Limit (per minute)</Label>
-                      <Input
-                        id="ip_rate_limit"
-                        type="number"
-                        value={formData.thresholds?.ip_rate_limit ?? ''}
-                        placeholder={String(globalThresholds.ip_rate_limit)}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            thresholds: {
-                              ...formData.thresholds,
-                              ip_rate_limit: e.target.value ? parseInt(e.target.value) : undefined,
-                            },
-                          })
-                        }
-                      />
-                      <p className="text-xs text-muted-foreground">Max requests per IP per minute</p>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="ip_daily_limit">IP Daily Limit</Label>
-                      <Input
-                        id="ip_daily_limit"
-                        type="number"
-                        value={formData.thresholds?.ip_daily_limit ?? ''}
-                        placeholder={String(globalThresholds.ip_daily_limit)}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            thresholds: {
-                              ...formData.thresholds,
-                              ip_daily_limit: e.target.value ? parseInt(e.target.value) : undefined,
-                            },
-                          })
-                        }
-                      />
-                      <p className="text-xs text-muted-foreground">Max requests per IP per day</p>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
                       <Label htmlFor="hash_count_block">Hash Count Block</Label>
                       <Input
                         id="hash_count_block"
@@ -1616,28 +1619,54 @@ export function EndpointForm() {
 
                 {formData.rate_limiting?.enabled !== false && (
                   <div className="space-y-4">
-                    <div className="space-y-2 max-w-sm">
-                      <Label htmlFor="requests_per_minute">Requests per Minute</Label>
-                      <Input
-                        id="requests_per_minute"
-                        type="number"
-                        value={formData.rate_limiting?.requests_per_minute ?? 30}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            rate_limiting: {
-                              ...formData.rate_limiting,
-                              enabled: formData.rate_limiting?.enabled !== false,
-                              requests_per_minute: parseInt(e.target.value) || 30,
-                            },
-                          })
-                        }
-                        min={1}
-                        max={1000}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Maximum number of requests allowed per IP address per minute
-                      </p>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="requests_per_minute">Requests per Minute</Label>
+                        <Input
+                          id="requests_per_minute"
+                          type="number"
+                          value={formData.rate_limiting?.requests_per_minute ?? 30}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              rate_limiting: {
+                                ...formData.rate_limiting,
+                                enabled: formData.rate_limiting?.enabled !== false,
+                                requests_per_minute: parseInt(e.target.value) || 30,
+                              },
+                            })
+                          }
+                          min={1}
+                          max={1000}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Maximum requests allowed per IP per minute
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="requests_per_day">Requests per Day</Label>
+                        <Input
+                          id="requests_per_day"
+                          type="number"
+                          value={formData.rate_limiting?.requests_per_day ?? 500}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              rate_limiting: {
+                                ...formData.rate_limiting,
+                                enabled: formData.rate_limiting?.enabled !== false,
+                                requests_per_day: parseInt(e.target.value) || 500,
+                              },
+                            })
+                          }
+                          min={1}
+                          max={100000}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Maximum requests allowed per IP per day
+                        </p>
+                      </div>
                     </div>
 
                     <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4">
@@ -1646,8 +1675,8 @@ export function EndpointForm() {
                         <div>
                           <p className="font-medium text-yellow-800">Rate Limiting Behavior</p>
                           <p className="text-sm text-yellow-700 mt-1">
-                            When rate limit is exceeded, requests will be rejected with a 429 Too Many Requests response.
-                            The limit is tracked per IP address and resets every minute.
+                            When rate limits are exceeded, requests will be rejected with a 429 Too Many Requests response.
+                            Limits are tracked per IP address. The minute limit resets every minute, while the daily limit resets at midnight UTC.
                           </p>
                         </div>
                       </div>
@@ -1863,6 +1892,341 @@ export function EndpointForm() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="security">
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Bug className="h-5 w-5" />
+                    Honeypot Fields
+                  </CardTitle>
+                  <CardDescription>
+                    Hidden fields that only bots fill out. If any honeypot field contains data, the submission is flagged or blocked.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <Info className="h-5 w-5 text-blue-500 mt-0.5" />
+                      <div>
+                        <p className="font-medium text-blue-800">How Honeypots Work</p>
+                        <p className="text-sm text-blue-700 mt-1">
+                          Add hidden form fields (via CSS display:none) to your forms. Legitimate users won't see or fill them,
+                          but automated bots often fill all fields. When a honeypot contains data, it's a strong indicator of automation.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <Label>Honeypot Field Names</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={newHoneypotField}
+                        onChange={(e) => setNewHoneypotField(e.target.value)}
+                        placeholder="Field name (e.g., website, hp_email)"
+                        className="flex-1"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && newHoneypotField) {
+                            e.preventDefault()
+                            const honeypotFields = Array.isArray((formData as any).security?.honeypot_fields)
+                              ? (formData as any).security.honeypot_fields
+                              : []
+                            if (!honeypotFields.includes(newHoneypotField)) {
+                              setFormData({
+                                ...formData,
+                                security: {
+                                  ...(formData as any).security,
+                                  honeypot_fields: [...honeypotFields, newHoneypotField],
+                                },
+                              } as any)
+                            }
+                            setNewHoneypotField('')
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          if (newHoneypotField) {
+                            const honeypotFields = Array.isArray((formData as any).security?.honeypot_fields)
+                              ? (formData as any).security.honeypot_fields
+                              : []
+                            if (!honeypotFields.includes(newHoneypotField)) {
+                              setFormData({
+                                ...formData,
+                                security: {
+                                  ...(formData as any).security,
+                                  honeypot_fields: [...honeypotFields, newHoneypotField],
+                                },
+                              } as any)
+                            }
+                            setNewHoneypotField('')
+                          }
+                        }}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    {(() => {
+                      const honeypotFields = Array.isArray((formData as any).security?.honeypot_fields)
+                        ? (formData as any).security.honeypot_fields
+                        : []
+                      return honeypotFields.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {honeypotFields.map((field: string) => (
+                            <div
+                              key={field}
+                              className="flex items-center gap-1 rounded-md bg-yellow-100 px-2 py-1 text-sm text-yellow-800"
+                            >
+                              <Bug className="h-3 w-3" />
+                              <code>{field}</code>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setFormData({
+                                    ...formData,
+                                    security: {
+                                      ...(formData as any).security,
+                                      honeypot_fields: honeypotFields.filter((f: string) => f !== field),
+                                    },
+                                  } as any)
+                                }
+                                className="ml-1 hover:text-red-600"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground italic">
+                          No honeypot fields configured
+                        </p>
+                      )
+                    })()}
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Action on Honeypot Trigger</Label>
+                      <Select
+                        value={(formData as any).security?.honeypot_action || 'block'}
+                        onValueChange={(value) =>
+                          setFormData({
+                            ...formData,
+                            security: {
+                              ...(formData as any).security,
+                              honeypot_action: value,
+                            },
+                          } as any)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="block">Block immediately</SelectItem>
+                          <SelectItem value="flag">Flag (add to spam score)</SelectItem>
+                          <SelectItem value="ignore">Ignore</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {(formData as any).security?.honeypot_action === 'flag' && (
+                      <div className="space-y-2">
+                        <Label>Honeypot Score Penalty</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={(formData as any).security?.honeypot_score || 50}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              security: {
+                                ...(formData as any).security,
+                                honeypot_score: parseInt(e.target.value) || 50,
+                              },
+                            } as any)
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Points added to spam score when honeypot is filled
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Mail className="h-5 w-5" />
+                    Disposable Email Detection
+                  </CardTitle>
+                  <CardDescription>
+                    Detect and handle submissions from temporary/disposable email addresses
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="check_disposable"
+                      checked={(formData as any).security?.check_disposable_email === true}
+                      onCheckedChange={(checked) =>
+                        setFormData({
+                          ...formData,
+                          security: {
+                            ...(formData as any).security,
+                            check_disposable_email: checked,
+                          },
+                        } as any)
+                      }
+                    />
+                    <Label htmlFor="check_disposable">Enable Disposable Email Detection</Label>
+                  </div>
+
+                  {(formData as any).security?.check_disposable_email && (
+                    <div className="space-y-4 pl-6 border-l-2 border-orange-200">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>Action</Label>
+                          <Select
+                            value={(formData as any).security?.disposable_email_action || 'flag'}
+                            onValueChange={(value) =>
+                              setFormData({
+                                ...formData,
+                                security: {
+                                  ...(formData as any).security,
+                                  disposable_email_action: value,
+                                },
+                              } as any)
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="block">Block submission</SelectItem>
+                              <SelectItem value="flag">Flag (add to spam score)</SelectItem>
+                              <SelectItem value="ignore">Ignore</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {(formData as any).security?.disposable_email_action === 'flag' && (
+                          <div className="space-y-2">
+                            <Label>Score Penalty</Label>
+                            <Input
+                              type="number"
+                              min="1"
+                              max="100"
+                              value={(formData as any).security?.disposable_email_score || 20}
+                              onChange={(e) =>
+                                setFormData({
+                                  ...formData,
+                                  security: {
+                                    ...(formData as any).security,
+                                    disposable_email_score: parseInt(e.target.value) || 20,
+                                  },
+                                } as any)
+                              }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Points added per disposable email found
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-lg border border-orange-200 bg-orange-50 p-4">
+                        <div className="flex items-start gap-3">
+                          <Info className="h-5 w-5 text-orange-500 mt-0.5" />
+                          <div>
+                            <p className="font-medium text-orange-800">Built-in Domain List</p>
+                            <p className="text-sm text-orange-700 mt-1">
+                              The WAF includes a list of ~250 known disposable email domains (mailinator.com,
+                              guerrillamail.com, 10minutemail.com, etc.). This list is checked against email
+                              fields and any text containing email-like patterns.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldAlert className="h-5 w-5" />
+                    Behavioral Anomaly Detection
+                  </CardTitle>
+                  <CardDescription>
+                    Detect suspicious patterns that indicate automated submissions
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="check_anomalies"
+                      checked={(formData as any).security?.check_field_anomalies !== false}
+                      onCheckedChange={(checked) =>
+                        setFormData({
+                          ...formData,
+                          security: {
+                            ...(formData as any).security,
+                            check_field_anomalies: checked,
+                          },
+                        } as any)
+                      }
+                    />
+                    <Label htmlFor="check_anomalies">Enable Field Anomaly Detection</Label>
+                  </div>
+
+                  <div className="rounded-lg border border-purple-200 bg-purple-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <Info className="h-5 w-5 text-purple-500 mt-0.5" />
+                      <div>
+                        <p className="font-medium text-purple-800">Detected Anomalies</p>
+                        <ul className="text-sm text-purple-700 mt-2 space-y-1">
+                          <li><strong>Same Length Fields (+15):</strong> Multiple fields with identical character counts</li>
+                          <li><strong>Sequential Data (+10):</strong> Incremental or repeating patterns (abc123, 111-222-333)</li>
+                          <li><strong>All Caps (+10):</strong> Multiple fields in ALL UPPERCASE</li>
+                          <li><strong>Test Data (+20):</strong> Common test values (test, asdf, lorem ipsum, foo bar)</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <Info className="h-5 w-5 text-blue-500 mt-0.5" />
+                      <div>
+                        <p className="font-medium text-blue-800">Client Fingerprinting</p>
+                        <p className="text-sm text-blue-700 mt-1">
+                          Each submission generates a client fingerprint based on browser characteristics
+                          (User-Agent, Accept-Language, Accept-Encoding) and form field names—<strong>not</strong> the
+                          actual values submitted. This identifies the <em>client</em>, not the content.
+                        </p>
+                        <p className="text-sm text-blue-700 mt-2">
+                          <strong>Bot detection:</strong> A single client (same fingerprint) submitting many different
+                          form hashes indicates automated behavior—legitimate users typically submit the same form
+                          with similar content, while bots vary their payloads.
+                        </p>
+                        <p className="text-sm text-blue-700 mt-2">
+                          High-frequency fingerprints (20+/minute) trigger rate limiting at the HAProxy layer.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+
           {!isNew && (
             <TabsContent value="learned-fields">
               <Card>
@@ -1951,17 +2315,19 @@ export function EndpointForm() {
                               const hashFields = Array.isArray(formData.hash_content?.fields) ? formData.hash_content.fields : []
                               const ignoreFields = Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []
                               const expectedFields = Array.isArray(formData.fields?.expected) ? formData.fields.expected : []
+                              const honeypotFields = Array.isArray(formData.security?.honeypot_fields) ? formData.security.honeypot_fields : []
 
                               const isRequired = required.includes(field.name)
                               const isHashed = hashFields.includes(field.name)
                               const isIgnored = ignoreFields.includes(field.name)
                               const isExpected = expectedFields.includes(field.name)
+                              const isHoneypot = honeypotFields.includes(field.name)
 
                               return (
                                 <tr key={field.name} className="hover:bg-muted/30">
                                   <td className="px-4 py-3">
                                     <code className="text-sm bg-muted px-1.5 py-0.5 rounded">{field.name}</code>
-                                    <div className="flex gap-1 mt-1">
+                                    <div className="flex flex-wrap gap-1 mt-1">
                                       {isRequired && (
                                         <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Required</span>
                                       )}
@@ -1970,6 +2336,9 @@ export function EndpointForm() {
                                       )}
                                       {isExpected && (
                                         <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Expected</span>
+                                      )}
+                                      {isHoneypot && (
+                                        <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded">Honeypot</span>
                                       )}
                                       {isIgnored && (
                                         <span className="text-xs bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded">Ignored</span>
@@ -2021,6 +2390,17 @@ export function EndpointForm() {
                                         className={isExpected ? 'text-amber-600' : ''}
                                       >
                                         <ShieldCheck className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => addToHoneypotFields(field.name)}
+                                        disabled={isHoneypot}
+                                        title="Add to Honeypot Fields"
+                                        className={isHoneypot ? 'text-red-600' : ''}
+                                      >
+                                        <Bug className="h-4 w-4" />
                                       </Button>
                                       <Button
                                         type="button"
@@ -2088,8 +2468,15 @@ export function EndpointForm() {
                             <p className="text-sm text-yellow-700 mt-1">
                               Field names are automatically discovered using 10% probabilistic sampling to minimize
                               performance impact. Types are inferred from field names only (no values stored for compliance).
-                              Data is retained for 30 days of inactivity. Click the icons to add fields to your configuration.
+                              Data is retained for 30 days of inactivity. Use the action buttons to configure fields:
                             </p>
+                            <ul className="text-sm text-yellow-700 mt-2 space-y-1 list-disc list-inside">
+                              <li><strong>Required</strong> - Field must be present in submissions</li>
+                              <li><strong>Hash</strong> - Include field in content hash for duplicate detection</li>
+                              <li><strong>Expected</strong> - Validate that only expected fields are submitted</li>
+                              <li><strong>Honeypot</strong> - Mark as trap field (should be empty, bots fill it)</li>
+                              <li><strong>Ignored</strong> - Exclude from spam analysis</li>
+                            </ul>
                           </div>
                         </div>
                       </div>
@@ -2105,9 +2492,18 @@ export function EndpointForm() {
           <Button type="button" variant="outline" onClick={() => navigate('/endpoints')}>
             Cancel
           </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleApply}
+            disabled={saveMutation.isPending}
+          >
+            <Check className="mr-2 h-4 w-4" />
+            {saveMutation.isPending && !shouldNavigate ? 'Applying...' : 'Apply'}
+          </Button>
           <Button type="submit" disabled={saveMutation.isPending}>
             <Save className="mr-2 h-4 w-4" />
-            {saveMutation.isPending ? 'Saving...' : 'Save'}
+            {saveMutation.isPending && shouldNavigate ? 'Saving...' : 'Save'}
           </Button>
         </div>
       </form>

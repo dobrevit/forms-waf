@@ -308,6 +308,264 @@ export interface CaptchaProviderTestResult {
   message: string
 }
 
+// Webhooks API - Notification management
+export interface WebhookConfig {
+  enabled: boolean
+  url?: string
+  urls?: string[]
+  events: string[]
+  batch_size: number
+  batch_interval: number
+  headers?: Record<string, string>
+  ssl_verify?: boolean
+}
+
+export interface WebhookStats {
+  queue_size: number
+  last_flush: number
+  max_queue_size: number
+}
+
+export const webhooksApi = {
+  getConfig: () =>
+    request<{ config: WebhookConfig; defaults: WebhookConfig }>('/webhooks/config'),
+
+  updateConfig: (data: Partial<WebhookConfig>) =>
+    request<{ updated: boolean; config: WebhookConfig }>('/webhooks/config', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  test: () =>
+    request<{ success: boolean; message: string; response_code?: number }>('/webhooks/test', {
+      method: 'POST',
+    }),
+
+  getStats: () =>
+    request<{ stats: WebhookStats }>('/webhooks/stats'),
+}
+
+// Bulk Operations API - Import/Export
+export interface BulkExportData {
+  keywords?: string[]
+  ips?: string[]
+  hashes?: string[]
+  exported_at?: string
+}
+
+export const bulkApi = {
+  // Export
+  exportKeywords: () =>
+    request<{ keywords: string[]; count: number }>('/bulk/export/keywords'),
+
+  exportIps: () =>
+    request<{ ips: string[]; count: number }>('/bulk/export/ips'),
+
+  exportHashes: () =>
+    request<{ hashes: string[]; count: number }>('/bulk/export/hashes'),
+
+  exportAll: () =>
+    request<BulkExportData>('/bulk/export/all'),
+
+  // Import
+  importKeywords: (keywords: string[], merge: boolean = true) =>
+    request<{ imported: number; skipped: number; total: number }>('/bulk/import/keywords', {
+      method: 'POST',
+      body: JSON.stringify({ keywords, merge }),
+    }),
+
+  importIps: (ips: string[], merge: boolean = true) =>
+    request<{ imported: number; skipped: number; invalid: number; total: number }>('/bulk/import/ips', {
+      method: 'POST',
+      body: JSON.stringify({ ips, merge }),
+    }),
+
+  importHashes: (hashes: string[], merge: boolean = true) =>
+    request<{ imported: number; skipped: number; invalid: number; total: number }>('/bulk/import/hashes', {
+      method: 'POST',
+      body: JSON.stringify({ hashes, merge }),
+    }),
+
+  // Clear
+  clearKeywords: (confirm: boolean = false) =>
+    request<{ cleared: boolean; count: number }>(`/bulk/clear/keywords?confirm=${confirm}`, {
+      method: 'DELETE',
+    }),
+}
+
+// GeoIP API
+export interface GeoIPStatus {
+  enabled: boolean
+  mmdb_available: boolean
+  country_db_loaded: boolean
+  asn_db_loaded: boolean
+  country_db_path: string
+  asn_db_path: string
+  datacenter_asns_count: number
+}
+
+export interface GeoIPConfig {
+  enabled: boolean
+  country_db_path?: string
+  asn_db_path?: string
+  default_action?: 'allow' | 'block' | 'flag'
+  blocked_countries?: string[]
+  allowed_countries?: string[]
+  flagged_countries?: string[]
+  flagged_country_score?: number
+  blocked_asns?: number[]
+  flagged_asns?: number[]
+  flagged_asn_score?: number
+  block_datacenters?: boolean
+  flag_datacenters?: boolean
+  datacenter_score?: number
+}
+
+export interface GeoIPLookupResult {
+  ip: string
+  country?: { country_code: string; country_name: string } | null
+  asn?: { asn: number; org: string } | null
+  is_datacenter: boolean
+  datacenter_provider?: string | null
+}
+
+export const geoipApi = {
+  getStatus: () =>
+    request<GeoIPStatus>('/geoip/status'),
+
+  getConfig: () =>
+    request<GeoIPConfig>('/geoip/config'),
+
+  updateConfig: (data: Partial<GeoIPConfig>) =>
+    request<{ success: boolean; config: GeoIPConfig }>('/geoip/config', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  reload: () =>
+    request<{ success: boolean; status: GeoIPStatus }>('/geoip/reload', {
+      method: 'POST',
+    }),
+
+  lookup: (ip: string) =>
+    request<GeoIPLookupResult | { available: false; message: string }>(`/geoip/lookup?ip=${encodeURIComponent(ip)}`),
+}
+
+// IP Reputation API
+export interface IPReputationStatus {
+  enabled: boolean
+  providers: {
+    local_blocklist: boolean
+    abuseipdb: boolean
+    webhook: boolean
+  }
+  blocklist_count: number
+  block_score: number
+  flag_score: number
+}
+
+export interface IPReputationConfig {
+  enabled: boolean
+  cache_ttl?: number
+  cache_negative_ttl?: number
+  abuseipdb?: {
+    enabled: boolean
+    api_key?: string
+    min_confidence?: number
+    max_age_days?: number
+    score_multiplier?: number
+  }
+  local_blocklist?: {
+    enabled: boolean
+    redis_key?: string
+  }
+  webhook?: {
+    enabled: boolean
+    url?: string
+    timeout?: number
+    headers?: Record<string, string>
+  }
+  block_score?: number
+  flag_score?: number
+  flag_score_addition?: number
+}
+
+export interface IPReputationCheckResult {
+  ip: string
+  result: {
+    score: number
+    blocked: boolean
+    reason?: string
+    flags: string[]
+    details?: Record<string, unknown>
+  }
+}
+
+export const reputationApi = {
+  getStatus: () =>
+    request<IPReputationStatus>('/reputation/status'),
+
+  getConfig: () =>
+    request<IPReputationConfig>('/reputation/config'),
+
+  updateConfig: (data: Partial<IPReputationConfig>) =>
+    request<{ success: boolean; config: IPReputationConfig }>('/reputation/config', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  checkIP: (ip: string) =>
+    request<IPReputationCheckResult | { available: false; message: string }>(`/reputation/check?ip=${encodeURIComponent(ip)}`),
+
+  getBlocklist: () =>
+    request<{ blocked_ips: string[] }>('/reputation/blocklist'),
+
+  addToBlocklist: (ip: string, reason?: string) =>
+    request<{ success: boolean; ip: string; reason?: string }>('/reputation/blocklist', {
+      method: 'POST',
+      body: JSON.stringify({ ip, reason }),
+    }),
+
+  removeFromBlocklist: (ip: string) =>
+    request<{ success: boolean; ip: string }>('/reputation/blocklist', {
+      method: 'DELETE',
+      body: JSON.stringify({ ip }),
+    }),
+
+  clearCache: (ip: string) =>
+    request<{ success: boolean; ip: string; message: string }>('/reputation/cache', {
+      method: 'DELETE',
+      body: JSON.stringify({ ip }),
+    }),
+}
+
+// Timing Token API
+export interface TimingTokenConfig {
+  enabled: boolean
+  cookie_name?: string
+  cookie_ttl?: number
+  encryption_key?: string
+  min_time_seconds?: number
+  suspicious_time_seconds?: number
+  no_cookie_score?: number
+  too_fast_score?: number
+  suspicious_score?: number
+}
+
+export const timingApi = {
+  getStatus: () =>
+    request<{ enabled: boolean; config: TimingTokenConfig }>('/timing/status'),
+
+  getConfig: () =>
+    request<TimingTokenConfig>('/timing/config'),
+
+  updateConfig: (data: Partial<TimingTokenConfig>) =>
+    request<{ success: boolean; config: TimingTokenConfig }>('/timing/config', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+}
+
 export const captchaApi = {
   // Provider CRUD
   listProviders: () =>

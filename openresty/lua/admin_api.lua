@@ -607,6 +607,14 @@ local CAPTCHA_KEYS = {
     trust_prefix = "waf:captcha:trust:",
 }
 
+-- Generic Redis keys for keywords, IPs, and hashes (used by bulk operations)
+local KEYS = {
+    blocked_keywords = "waf:keywords:blocked",
+    flagged_keywords = "waf:keywords:flagged",
+    allowed_ips = "waf:whitelist:ips",
+    blocked_hashes = "waf:hashes:blocked",
+}
+
 -- Helper: Get endpoint keys based on vhost scope
 -- Returns global keys if vhost_id is nil/empty/ngx.null, vhost-specific keys otherwise
 local function get_endpoint_keys_for_vhost(vhost_id)
@@ -2143,6 +2151,808 @@ handlers["PUT:/captcha/config"] = function()
     redis_sync.sync_now()
 
     return json_response({updated = true, fields = updated})
+end
+
+-------------------------------------------------------------------------------
+-- Webhook Management Endpoints
+-------------------------------------------------------------------------------
+
+local WEBHOOK_KEYS = {
+    config = "waf:webhooks:config",
+}
+
+-- GET /api/webhooks/config - Get webhook configuration
+handlers["GET:/webhooks/config"] = function()
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    local config_str = red:get(WEBHOOK_KEYS.config)
+    close_redis(red)
+
+    local config = {}
+    if config_str and config_str ~= ngx.null then
+        config = cjson.decode(config_str) or {}
+    end
+
+    -- Set defaults
+    config.enabled = config.enabled or false
+    config.url = config.url or ""
+    config.urls = config.urls or {}
+    config.events = config.events or {}
+    config.batch_size = config.batch_size or 10
+    config.batch_interval = config.batch_interval or 60
+    config.headers = config.headers or {}
+    config.ssl_verify = config.ssl_verify ~= false
+
+    return json_response(config)
+end
+
+-- PUT /api/webhooks/config - Update webhook configuration
+handlers["PUT:/webhooks/config"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data, decode_err = cjson.decode(body)
+
+    if not data then
+        return error_response("Invalid JSON: " .. (decode_err or "unknown error"))
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    -- Validate URL if provided
+    if data.url and data.url ~= "" then
+        if not data.url:match("^https?://") then
+            close_redis(red)
+            return error_response("Invalid URL format - must start with http:// or https://")
+        end
+    end
+
+    -- Validate URLs array if provided
+    if data.urls and type(data.urls) == "table" then
+        for i, url in ipairs(data.urls) do
+            if not url:match("^https?://") then
+                close_redis(red)
+                return error_response("Invalid URL at index " .. i .. " - must start with http:// or https://")
+            end
+        end
+    end
+
+    -- Validate events if provided
+    local valid_events = {
+        request_blocked = true,
+        rate_limit_triggered = true,
+        high_spam_score = true,
+        captcha_triggered = true,
+        honeypot_triggered = true,
+        disposable_email = true,
+        fingerprint_flood = true,
+        ["*"] = true,
+    }
+
+    if data.events and type(data.events) == "table" then
+        for _, event in ipairs(data.events) do
+            if not valid_events[event] then
+                close_redis(red)
+                return error_response("Invalid event type: " .. event)
+            end
+        end
+    end
+
+    -- Build config object
+    local config = {
+        enabled = data.enabled == true,
+        url = data.url or "",
+        urls = data.urls or {},
+        events = data.events or {},
+        batch_size = tonumber(data.batch_size) or 10,
+        batch_interval = tonumber(data.batch_interval) or 60,
+        headers = data.headers or {},
+        ssl_verify = data.ssl_verify ~= false,
+    }
+
+    -- Save to Redis
+    local ok, save_err = red:set(WEBHOOK_KEYS.config, cjson.encode(config))
+    close_redis(red)
+
+    if not ok then
+        return error_response("Failed to save config: " .. (save_err or "unknown"))
+    end
+
+    -- Update local webhook module cache
+    local webhooks = require "webhooks"
+    webhooks.update_config(config)
+
+    -- Trigger sync
+    redis_sync.sync_now()
+
+    return json_response({updated = true, config = config})
+end
+
+-- POST /api/webhooks/test - Test webhook endpoint
+handlers["POST:/webhooks/test"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data, decode_err = cjson.decode(body)
+
+    if not data then
+        return error_response("Invalid JSON: " .. (decode_err or "unknown error"))
+    end
+
+    local url = data.url
+    if not url or url == "" then
+        return error_response("URL is required")
+    end
+
+    if not url:match("^https?://") then
+        return error_response("Invalid URL format - must start with http:// or https://")
+    end
+
+    -- Send test webhook
+    local httpc = require("resty.http").new()
+    httpc:set_timeout(5000)
+
+    local test_payload = {
+        source = "forms-waf",
+        type = "test",
+        timestamp = ngx.time(),
+        message = "This is a test webhook from Forms WAF",
+    }
+
+    local headers = {
+        ["Content-Type"] = "application/json",
+        ["User-Agent"] = "FormsWAF-Webhook/1.0",
+    }
+
+    -- Add custom headers from request
+    if data.headers and type(data.headers) == "table" then
+        for k, v in pairs(data.headers) do
+            headers[k] = v
+        end
+    end
+
+    local res, req_err = httpc:request_uri(url, {
+        method = "POST",
+        body = cjson.encode(test_payload),
+        headers = headers,
+        ssl_verify = data.ssl_verify ~= false,
+    })
+
+    if not res then
+        return json_response({
+            success = false,
+            error = "Request failed: " .. (req_err or "unknown"),
+        })
+    end
+
+    return json_response({
+        success = res.status >= 200 and res.status < 300,
+        status = res.status,
+        status_text = res.reason,
+        response_body = res.body and res.body:sub(1, 500) or nil,
+    })
+end
+
+-- GET /api/webhooks/stats - Get webhook queue statistics
+handlers["GET:/webhooks/stats"] = function()
+    local webhooks = require "webhooks"
+    return json_response(webhooks.get_stats())
+end
+
+-------------------------------------------------------------------------------
+-- Bulk Import/Export Endpoints
+-------------------------------------------------------------------------------
+
+-- GET /api/bulk/export/keywords - Export all keywords (blocked and flagged)
+handlers["GET:/bulk/export/keywords"] = function()
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    local blocked = red:smembers(KEYS.blocked_keywords) or {}
+    local flagged = red:smembers(KEYS.flagged_keywords) or {}
+
+    close_redis(red)
+
+    -- Convert to regular arrays if ngx.null
+    if blocked == ngx.null then blocked = {} end
+    if flagged == ngx.null then flagged = {} end
+
+    return json_response({
+        blocked_keywords = blocked,
+        flagged_keywords = flagged,
+        export_timestamp = ngx.time(),
+        counts = {
+            blocked = #blocked,
+            flagged = #flagged,
+        }
+    })
+end
+
+-- POST /api/bulk/import/keywords - Import keywords (add to existing)
+handlers["POST:/bulk/import/keywords"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data, decode_err = cjson.decode(body)
+
+    if not data then
+        return error_response("Invalid JSON: " .. (decode_err or "unknown error"))
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    local stats = {
+        blocked_added = 0,
+        blocked_skipped = 0,
+        flagged_added = 0,
+        flagged_skipped = 0,
+    }
+
+    -- Import blocked keywords
+    if data.blocked_keywords and type(data.blocked_keywords) == "table" then
+        for _, kw in ipairs(data.blocked_keywords) do
+            if type(kw) == "string" and kw ~= "" then
+                local added = red:sadd(KEYS.blocked_keywords, kw:lower())
+                if added == 1 then
+                    stats.blocked_added = stats.blocked_added + 1
+                else
+                    stats.blocked_skipped = stats.blocked_skipped + 1
+                end
+            end
+        end
+    end
+
+    -- Import flagged keywords
+    if data.flagged_keywords and type(data.flagged_keywords) == "table" then
+        for _, kw in ipairs(data.flagged_keywords) do
+            if type(kw) == "string" and kw ~= "" then
+                local added = red:sadd(KEYS.flagged_keywords, kw:lower())
+                if added == 1 then
+                    stats.flagged_added = stats.flagged_added + 1
+                else
+                    stats.flagged_skipped = stats.flagged_skipped + 1
+                end
+            end
+        end
+    end
+
+    close_redis(red)
+
+    -- Trigger sync
+    redis_sync.sync_now()
+
+    return json_response({
+        success = true,
+        stats = stats,
+    })
+end
+
+-- GET /api/bulk/export/ips - Export whitelisted IPs
+handlers["GET:/bulk/export/ips"] = function()
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    local ips = red:smembers(KEYS.ip_whitelist) or {}
+
+    close_redis(red)
+
+    if ips == ngx.null then ips = {} end
+
+    return json_response({
+        whitelisted_ips = ips,
+        export_timestamp = ngx.time(),
+        count = #ips,
+    })
+end
+
+-- POST /api/bulk/import/ips - Import whitelisted IPs
+handlers["POST:/bulk/import/ips"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data, decode_err = cjson.decode(body)
+
+    if not data then
+        return error_response("Invalid JSON: " .. (decode_err or "unknown error"))
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    local stats = {
+        added = 0,
+        skipped = 0,
+        invalid = 0,
+    }
+
+    -- Import IPs
+    if data.whitelisted_ips and type(data.whitelisted_ips) == "table" then
+        for _, ip in ipairs(data.whitelisted_ips) do
+            if type(ip) == "string" and ip ~= "" then
+                -- Basic IP validation
+                if ip:match("^%d+%.%d+%.%d+%.%d+$") or ip:match("^%d+%.%d+%.%d+%.%d+/%d+$") or ip:match(":") then
+                    local added = red:sadd(KEYS.ip_whitelist, ip)
+                    if added == 1 then
+                        stats.added = stats.added + 1
+                    else
+                        stats.skipped = stats.skipped + 1
+                    end
+                else
+                    stats.invalid = stats.invalid + 1
+                end
+            end
+        end
+    end
+
+    close_redis(red)
+
+    -- Trigger sync
+    redis_sync.sync_now()
+
+    return json_response({
+        success = true,
+        stats = stats,
+    })
+end
+
+-- GET /api/bulk/export/hashes - Export blocked hashes
+handlers["GET:/bulk/export/hashes"] = function()
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    local hashes = red:smembers(KEYS.blocked_hashes) or {}
+
+    close_redis(red)
+
+    if hashes == ngx.null then hashes = {} end
+
+    return json_response({
+        blocked_hashes = hashes,
+        export_timestamp = ngx.time(),
+        count = #hashes,
+    })
+end
+
+-- POST /api/bulk/import/hashes - Import blocked hashes
+handlers["POST:/bulk/import/hashes"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data, decode_err = cjson.decode(body)
+
+    if not data then
+        return error_response("Invalid JSON: " .. (decode_err or "unknown error"))
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    local stats = {
+        added = 0,
+        skipped = 0,
+        invalid = 0,
+    }
+
+    -- Import hashes
+    if data.blocked_hashes and type(data.blocked_hashes) == "table" then
+        for _, hash in ipairs(data.blocked_hashes) do
+            if type(hash) == "string" and hash ~= "" then
+                -- Basic hash validation (should be hex string)
+                if hash:match("^[a-fA-F0-9]+$") and #hash >= 16 then
+                    local added = red:sadd(KEYS.blocked_hashes, hash:lower())
+                    if added == 1 then
+                        stats.added = stats.added + 1
+                    else
+                        stats.skipped = stats.skipped + 1
+                    end
+                else
+                    stats.invalid = stats.invalid + 1
+                end
+            end
+        end
+    end
+
+    close_redis(red)
+
+    -- Trigger sync
+    redis_sync.sync_now()
+
+    return json_response({
+        success = true,
+        stats = stats,
+    })
+end
+
+-- DELETE /api/bulk/clear/keywords - Clear all keywords (with confirmation)
+handlers["DELETE:/bulk/clear/keywords"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data = cjson.decode(body or "{}")
+
+    -- Require explicit confirmation
+    if not data or data.confirm ~= true then
+        return error_response("Bulk clear requires 'confirm: true' in request body")
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    local blocked_count = red:scard(KEYS.blocked_keywords) or 0
+    local flagged_count = red:scard(KEYS.flagged_keywords) or 0
+
+    red:del(KEYS.blocked_keywords)
+    red:del(KEYS.flagged_keywords)
+
+    close_redis(red)
+
+    -- Trigger sync
+    redis_sync.sync_now()
+
+    return json_response({
+        success = true,
+        cleared = {
+            blocked_keywords = blocked_count,
+            flagged_keywords = flagged_count,
+        }
+    })
+end
+
+-- GET /api/bulk/export/all - Export everything (keywords, IPs, hashes)
+handlers["GET:/bulk/export/all"] = function()
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    local blocked_keywords = red:smembers(KEYS.blocked_keywords) or {}
+    local flagged_keywords = red:smembers(KEYS.flagged_keywords) or {}
+    local whitelisted_ips = red:smembers(KEYS.ip_whitelist) or {}
+    local blocked_hashes = red:smembers(KEYS.blocked_hashes) or {}
+
+    close_redis(red)
+
+    -- Convert ngx.null to empty arrays
+    if blocked_keywords == ngx.null then blocked_keywords = {} end
+    if flagged_keywords == ngx.null then flagged_keywords = {} end
+    if whitelisted_ips == ngx.null then whitelisted_ips = {} end
+    if blocked_hashes == ngx.null then blocked_hashes = {} end
+
+    return json_response({
+        export_version = "1.0",
+        export_timestamp = ngx.time(),
+        data = {
+            blocked_keywords = blocked_keywords,
+            flagged_keywords = flagged_keywords,
+            whitelisted_ips = whitelisted_ips,
+            blocked_hashes = blocked_hashes,
+        },
+        counts = {
+            blocked_keywords = #blocked_keywords,
+            flagged_keywords = #flagged_keywords,
+            whitelisted_ips = #whitelisted_ips,
+            blocked_hashes = #blocked_hashes,
+        }
+    })
+end
+
+-- ==================== GeoIP Endpoints ====================
+
+-- GET /api/geoip/status - Get GeoIP feature status
+handlers["GET:/geoip/status"] = function()
+    local geoip = require "geoip"
+    return json_response(geoip.get_status())
+end
+
+-- GET /api/geoip/config - Get GeoIP configuration
+handlers["GET:/geoip/config"] = function()
+    local geoip = require "geoip"
+    return json_response(geoip.get_config_for_api())
+end
+
+-- PUT /api/geoip/config - Update GeoIP configuration
+handlers["PUT:/geoip/config"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data = cjson.decode(body or "{}")
+
+    if not data then
+        return error_response("Invalid JSON body")
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    -- Get existing config and merge
+    local existing_json = red:get("waf:config:geoip")
+    local existing = {}
+    if existing_json and existing_json ~= ngx.null then
+        existing = cjson.decode(existing_json) or {}
+    end
+
+    -- Merge new config into existing
+    for k, v in pairs(data) do
+        existing[k] = v
+    end
+
+    -- Save updated config
+    red:set("waf:config:geoip", cjson.encode(existing))
+    close_redis(red)
+
+    -- Reload GeoIP module
+    local geoip = require "geoip"
+    geoip.reload()
+
+    return json_response({
+        success = true,
+        config = existing
+    })
+end
+
+-- POST /api/geoip/reload - Reload GeoIP databases
+handlers["POST:/geoip/reload"] = function()
+    local geoip = require "geoip"
+    local success = geoip.reload()
+    return json_response({
+        success = success,
+        status = geoip.get_status()
+    })
+end
+
+-- GET /api/geoip/lookup - Lookup GeoIP info for an IP
+handlers["GET:/geoip/lookup"] = function()
+    local args = ngx.req.get_uri_args()
+    local ip = args.ip
+
+    if not ip or ip == "" then
+        return error_response("Missing 'ip' parameter")
+    end
+
+    local geoip = require "geoip"
+    if not geoip.is_available() then
+        return json_response({
+            available = false,
+            message = "GeoIP feature not available (database not loaded or disabled)"
+        })
+    end
+
+    local country = geoip.lookup_country(ip)
+    local asn = geoip.lookup_asn(ip)
+    local is_dc, dc_provider = false, nil
+
+    if asn and asn.asn then
+        is_dc, dc_provider = geoip.is_datacenter(asn.asn)
+    end
+
+    return json_response({
+        ip = ip,
+        country = country,
+        asn = asn,
+        is_datacenter = is_dc,
+        datacenter_provider = dc_provider
+    })
+end
+
+-- ==================== IP Reputation Endpoints ====================
+
+-- GET /api/reputation/status - Get IP reputation feature status
+handlers["GET:/reputation/status"] = function()
+    local ip_reputation = require "ip_reputation"
+    return json_response(ip_reputation.get_status())
+end
+
+-- GET /api/reputation/config - Get IP reputation configuration
+handlers["GET:/reputation/config"] = function()
+    local ip_reputation = require "ip_reputation"
+    return json_response(ip_reputation.get_config())
+end
+
+-- PUT /api/reputation/config - Update IP reputation configuration
+handlers["PUT:/reputation/config"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data = cjson.decode(body or "{}")
+
+    if not data then
+        return error_response("Invalid JSON body")
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    -- Get existing config and merge
+    local existing_json = red:get("waf:config:ip_reputation")
+    local existing = {}
+    if existing_json and existing_json ~= ngx.null then
+        existing = cjson.decode(existing_json) or {}
+    end
+
+    -- Merge new config into existing
+    for k, v in pairs(data) do
+        existing[k] = v
+    end
+
+    -- Save updated config
+    red:set("waf:config:ip_reputation", cjson.encode(existing))
+    close_redis(red)
+
+    return json_response({
+        success = true,
+        config = existing
+    })
+end
+
+-- GET /api/reputation/check - Check IP reputation
+handlers["GET:/reputation/check"] = function()
+    local args = ngx.req.get_uri_args()
+    local ip = args.ip
+
+    if not ip or ip == "" then
+        return error_response("Missing 'ip' parameter")
+    end
+
+    local ip_reputation = require "ip_reputation"
+    if not ip_reputation.is_available() then
+        return json_response({
+            available = false,
+            message = "IP reputation feature not available (disabled or no providers configured)"
+        })
+    end
+
+    local result = ip_reputation.check_ip(ip)
+    return json_response({
+        ip = ip,
+        result = result
+    })
+end
+
+-- GET /api/reputation/blocklist - Get IP blocklist
+handlers["GET:/reputation/blocklist"] = function()
+    local ip_reputation = require "ip_reputation"
+    local blocklist = ip_reputation.get_blocklist()
+    return json_response({
+        blocked_ips = blocklist or {}
+    })
+end
+
+-- POST /api/reputation/blocklist - Add IP to blocklist
+handlers["POST:/reputation/blocklist"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data = cjson.decode(body or "{}")
+
+    if not data or not data.ip then
+        return error_response("Missing 'ip' field")
+    end
+
+    local ip_reputation = require "ip_reputation"
+    local success, err = ip_reputation.add_to_blocklist(data.ip, data.reason)
+
+    if not success then
+        return error_response(err or "Failed to add IP to blocklist", 500)
+    end
+
+    return json_response({
+        success = true,
+        ip = data.ip,
+        reason = data.reason
+    })
+end
+
+-- DELETE /api/reputation/blocklist - Remove IP from blocklist
+handlers["DELETE:/reputation/blocklist"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data = cjson.decode(body or "{}")
+
+    if not data or not data.ip then
+        return error_response("Missing 'ip' field")
+    end
+
+    local ip_reputation = require "ip_reputation"
+    local success, err = ip_reputation.remove_from_blocklist(data.ip)
+
+    if not success then
+        return error_response(err or "Failed to remove IP from blocklist", 500)
+    end
+
+    return json_response({
+        success = true,
+        ip = data.ip
+    })
+end
+
+-- DELETE /api/reputation/cache - Clear reputation cache for an IP
+handlers["DELETE:/reputation/cache"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data = cjson.decode(body or "{}")
+
+    if not data or not data.ip then
+        return error_response("Missing 'ip' field")
+    end
+
+    local ip_reputation = require "ip_reputation"
+    ip_reputation.clear_cache(data.ip)
+
+    return json_response({
+        success = true,
+        ip = data.ip,
+        message = "Cache cleared"
+    })
+end
+
+-- ==================== Timing Token Endpoints ====================
+
+-- GET /api/timing/status - Get timing token feature status
+handlers["GET:/timing/status"] = function()
+    local timing_token = require "timing_token"
+    return json_response({
+        enabled = timing_token.is_enabled(),
+        config = timing_token.get_config()
+    })
+end
+
+-- GET /api/timing/config - Get timing token configuration
+handlers["GET:/timing/config"] = function()
+    local timing_token = require "timing_token"
+    return json_response(timing_token.get_config())
+end
+
+-- PUT /api/timing/config - Update timing token configuration
+handlers["PUT:/timing/config"] = function()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data = cjson.decode(body or "{}")
+
+    if not data then
+        return error_response("Invalid JSON body")
+    end
+
+    local red, err = get_redis()
+    if not red then
+        return error_response("Redis connection failed: " .. err)
+    end
+
+    -- Get existing config and merge
+    local existing_json = red:get("waf:config:timing_token")
+    local existing = {}
+    if existing_json and existing_json ~= ngx.null then
+        existing = cjson.decode(existing_json) or {}
+    end
+
+    -- Merge new config into existing
+    for k, v in pairs(data) do
+        existing[k] = v
+    end
+
+    -- Save updated config
+    red:set("waf:config:timing_token", cjson.encode(existing))
+    close_redis(red)
+
+    return json_response({
+        success = true,
+        config = existing
+    })
 end
 
 -- Main request handler

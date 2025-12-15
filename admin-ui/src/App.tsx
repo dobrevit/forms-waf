@@ -13,6 +13,12 @@ import { Thresholds } from '@/pages/config/Thresholds'
 import { IpAllowList } from '@/pages/config/IpAllowList'
 import { CaptchaProviders } from '@/pages/captcha/CaptchaProviders'
 import { CaptchaSettings } from '@/pages/captcha/CaptchaSettings'
+import { WebhookSettings } from '@/pages/webhooks/WebhookSettings'
+import { BulkOperations } from '@/pages/bulk/BulkOperations'
+import TimingConfig from '@/pages/security/TimingConfig'
+import GeoIPConfig from '@/pages/security/GeoIPConfig'
+import ReputationConfig from '@/pages/security/ReputationConfig'
+import { About } from '@/pages/About'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -55,6 +61,12 @@ export default function App() {
                 <Route path="/config/allowlist" element={<IpAllowList />} />
                 <Route path="/captcha/providers" element={<CaptchaProviders />} />
                 <Route path="/captcha/settings" element={<CaptchaSettings />} />
+                <Route path="/operations/webhooks" element={<WebhookSettings />} />
+                <Route path="/operations/bulk" element={<BulkOperations />} />
+                <Route path="/security/timing" element={<TimingConfig />} />
+                <Route path="/security/geoip" element={<GeoIPConfig />} />
+                <Route path="/security/reputation" element={<ReputationConfig />} />
+                <Route path="/about" element={<About />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </AppLayout>
