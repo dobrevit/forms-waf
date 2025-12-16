@@ -24,6 +24,14 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Copy built files
 COPY --from=builder /app/dist /usr/share/nginx/html
 
+# Create cache and pid directories with correct permissions for non-root
+RUN mkdir -p /var/cache/nginx /var/run && \
+    chown -R nginx:nginx /var/cache/nginx /var/run /usr/share/nginx/html && \
+    chmod -R 755 /var/cache/nginx /var/run
+
+# Run as non-root nginx user (UID 101 on Alpine nginx)
+USER nginx
+
 # Expose port
 EXPOSE 80
 

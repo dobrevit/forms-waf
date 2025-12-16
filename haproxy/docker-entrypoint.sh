@@ -1,8 +1,13 @@
 #!/bin/sh
 set -e
 
-CONFIG_FILE="/usr/local/etc/haproxy/haproxy.cfg"
+# Use /tmp for writable config when running in Kubernetes with ConfigMap
+CONFIG_SOURCE="/usr/local/etc/haproxy/haproxy.cfg"
+CONFIG_FILE="/tmp/haproxy.cfg"
 CONFIG_TEMPLATE="/usr/local/etc/haproxy/haproxy.cfg.tmpl"
+
+# Copy config to writable location
+cp "$CONFIG_SOURCE" "$CONFIG_FILE"
 
 # Function to get the local hostname/pod name
 get_local_peer_name() {

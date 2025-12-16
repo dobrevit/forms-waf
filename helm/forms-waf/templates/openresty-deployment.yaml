@@ -91,6 +91,8 @@ spec:
               subPath: nginx.conf
             - name: lua-scripts
               mountPath: /etc/nginx/lua
+            - name: ssl-certs
+              mountPath: /etc/nginx/ssl
       volumes:
         - name: nginx-config
           configMap:
@@ -98,6 +100,8 @@ spec:
         - name: lua-scripts
           configMap:
             name: {{ include "forms-waf.fullname" . }}-openresty-lua
+        - name: ssl-certs
+          emptyDir: {}
       {{- with .Values.openresty.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
