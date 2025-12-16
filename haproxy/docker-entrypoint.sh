@@ -18,7 +18,7 @@ get_local_peer_name() {
     fi
 }
 
-# Function to generate peers configuration
+# Function to generate peers configuration (used in Docker Compose mode only)
 generate_peers_config() {
     local local_peer=$(get_local_peer_name)
     local peer_port=${HAPROXY_PEER_PORT:-10000}
@@ -40,6 +40,24 @@ generate_peers_config() {
     done
 }
 
+# Function to update local peer binding in Kubernetes mode
+# Helm generates the correct peers section with full pod names,
+# but each pod needs to bind its own peer entry to 0.0.0.0
+update_local_peer_binding() {
+    local local_peer=$(get_local_peer_name)
+    local peer_port=${HAPROXY_PEER_PORT:-10000}
+
+    # Find the peer line matching local hostname and replace its address with 0.0.0.0
+    # This allows the local peer to bind to all interfaces while keeping the correct peer name
+    # Pattern: "    peer <local_peer> <anything>:<port>" -> "    peer <local_peer> 0.0.0.0:<port>"
+    if grep -q "peer ${local_peer} " "$CONFIG_FILE"; then
+        sed -i "s|^\([[:space:]]*peer ${local_peer}\) [^:]*:${peer_port}|\1 0.0.0.0:${peer_port}|" "$CONFIG_FILE"
+        echo "Updated local peer ${local_peer} to bind on 0.0.0.0:${peer_port}"
+    else
+        echo "Warning: Local peer ${local_peer} not found in config"
+    fi
+}
+
 # Function to configure backend servers
 configure_backends() {
     local backend_host=${BACKEND_HOST:-backend}
@@ -52,27 +70,16 @@ configure_backends() {
 
 # Process configuration template
 process_config() {
-    # if [ -f "$CONFIG_TEMPLATE" ]; then
-    #     cp --force "$CONFIG_TEMPLATE" "$CONFIG_FILE"
-    # fi
-
     local local_peer=$(get_local_peer_name)
 
-    # Replace placeholder with actual peer name
+    # Replace placeholder with actual peer name (for Docker Compose mode)
     sed -i "s/LOCAL_PEER_PLACEHOLDER/${local_peer}/g" "$CONFIG_FILE"
 
-    # In Kubernetes StatefulSet mode, rebuild peers section
+    # In Kubernetes StatefulSet mode, update local peer binding
+    # Helm already generates the correct peers section with full pod names (e.g., forms-waf-haproxy-0)
+    # We just need to update the local peer's address to 0.0.0.0 so it can bind properly
     if [ "${KUBERNETES_MODE:-false}" = "true" ]; then
-        # Generate new peers config
-        peers_config=$(generate_peers_config)
-
-        # Replace peers section in config
-        # This is a simplified approach - in production, use confd or similar
-        sed -i '/^peers haproxy_peers/,/^[^[:space:]]/{/^peers/!{/^[^[:space:]]/!d}}' "$CONFIG_FILE"
-        sed -i '/^peers haproxy_peers/d' "$CONFIG_FILE"
-
-        # Insert new peers config after global section
-        echo "$peers_config" | sed -i '/^defaults/r /dev/stdin' "$CONFIG_FILE"
+        update_local_peer_binding
     fi
 
     # Replace backend placeholder if set
