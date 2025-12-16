@@ -16,6 +16,11 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/haproxy-configmap.yaml") . | sha256sum }}
+        {{- if .Values.monitoring.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.haproxy.service.statsPort }}"
+        prometheus.io/path: "/metrics"
+        {{- end }}
       labels:
         {{- include "forms-waf.haproxy.selectorLabels" . | nindent 8 }}
     spec:

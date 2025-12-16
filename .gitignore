@@ -1,4 +1,5 @@
 # Dependencies
+dist/
 node_modules/
 vendor/
 
@@ -43,3 +44,15 @@ appendonly.aof
 # Logs
 logs/
 *.log
+
+# MaxMind data
+maxmind/
+
+# Python virtual environments
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python

@@ -47,3 +47,6 @@ env.*
 # Redis data files
 *.rdb
 *.aof
+
+# MaxMind data
+maxmind/

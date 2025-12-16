@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Forms WAF</title>
+  <desc id="desc">A shield-shaped firewall showing blocked (red) and allowed (green) form submissions.</desc>
+
+  <!-- Background -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="64" x2="64" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#020617" />
+      <stop offset="1" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="shield" x1="18" y1="10" x2="46" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22c55e" />
+      <stop offset="1" stop-color="#16a34a" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="url(#bg)" />
+
+  <!-- Shield (WAF protection) -->
+  <path
+    d="M32 8 L18 13.5 C18 30 21.5 40.5 32 48.5 C42.5 40.5 46 30 46 13.5 Z"
+    fill="url(#shield)"
+  />
+
+  <!-- Shield edge highlight -->
+  <path
+    d="M32 10.5 L20.5 14.6 C20.6 26.4 23.3 34.4 32 41 C40.7 34.4 43.4 26.4 43.5 14.6 Z"
+    fill="rgba(15,23,42,0.28)"
+  />
+
+  <!-- Forms flow inside shield: left red blocked, right green passed -->
+  <g transform="translate(20 20)">
+    <!-- Left column: incoming forms (some blocked in red) -->
+    <g fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Top red (blocked) -->
+      <rect x="1" y="1" width="12" height="4" rx="1.5" stroke="#fecaca" />
+      <line x1="3" y1="3" x2="11" y2="3" stroke="#f97373" />
+
+      <!-- Middle green (allowed) -->
+      <rect x="1" y="8" width="12" height="4" rx="1.5" stroke="#bbf7d0" />
+      <line x1="3" y1="10" x2="11" y2="10" stroke="#4ade80" />
+
+      <!-- Bottom red (blocked) -->
+      <rect x="1" y="15" width="12" height="4" rx="1.5" stroke="#fecaca" />
+      <line x1="3" y1="17" x2="11" y2="17" stroke="#f97373" />
+    </g>
+
+    <!-- Direction arrows towards right (through the WAF) -->
+    <g stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Arrow from middle green item (allowed) -->
+      <path d="M14 10 L20 10" stroke="#bbf7d0" />
+      <path d="M19 8.5 L21.5 10 L19 11.5" fill="none" stroke="#bbf7d0" />
+
+      <!-- Soft hint of blocked path diverging upward (subtle) -->
+      <path d="M14 3 L17 3" stroke="#fecaca" opacity="0.7" />
+      <path d="M16 1.5 L18.5 3 L16 4.5" fill="none" stroke="#fecaca" opacity="0.7" />
+    </g>
+
+    <!-- Right column: clean, passed forms in green -->
+    <g transform="translate(22 4)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="0" y="3" width="14" height="6" rx="2" stroke="#bbf7d0" stroke-width="1.8" />
+      <line x1="3" y1="6" x2="11" y2="6" stroke="#4ade80" stroke-width="1.8" />
+    </g>
+  </g>
+
+  <!-- Subtle central checkmark to emphasize "passed" -->
+  <path
+    d="M26 36 L30 40 L38 30"
+    fill="none"
+    stroke="#ecfdf5"
+    stroke-width="2.4"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
+

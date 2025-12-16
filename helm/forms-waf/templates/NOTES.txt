@@ -30,20 +30,43 @@ To access the WAF locally, use port forwarding:
 3. Check HAProxy stats:
    Open http://localhost:8404/stats
 
+{{- if .Values.adminUI.enabled }}
+## Admin UI
+
+Access the Admin UI (port 8082):
+
+  kubectl port-forward svc/{{ include "forms-waf.fullname" . }}-openresty 8082:{{ .Values.openresty.service.adminPort }}
+
+Then open: http://localhost:8082
+
+Default credentials:
+  Username: {{ .Values.adminUI.auth.defaultUsername }}
+  Password: {{ .Values.adminUI.auth.defaultPassword }}
+
+  ⚠️  IMPORTANT: Change the default password on first login!
+
+{{- end }}
 ## Admin API
 
-The WAF admin API is available at /waf-admin/ (restricted to internal IPs):
+The WAF admin API is available at /api/ (requires authentication):
 
-  # List blocked keywords
-  curl http://localhost:8080/waf-admin/keywords/blocked
+  # Login and get session
+  curl -X POST http://localhost:8082/api/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"username":"{{ .Values.adminUI.auth.defaultUsername }}","password":"{{ .Values.adminUI.auth.defaultPassword }}"}'
+
+  # List blocked keywords (with session cookie)
+  curl -b cookies.txt http://localhost:8082/api/keywords/blocked
 
   # Add a blocked keyword
-  curl -X POST http://localhost:8080/waf-admin/keywords/blocked \
+  curl -b cookies.txt -X POST http://localhost:8082/api/keywords/blocked \
     -H "Content-Type: application/json" \
     -d '{"keyword":"newspam"}'
 
   # Check status
-  curl http://localhost:8080/waf-admin/status
+  curl -b cookies.txt http://localhost:8082/api/status
+
+Legacy API (backward compatibility) is also available at /waf-admin/
 
 ## Redis Management
 
@@ -71,3 +94,6 @@ Monitoring is disabled. Enable it in values.yaml to expose Prometheus metrics.
 - OpenResty: {{ .Values.openresty.replicaCount }} replica(s) - Form parsing and filtering
 - HAProxy: {{ .Values.haproxy.replicaCount }} replica(s) - Global rate limiting with stick-table sync
 - Redis: Configuration store for keywords and rules
+{{- if .Values.adminUI.enabled }}
+- Admin UI: {{ .Values.adminUI.replicaCount }} replica(s) - Web-based administration interface
+{{- end }}

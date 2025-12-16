@@ -58,9 +58,15 @@ spec:
               redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:whitelist:ips \
                 "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16"
 
+              echo "Loading default virtual host..."
+              DEFAULT_VHOST='{"id":"_default","name":"Default Virtual Host","description":"Catch-all configuration for unmatched hosts","enabled":true,"hostnames":[],"waf":{"enabled":true,"mode":"monitoring"},"routing":{"use_haproxy":true},"thresholds":{"spam_score_block":80,"spam_score_flag":50},"keywords":{"inherit_global":true}}'
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:vhosts:config:_default" "$DEFAULT_VHOST"
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD "waf:vhosts:index" "_default"
+
               echo "Redis initialization complete!"
               echo "Blocked keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:blocked)"
               echo "Flagged keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:flagged)"
+              echo "Virtual hosts: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:vhosts:index)"
           env:
             - name: REDIS_HOST
               value: ${REDIS_HOST:-forms-waf-redis}

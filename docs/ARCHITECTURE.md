@@ -3,9 +3,10 @@
 ## Overview
 
 This system provides a multi-layer spam protection mechanism for web forms using:
-1. **OpenResty** - Form parsing, content hashing, keyword filtering
+1. **OpenResty** - Form parsing, content hashing, keyword filtering, vhost/endpoint resolution
 2. **HAProxy** - Global rate limiting with stick-tables and peer synchronization
-3. **Redis** - Dynamic configuration for keywords and blocklists
+3. **Redis** - Dynamic configuration for keywords, blocklists, vhosts, and endpoints
+4. **Admin UI** - React-based dashboard for configuration management
 
 ## Architecture Diagram
 
@@ -67,10 +68,37 @@ This system provides a multi-layer spam protection mechanism for web forms using
 
 ## Data Flow
 
-### 1. Request Processing in OpenResty
+### 1. Request Context Resolution
 
 ```
-Incoming POST Request
+Incoming Request
+        │
+        ▼
+┌───────────────────────┐
+│ Virtual Host Matching │ ◀── Match Host header against vhost configs
+│  (vhost_matcher.lua)  │     Priority: Exact → Wildcard → Default
+└───────────────────────┘
+        │
+        ▼
+┌───────────────────────┐
+│  Endpoint Matching    │ ◀── Match path/method against endpoint configs
+│ (endpoint_matcher.lua)│     Priority: Vhost-specific → Global → Default
+└───────────────────────┘
+        │
+        ▼
+┌───────────────────────┐
+│  Context Resolution   │ ◀── Merge vhost + endpoint + global configs
+│ (vhost_resolver.lua)  │     Determine effective thresholds, mode, routing
+└───────────────────────┘
+        │
+        ▼
+   WAF Processing (if mode != passthrough)
+```
+
+### 2. WAF Processing in OpenResty
+
+```
+Request with Context
         │
         ▼
 ┌───────────────────┐
@@ -97,13 +125,15 @@ Incoming POST Request
 │ X-Spam-Score      │
 │ X-Client-IP       │
 │ X-Spam-Flags      │
+│ X-WAF-Vhost       │
+│ X-WAF-Endpoint    │
 └───────────────────┘
         │
         ▼
    Forward to HAProxy
 ```
 
-### 2. HAProxy Stick-Table Processing
+### 3. HAProxy Stick-Table Processing
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -149,8 +179,8 @@ Incoming POST Request
 # Blocked keywords - immediate rejection
 SADD waf:keywords:blocked "viagra" "casino" "crypto-investment"
 
-# Flagged keywords - adds to spam score
-SADD waf:keywords:flagged "free" "winner" "click here" "urgent"
+# Flagged keywords - adds to spam score (keyword:score format)
+SADD waf:keywords:flagged "free:10" "winner:15" "click here:20" "urgent:10"
 
 # Blocked hashes - known spam content
 SADD waf:hashes:blocked "abc123..." "def456..."
@@ -160,9 +190,44 @@ HSET waf:config:thresholds spam_score_block 80
 HSET waf:config:thresholds spam_score_flag 50
 HSET waf:config:thresholds hash_count_block 10
 HSET waf:config:thresholds ip_rate_limit 30
+HSET waf:config:thresholds ip_daily_limit 500
+HSET waf:config:thresholds hash_unique_ips_block 5
+
+# Global routing configuration
+HSET waf:config:routing haproxy_upstream "haproxy:80"
+HSET waf:config:routing haproxy_timeout 30
 
 # Whitelisted IPs
 SADD waf:whitelist:ips "10.0.0.0/8" "192.168.1.100"
+
+# Virtual hosts
+ZADD waf:vhosts:index 10 "example-com" 100 "_default"
+SET waf:vhosts:config:example-com '{"id":"example-com","hostnames":["example.com","*.example.com"],...}'
+HSET waf:vhosts:hosts:exact "example.com" "example-com"
+ZADD waf:vhosts:hosts:wildcard 10 "*.example.com:example-com"
+
+# Endpoints
+ZADD waf:endpoints:index 10 "contact-form" 100 "api-catchall"
+SET waf:endpoints:config:contact-form '{"id":"contact-form","matching":{"paths":["/contact"]},...}'
+HSET waf:endpoints:paths:exact "/contact:POST" "contact-form"
+```
+
+## Configuration Hierarchy
+
+```
+Global Defaults (waf:config:*)
+    │
+    ├── Virtual Host Override (waf:vhosts:config:{id})
+    │       │
+    │       └── Vhost-Specific Endpoint (waf:vhosts:endpoints:{vhost_id}:*)
+    │
+    └── Global Endpoint (waf:endpoints:*)
+
+Resolution Order:
+1. Vhost-specific endpoint (if vhost matched + endpoint matched)
+2. Global endpoint (if endpoint matched)
+3. Vhost defaults (if vhost matched)
+4. Global defaults
 ```
 
 ## Deployment Options

@@ -1,10 +1,7 @@
 FROM haproxy:2.8-alpine
 USER root
 # Install additional tools
-RUN apk add --no-cache \
-    curl \
-    bind-tools \
-    bash
+RUN apk add --no-cache curl bind-tools bash
 
 # Copy configuration
 COPY --chown=haproxy:root haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg

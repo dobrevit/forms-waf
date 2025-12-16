@@ -59,6 +59,7 @@ services:
       # Mount lua scripts for development (hot reload with nginx -s reload)
       - ./openresty/lua:/etc/nginx/lua:ro
       - ./openresty/conf/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - ./maxmind:/usr/share/GeoIP:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
       interval: 10s
@@ -79,7 +80,7 @@ services:
       - BACKEND_PORT=8080
       - KUBERNETES_MODE=false
     ports:
-      - "8090:8080"
+      - "8490:8080"
       - "8404:8404"
       - "8405:8405"
     healthcheck:
@@ -105,6 +106,22 @@ services:
     networks:
       - waf-network
     restart: on-failure
+
+  # Admin UI - React-based administration interface
+  admin-ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+    container_name: waf-admin-ui
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    networks:
+      - waf-network
+    restart: on-failure
+    # No external ports - accessed via OpenResty proxy on port 8082
 
   # Redis Commander - Web UI for Redis (development only)
   redis-commander:

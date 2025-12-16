@@ -16,6 +16,14 @@ local DEFAULT_THRESHOLDS = {
     hash_unique_ips_block = 5,   -- Block hash if seen from this many unique IPs
     ip_rate_limit = 30,          -- Max form submissions per minute per IP
     ip_daily_limit = 500,        -- Max form submissions per day per IP
+    rate_limiting_enabled = true, -- Global rate limiting toggle
+    expose_waf_headers = false,  -- Expose WAF debug headers to clients (X-WAF-*, X-Spam-*)
+}
+
+-- Default routing settings
+local DEFAULT_ROUTING = {
+    haproxy_upstream = "haproxy:80",  -- Default HAProxy upstream address
+    haproxy_timeout = 30,             -- Default timeout in seconds
 }
 
 -- Get thresholds (from Redis cache or defaults)
@@ -44,11 +52,59 @@ function _M.get_threshold(name)
     return thresholds[name] or DEFAULT_THRESHOLDS[name]
 end
 
+-- Get routing config (from Redis cache or defaults)
+function _M.get_routing()
+    local cached = config_cache:get("routing")
+
+    if cached then
+        local routing = cjson.decode(cached)
+        if routing then
+            -- Merge with defaults
+            for k, v in pairs(DEFAULT_ROUTING) do
+                if not routing[k] then
+                    routing[k] = v
+                end
+            end
+            return routing
+        end
+    end
+
+    return DEFAULT_ROUTING
+end
+
+-- Get HAProxy upstream address
+function _M.get_haproxy_upstream()
+    local routing = _M.get_routing()
+    return routing.haproxy_upstream or DEFAULT_ROUTING.haproxy_upstream
+end
+
+-- Get HAProxy timeout
+function _M.get_haproxy_timeout()
+    local routing = _M.get_routing()
+    return routing.haproxy_timeout or DEFAULT_ROUTING.haproxy_timeout
+end
+
+-- Check if WAF headers should be exposed to clients
+function _M.expose_waf_headers()
+    local thresholds = _M.get_thresholds()
+    return thresholds.expose_waf_headers == true
+end
+
+-- Check if rate limiting is globally enabled
+function _M.rate_limiting_enabled()
+    local thresholds = _M.get_thresholds()
+    return thresholds.rate_limiting_enabled ~= false
+end
+
 -- Get all config (for admin API)
 function _M.get_all()
     return {
         thresholds = _M.get_thresholds(),
-        defaults = DEFAULT_THRESHOLDS,
+        routing = _M.get_routing(),
+        defaults = {
+            thresholds = DEFAULT_THRESHOLDS,
+            routing = DEFAULT_ROUTING,
+        },
     }
 end
 
