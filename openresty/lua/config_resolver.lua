@@ -228,6 +228,21 @@ local function merge_fields(endpoint_fields)
         end
     end
 
+    -- Copy honeypot fields (for bot detection)
+    if endpoint_fields.honeypot then
+        result.honeypot = endpoint_fields.honeypot
+    end
+
+    -- Copy expected fields (for unexpected field detection)
+    if endpoint_fields.expected_fields then
+        result.expected_fields = endpoint_fields.expected_fields
+    end
+
+    -- Copy hash_content config (which fields to hash)
+    if endpoint_fields.hash_content then
+        result.hash_content = endpoint_fields.hash_content
+    end
+
     return result
 end
 
@@ -333,6 +348,7 @@ function _M.resolve(endpoint_config)
         rate_limiting = merge_rate_limiting(global_thresholds, endpoint_config.rate_limiting),
         fields = merge_fields(endpoint_config.fields),
         actions = merge_actions(endpoint_config.actions),
+        security = endpoint_config.security,  -- Pass through security settings (honeypot, disposable email, etc.)
         metadata = endpoint_config.metadata
     }
 
