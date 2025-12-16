@@ -164,6 +164,8 @@ local function resolve_waf_settings(vhost_config)
     }
 
     if not vhost_config or not vhost_config.waf then
+        -- Set default_mode as alias for backward compatibility
+        result.default_mode = result.mode
         return result
     end
 
@@ -177,6 +179,9 @@ local function resolve_waf_settings(vhost_config)
     elseif vhost_config.waf.default_mode then
         result.mode = vhost_config.waf.default_mode
     end
+
+    -- Set default_mode as alias pointing to the same value
+    result.default_mode = result.mode
 
     return result
 end
@@ -257,9 +262,9 @@ function _M.resolve_request_context(host, path, method)
 
     -- 5. Apply vhost-level overrides to endpoint config
     if endpoint_resolved then
-        -- Use vhost default mode if endpoint doesn't specify
+        -- Use vhost mode if endpoint doesn't specify its own mode
         if not endpoint_config or not endpoint_config.mode then
-            endpoint_resolved.mode = vhost_resolved.waf.default_mode
+            endpoint_resolved.mode = vhost_resolved.waf.mode
         end
 
         -- Merge vhost thresholds with endpoint thresholds

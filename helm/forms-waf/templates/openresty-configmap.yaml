@@ -146,7 +146,7 @@ data:
             # Admin UI - React SPA (catch-all for frontend routes)
             location / {
                 # Dynamic resolution - resolve hostname at request time
-                set $admin_ui_upstream "{{ include "forms-waf.fullname" . }}-admin-ui:{{ .Values.adminUI.service.port }}";
+                set $admin_ui_upstream "{{ include "forms-waf.fullname" . }}-admin-ui.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.adminUI.service.port }}";
                 proxy_pass http://$admin_ui_upstream;
                 proxy_http_version 1.1;
                 proxy_set_header Host $host;
@@ -184,7 +184,7 @@ data:
                 }
 
                 # Dynamic resolution - resolve hostname at request time
-                set $haproxy_upstream "{{ include "forms-waf.fullname" . }}-haproxy:{{ .Values.haproxy.service.port }}";
+                set $haproxy_upstream "{{ include "forms-waf.fullname" . }}-haproxy.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.haproxy.service.port }}";
                 proxy_pass http://$haproxy_upstream;
                 proxy_http_version 1.1;
                 proxy_set_header Connection "";
