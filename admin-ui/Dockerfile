@@ -41,11 +41,11 @@ RUN mkdir -p /var/cache/nginx/client_temp \
 # Run as non-root nginx user (UID 101 on Alpine nginx)
 USER nginx
 
-# Expose port
-EXPOSE 80
+# Expose port (non-privileged port for non-root)
+EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost/health || exit 1
+  CMD wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

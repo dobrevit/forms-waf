@@ -12,10 +12,22 @@ USER root
 RUN apk add --no-cache curl perl openssl libmaxminddb libmaxminddb-dev && \
     opm get ledgetech/lua-resty-http && \
     opm get anjia0532/lua-resty-maxminddb && \
-    mkdir -p /usr/share/GeoIP /var/log/nginx /etc/nginx/ssl && \
+    mkdir -p /usr/share/GeoIP /var/log/nginx /etc/nginx/ssl \
+             /usr/local/openresty/nginx/client_body_temp \
+             /usr/local/openresty/nginx/proxy_temp \
+             /usr/local/openresty/nginx/fastcgi_temp \
+             /usr/local/openresty/nginx/uwsgi_temp \
+             /usr/local/openresty/nginx/scgi_temp \
+             /var/run && \
     ln -s /dev/stdout /var/log/nginx/access.log && \
     ln -s /dev/stderr /var/log/nginx/error.log && \
-    chown -R nobody:nobody /etc/nginx/ssl /var/log/nginx
+    chown -R nobody:nobody /etc/nginx/ssl /var/log/nginx \
+           /usr/local/openresty/nginx/client_body_temp \
+           /usr/local/openresty/nginx/proxy_temp \
+           /usr/local/openresty/nginx/fastcgi_temp \
+           /usr/local/openresty/nginx/uwsgi_temp \
+           /usr/local/openresty/nginx/scgi_temp \
+           /var/run
 
 # Copy configuration
 COPY conf/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf

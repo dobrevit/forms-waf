@@ -16,7 +16,7 @@ openresty:
   image:
     repository: ghcr.io/dobrevit/forms-waf-openresty
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
   # DaemonSet or Deployment
   kind: Deployment
@@ -110,7 +110,7 @@ haproxy:
   image:
     repository: ghcr.io/dobrevit/forms-waf-haproxy
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
   service:
     type: ClusterIP
@@ -228,11 +228,11 @@ adminUI:
   image:
     repository: ghcr.io/dobrevit/forms-waf-admin-ui
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
   service:
     type: ClusterIP
-    port: 80
+    port: 8080
 
   resources:
     limits:
