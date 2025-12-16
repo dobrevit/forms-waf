@@ -53,6 +53,8 @@ spec:
                   fieldPath: metadata.name
             - name: KUBERNETES_MODE
               value: {{ .Values.haproxy.env.KUBERNETES_MODE | quote }}
+            - name: HAPROXY_PEER_PORT
+              value: {{ .Values.haproxy.service.peerPort | quote }}
           livenessProbe:
             {{- toYaml .Values.haproxy.livenessProbe | nindent 12 }}
           readinessProbe:

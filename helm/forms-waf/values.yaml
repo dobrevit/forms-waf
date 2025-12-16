@@ -194,6 +194,11 @@ haproxy:
 
 # Redis configuration (using Bitnami chart)
 redis:
+  image:
+    registry: docker.io
+    repository: bitnami/redis
+    tag: latest
+    pullPolicy: Always
   enabled: true
   architecture: standalone
 
