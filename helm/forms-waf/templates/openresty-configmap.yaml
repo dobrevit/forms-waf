@@ -18,12 +18,16 @@ data:
     }
 
     http {
-        include /etc/nginx/mime.types;
+        include /usr/local/openresty/nginx/conf/mime.types;
         default_type application/octet-stream;
 
         # Hide server version for security
         server_tokens off;
         more_clear_headers 'Server';
+
+        # DNS resolver for Kubernetes service discovery
+        resolver kube-dns.kube-system.svc.cluster.local valid=10s ipv6=off;
+        resolver_timeout 5s;
 
         log_format json_combined escape=json '{'
             '"time":"$time_iso8601",'
@@ -73,17 +77,8 @@ data:
             redis_sync.start_sync_timer()
         }
 
-        upstream haproxy_backend {
-            server {{ include "forms-waf.fullname" . }}-haproxy:{{ .Values.haproxy.service.port }};
-            keepalive 32;
-        }
-
-        {{- if .Values.adminUI.enabled }}
-        upstream admin_ui {
-            server {{ include "forms-waf.fullname" . }}-admin-ui:{{ .Values.adminUI.service.port }};
-            keepalive 4;
-        }
-        {{- end }}
+        # Backend services - resolved dynamically at request time via variables
+        # This allows nginx to start even if backends aren't ready yet
 
         server {
             listen 8081;
@@ -140,7 +135,9 @@ data:
             {{- if .Values.adminUI.enabled }}
             # Admin UI - React SPA (catch-all for frontend routes)
             location / {
-                proxy_pass http://admin_ui;
+                # Dynamic resolution - resolve hostname at request time
+                set $admin_ui_upstream "{{ include "forms-waf.fullname" . }}-admin-ui:{{ .Values.adminUI.service.port }}";
+                proxy_pass http://$admin_ui_upstream;
                 proxy_http_version 1.1;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
@@ -176,7 +173,9 @@ data:
                     waf.process_request()
                 }
 
-                proxy_pass http://haproxy_backend;
+                # Dynamic resolution - resolve hostname at request time
+                set $haproxy_upstream "{{ include "forms-waf.fullname" . }}-haproxy:{{ .Values.haproxy.service.port }}";
+                proxy_pass http://$haproxy_upstream;
                 proxy_http_version 1.1;
                 proxy_set_header Connection "";
                 proxy_set_header Host $host;

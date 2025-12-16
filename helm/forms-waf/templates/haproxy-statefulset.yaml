@@ -32,10 +32,7 @@ spec:
         - name: haproxy
           image: "{{ .Values.global.imageRegistry }}{{ .Values.haproxy.image.repository }}:{{ .Values.haproxy.image.tag }}"
           imagePullPolicy: {{ .Values.haproxy.image.pullPolicy }}
-          args:
-            - haproxy
-            - "-f"
-            - "/usr/local/etc/haproxy/haproxy.cfg"
+          # Entrypoint processes config and starts haproxy from /tmp/haproxy.cfg
           ports:
             - name: http
               containerPort: 8080

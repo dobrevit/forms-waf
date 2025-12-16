@@ -77,11 +77,11 @@ openresty:
     name: ""
     annotations: {}
 
-  # Security context
+  # Security context (nobody user on Alpine = 65534)
   securityContext:
     runAsNonRoot: true
-    runAsUser: 101
-    fsGroup: 101
+    runAsUser: 65534
+    fsGroup: 65534
 
   # Liveness and readiness probes
   livenessProbe:
@@ -253,7 +253,6 @@ adminUI:
 
   # Container security context
   securityContext:
-    readOnlyRootFilesystem: true
     allowPrivilegeEscalation: false
 
   # Node selector
