@@ -87,7 +87,7 @@ spec:
             {{- toYaml .Values.openresty.resources | nindent 12 }}
           volumeMounts:
             - name: nginx-config
-              mountPath: /etc/nginx/nginx.conf
+              mountPath: /usr/local/openresty/nginx/conf/nginx.conf
               subPath: nginx.conf
             - name: lua-scripts
               mountPath: /etc/nginx/lua
