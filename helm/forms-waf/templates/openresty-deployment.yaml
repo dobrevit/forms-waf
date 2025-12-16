@@ -89,17 +89,12 @@ spec:
             - name: nginx-config
               mountPath: /usr/local/openresty/nginx/conf/nginx.conf
               subPath: nginx.conf
-            - name: lua-scripts
-              mountPath: /etc/nginx/lua
             - name: ssl-certs
               mountPath: /etc/nginx/ssl
       volumes:
         - name: nginx-config
           configMap:
             name: {{ include "forms-waf.fullname" . }}-openresty-config
-        - name: lua-scripts
-          configMap:
-            name: {{ include "forms-waf.fullname" . }}-openresty-lua
         - name: ssl-certs
           emptyDir: {}
       {{- with .Values.openresty.nodeSelector }}
