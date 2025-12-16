@@ -7,6 +7,15 @@ metadata:
     {{- include "forms-waf.openresty.labels" . | nindent 4 }}
 data:
   nginx.conf: |
+    # Preserve environment variables for Lua access via os.getenv()
+    env REDIS_HOST;
+    env REDIS_PORT;
+    env REDIS_PASSWORD;
+    env WAF_SYNC_INTERVAL;
+    env HTTP_PROXY;
+    env HTTPS_PROXY;
+    env NO_PROXY;
+
     worker_processes auto;
     error_log /var/log/nginx/error.log warn;
     pid /tmp/nginx.pid;
@@ -26,7 +35,8 @@ data:
         more_clear_headers 'Server';
 
         # DNS resolver for Kubernetes service discovery
-        resolver kube-dns.kube-system.svc.cluster.local valid=10s ipv6=off;
+        # Uses system resolver from /etc/resolv.conf (works with both kube-dns and CoreDNS)
+        resolver local=on ipv6=off valid=10s;
         resolver_timeout 5s;
 
         log_format json_combined escape=json '{'
@@ -199,13 +209,4 @@ data:
 
         }
     }
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ include "forms-waf.fullname" . }}-openresty-lua
-  labels:
-    {{- include "forms-waf.openresty.labels" . | nindent 4 }}
-data:
-  {{- (.Files.Glob "files/lua/*.lua").AsConfig | nindent 2 }}
 {{- end }}

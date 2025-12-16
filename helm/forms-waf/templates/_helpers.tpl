@@ -97,11 +97,11 @@ Create the name of the service account for HAProxy
 {{- end }}
 
 {{/*
-Redis host
+Redis host (FQDN for reliable DNS resolution)
 */}}
 {{- define "forms-waf.redis.host" -}}
 {{- if .Values.redis.enabled }}
-{{- printf "%s-redis-master" .Release.Name }}
+{{- printf "%s-redis-master.%s.svc.cluster.local" .Release.Name .Release.Namespace }}
 {{- else }}
 {{- .Values.externalRedis.host }}
 {{- end }}
