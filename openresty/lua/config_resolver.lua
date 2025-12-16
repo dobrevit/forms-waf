@@ -8,6 +8,11 @@ local cjson = require "cjson.safe"
 local waf_config = require "waf_config"
 
 -- Default endpoint configuration (used when no endpoint config exists)
+-- Canonical field names:
+--   fields.ignore (not ignore_fields)
+--   fields.expected (not expected_fields)
+--   fields.honeypot (array of field names)
+--   fields.hash (object with enabled/fields)
 local DEFAULT_ENDPOINT_CONFIG = {
     enabled = true,
     mode = "blocking",
@@ -21,8 +26,8 @@ local DEFAULT_ENDPOINT_CONFIG = {
     },
     patterns = {
         inherit_global = true,
-        disabled_patterns = {},
-        custom_patterns = {}
+        disabled = {},
+        custom = {}
     },
     rate_limiting = {
         enabled = true
@@ -30,7 +35,13 @@ local DEFAULT_ENDPOINT_CONFIG = {
     fields = {
         required = {},
         max_length = {},
-        ignore_fields = {"_csrf", "_token", "csrf_token", "authenticity_token", "captcha", "g-recaptcha-response", "h-captcha-response"}
+        ignore = {"_csrf", "_token", "csrf_token", "authenticity_token", "captcha", "g-recaptcha-response", "h-captcha-response"},
+        expected = {},
+        honeypot = {},
+        hash = {
+            enabled = false,
+            fields = {}
+        }
     },
     actions = {
         on_block = "reject",
@@ -142,8 +153,8 @@ end
 local function merge_patterns(global_patterns, endpoint_patterns)
     local result = {
         inherit_global = true,
-        disabled_patterns = {},
-        custom_patterns = {}
+        disabled = {},
+        custom = {}
     }
 
     if not endpoint_patterns then
@@ -152,15 +163,16 @@ local function merge_patterns(global_patterns, endpoint_patterns)
 
     result.inherit_global = endpoint_patterns.inherit_global ~= false
 
-    if endpoint_patterns.disabled_patterns then
-        for _, pattern in ipairs(endpoint_patterns.disabled_patterns) do
-            result.disabled_patterns[pattern] = true
+    -- Support canonical name (disabled) and legacy (disabled_patterns)
+    local disabled_list = endpoint_patterns.disabled or endpoint_patterns.disabled_patterns
+    if disabled_list then
+        for _, pattern in ipairs(disabled_list) do
+            result.disabled[pattern] = true
         end
     end
 
-    if endpoint_patterns.custom_patterns then
-        result.custom_patterns = endpoint_patterns.custom_patterns
-    end
+    -- Support canonical name (custom) and legacy (custom_patterns)
+    result.custom = endpoint_patterns.custom or endpoint_patterns.custom_patterns or {}
 
     return result
 end
@@ -215,15 +227,17 @@ local function merge_fields(endpoint_fields)
         end
     end
 
-    if endpoint_fields.ignore_fields then
+    -- Support canonical name (ignore) and legacy (ignore_fields)
+    local ignore_list = endpoint_fields.ignore or endpoint_fields.ignore_fields
+    if ignore_list then
         -- Merge ignore fields (add to defaults)
         local ignore_set = {}
-        for _, f in ipairs(result.ignore_fields) do
+        for _, f in ipairs(result.ignore) do
             ignore_set[f] = true
         end
-        for _, f in ipairs(endpoint_fields.ignore_fields) do
+        for _, f in ipairs(ignore_list) do
             if not ignore_set[f] then
-                table.insert(result.ignore_fields, f)
+                table.insert(result.ignore, f)
             end
         end
     end
@@ -233,14 +247,30 @@ local function merge_fields(endpoint_fields)
         result.honeypot = endpoint_fields.honeypot
     end
 
-    -- Copy expected fields (for unexpected field detection)
-    if endpoint_fields.expected_fields then
-        result.expected_fields = endpoint_fields.expected_fields
+    -- Support canonical name (expected) and legacy (expected_fields)
+    local expected_list = endpoint_fields.expected or endpoint_fields.expected_fields
+    if expected_list then
+        result.expected = expected_list
     end
 
-    -- Copy hash_content config (which fields to hash)
-    if endpoint_fields.hash_content then
-        result.hash_content = endpoint_fields.hash_content
+    -- Support canonical name (hash) and legacy (hash_content)
+    local hash_config = endpoint_fields.hash or endpoint_fields.hash_content
+    if hash_config then
+        if type(hash_config) == "table" then
+            -- New format: {enabled: true, fields: [...]}
+            if hash_config.enabled ~= nil or hash_config.fields then
+                result.hash = {
+                    enabled = hash_config.enabled ~= false,
+                    fields = hash_config.fields or {}
+                }
+            else
+                -- Legacy format: array of field names (hash_content was just a list)
+                result.hash = {
+                    enabled = true,
+                    fields = hash_config
+                }
+            end
+        end
     end
 
     return result
@@ -316,8 +346,8 @@ function _M.resolve(endpoint_config)
             },
             patterns = {
                 inherit_global = true,
-                disabled_patterns = {},
-                custom_patterns = {}
+                disabled = {},
+                custom = {}
             },
             rate_limiting = {
                 enabled = true,
@@ -441,7 +471,7 @@ function _M.is_pattern_disabled(resolved_config, pattern_flag)
         return false
     end
 
-    return resolved_config.patterns.disabled_patterns[pattern_flag] == true
+    return resolved_config.patterns.disabled[pattern_flag] == true
 end
 
 -- Get additional keywords for this endpoint
@@ -462,7 +492,7 @@ function _M.get_custom_patterns(resolved_config)
         return {}
     end
 
-    return resolved_config.patterns.custom_patterns or {}
+    return resolved_config.patterns.custom or {}
 end
 
 -- Check if global keywords should be used
@@ -484,9 +514,9 @@ end
 -- Get fields to ignore during hashing
 function _M.get_ignore_fields(resolved_config)
     if not resolved_config or not resolved_config.fields then
-        return DEFAULT_ENDPOINT_CONFIG.fields.ignore_fields
+        return DEFAULT_ENDPOINT_CONFIG.fields.ignore
     end
-    return resolved_config.fields.ignore_fields or DEFAULT_ENDPOINT_CONFIG.fields.ignore_fields
+    return resolved_config.fields.ignore or DEFAULT_ENDPOINT_CONFIG.fields.ignore
 end
 
 -- Validate field requirements

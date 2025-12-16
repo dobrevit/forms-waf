@@ -19,6 +19,11 @@ import { useToast } from '@/components/ui/use-toast'
 import { ArrowLeft, Save, Plus, X, Globe, Server, Info, BookOpen, Trash2, CheckCircle, Hash, EyeOff, ShieldCheck, ShieldAlert, Bug, Mail, Check } from 'lucide-react'
 import type { Endpoint, Vhost, Thresholds, EndpointCaptchaConfig, CaptchaProvider } from '@/api/types'
 
+// Canonical field locations:
+//   fields.ignore (not ignore_fields)
+//   fields.honeypot (not security.honeypot_fields)
+//   fields.hash (not hash_content at root)
+//   security contains action/score settings only
 const defaultEndpoint: Partial<Endpoint> = {
   enabled: true,
   mode: 'monitoring',
@@ -36,8 +41,13 @@ const defaultEndpoint: Partial<Endpoint> = {
   fields: {
     required: [],
     max_length: {},
-    ignore_fields: [],
+    ignore: [],  // Canonical name
     expected: [],
+    honeypot: [],  // Canonical location for honeypot field names
+    hash: {  // Canonical location for hash config
+      enabled: false,  // Disabled by default - user must explicitly enable and specify fields
+      fields: [],
+    },
     unexpected_action: 'flag',
   },
   rate_limiting: {
@@ -53,12 +63,8 @@ const defaultEndpoint: Partial<Endpoint> = {
     on_block: 'reject',
     log_level: 'info',
   },
-  hash_content: {
-    enabled: false,  // Disabled by default - user must explicitly enable and specify fields
-    fields: [],
-  },
   security: {
-    honeypot_fields: [],
+    // Honeypot action/score settings (field names are in fields.honeypot)
     honeypot_action: 'block',
     honeypot_score: 50,
     check_disposable_email: false,
@@ -176,9 +182,20 @@ export function EndpointForm() {
           additional_flagged: Array.isArray(endpoint.keywords.additional_flagged) ? endpoint.keywords.additional_flagged : [],
         } : defaultEndpoint.keywords,
         fields: endpoint.fields ? {
+          ...endpoint.fields,
           required: Array.isArray(endpoint.fields.required) ? endpoint.fields.required : [],
           max_length: typeof endpoint.fields.max_length === 'object' ? endpoint.fields.max_length : {},
+          ignore: Array.isArray(endpoint.fields.ignore) ? endpoint.fields.ignore : [],
+          expected: Array.isArray(endpoint.fields.expected) ? endpoint.fields.expected : [],
+          honeypot: Array.isArray(endpoint.fields.honeypot) ? endpoint.fields.honeypot : [],
+          hash: endpoint.fields.hash ? {
+            enabled: endpoint.fields.hash.enabled === true,
+            fields: Array.isArray(endpoint.fields.hash.fields) ? endpoint.fields.hash.fields : [],
+          } : defaultEndpoint.fields?.hash,
         } : defaultEndpoint.fields,
+        security: endpoint.security ? {
+          ...endpoint.security,
+        } : defaultEndpoint.security,
       }
       setFormData(normalized)
     }
@@ -266,14 +283,17 @@ export function EndpointForm() {
   }
 
   const addToHashFields = (fieldName: string) => {
-    const hashFields = Array.isArray(formData.hash_content?.fields) ? formData.hash_content.fields : []
+    const hashFields = Array.isArray(formData.fields?.hash?.fields) ? formData.fields.hash.fields : []
     if (!hashFields.includes(fieldName)) {
       setFormData({
         ...formData,
-        hash_content: {
-          ...formData.hash_content,
-          enabled: true,
-          fields: [...hashFields, fieldName],
+        fields: {
+          ...formData.fields,
+          hash: {
+            ...formData.fields?.hash,
+            enabled: true,
+            fields: [...hashFields, fieldName],
+          },
         },
       })
       toast({ title: `Added "${fieldName}" to hash fields` })
@@ -281,13 +301,13 @@ export function EndpointForm() {
   }
 
   const addToIgnoreFields = (fieldName: string) => {
-    const ignoreFields = Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []
+    const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
     if (!ignoreFields.includes(fieldName)) {
       setFormData({
         ...formData,
         fields: {
           ...formData.fields,
-          ignore_fields: [...ignoreFields, fieldName],
+          ignore: [...ignoreFields, fieldName],
         },
       })
       toast({ title: `Added "${fieldName}" to ignored fields` })
@@ -309,13 +329,13 @@ export function EndpointForm() {
   }
 
   const addToHoneypotFields = (fieldName: string) => {
-    const honeypotFields = Array.isArray(formData.security?.honeypot_fields) ? formData.security.honeypot_fields : []
+    const honeypotFields = Array.isArray(formData.fields?.honeypot) ? formData.fields.honeypot : []
     if (!honeypotFields.includes(fieldName)) {
       setFormData({
         ...formData,
-        security: {
-          ...formData.security,
-          honeypot_fields: [...honeypotFields, fieldName],
+        fields: {
+          ...formData.fields,
+          honeypot: [...honeypotFields, fieldName],
         },
       })
       toast({ title: `Added "${fieldName}" to honeypot fields` })
@@ -968,13 +988,13 @@ export function EndpointForm() {
                     <Select
                       value={newIgnoreField}
                       onValueChange={(value) => {
-                        const ignoreFields = Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []
+                        const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
                         if (value && !ignoreFields.includes(value)) {
                           setFormData({
                             ...formData,
                             fields: {
                               ...formData.fields,
-                              ignore_fields: [...ignoreFields, value],
+                              ignore: [...ignoreFields, value],
                             },
                           })
                         }
@@ -986,7 +1006,7 @@ export function EndpointForm() {
                       </SelectTrigger>
                       <SelectContent>
                         {COMMON_IGNORE_FIELDS.filter(
-                          (f) => !(Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []).includes(f)
+                          (f) => !(Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []).includes(f)
                         ).map((field) => (
                           <SelectItem key={field} value={field}>
                             {field}
@@ -1002,13 +1022,13 @@ export function EndpointForm() {
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && newIgnoreField) {
                           e.preventDefault()
-                          const ignoreFields = Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []
+                          const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
                           if (!ignoreFields.includes(newIgnoreField)) {
                             setFormData({
                               ...formData,
                               fields: {
                                 ...formData.fields,
-                                ignore_fields: [...ignoreFields, newIgnoreField],
+                                ignore: [...ignoreFields, newIgnoreField],
                               },
                             })
                           }
@@ -1020,13 +1040,13 @@ export function EndpointForm() {
                       type="button"
                       onClick={() => {
                         if (newIgnoreField) {
-                          const ignoreFields = Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []
+                          const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
                           if (!ignoreFields.includes(newIgnoreField)) {
                             setFormData({
                               ...formData,
                               fields: {
                                 ...formData.fields,
-                                ignore_fields: [...ignoreFields, newIgnoreField],
+                                ignore: [...ignoreFields, newIgnoreField],
                               },
                             })
                           }
@@ -1039,7 +1059,7 @@ export function EndpointForm() {
                   </div>
 
                   {(() => {
-                    const ignoreFields = Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []
+                    const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
                     return ignoreFields.length > 0 ? (
                       <div className="flex flex-wrap gap-2">
                         {ignoreFields.map((field) => (
@@ -1055,7 +1075,7 @@ export function EndpointForm() {
                                   ...formData,
                                   fields: {
                                     ...formData.fields,
-                                    ignore_fields: ignoreFields.filter((f) => f !== field),
+                                    ignore: ignoreFields.filter((f) => f !== field),
                                   },
                                 })
                               }
@@ -1252,19 +1272,19 @@ export function EndpointForm() {
               <CardContent className="space-y-6">
                 <div className="flex items-center space-x-2">
                   <Switch
-                    id="hash_content_enabled"
-                    checked={formData.hash_content?.enabled === true}
+                    id="hash_enabled"
+                    checked={formData.fields?.hash?.enabled === true}
                     onCheckedChange={(checked) =>
                       setFormData({
                         ...formData,
-                        hash_content: { ...formData.hash_content, enabled: checked },
+                        fields: { ...formData.fields, hash: { ...formData.fields?.hash, enabled: checked } },
                       })
                     }
                   />
-                  <Label htmlFor="hash_content_enabled">Enable Content Hashing</Label>
+                  <Label htmlFor="hash_enabled">Enable Content Hashing</Label>
                 </div>
 
-                {formData.hash_content?.enabled && (
+                {formData.fields?.hash?.enabled && (
                   <div className="space-y-4">
                     <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
                       <div className="flex items-start gap-3">
@@ -1293,14 +1313,13 @@ export function EndpointForm() {
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && newHashField) {
                               e.preventDefault()
-                              const hashFields = Array.isArray(formData.hash_content?.fields) ? formData.hash_content.fields : []
+                              const hashFields = Array.isArray(formData.fields?.hash?.fields) ? formData.fields.hash.fields : []
                               if (!hashFields.includes(newHashField)) {
                                 setFormData({
                                   ...formData,
-                                  hash_content: {
-                                    ...formData.hash_content,
-                                    enabled: true,
-                                    fields: [...hashFields, newHashField],
+                                  fields: {
+                                    ...formData.fields,
+                                    hash: { ...formData.fields?.hash, enabled: true, fields: [...hashFields, newHashField] },
                                   },
                                 })
                               }
@@ -1312,14 +1331,13 @@ export function EndpointForm() {
                           type="button"
                           onClick={() => {
                             if (newHashField) {
-                              const hashFields = Array.isArray(formData.hash_content?.fields) ? formData.hash_content.fields : []
+                              const hashFields = Array.isArray(formData.fields?.hash?.fields) ? formData.fields.hash.fields : []
                               if (!hashFields.includes(newHashField)) {
                                 setFormData({
                                   ...formData,
-                                  hash_content: {
-                                    ...formData.hash_content,
-                                    enabled: true,
-                                    fields: [...hashFields, newHashField],
+                                  fields: {
+                                    ...formData.fields,
+                                    hash: { ...formData.fields?.hash, enabled: true, fields: [...hashFields, newHashField] },
                                   },
                                 })
                               }
@@ -1332,7 +1350,7 @@ export function EndpointForm() {
                       </div>
 
                       {(() => {
-                        const hashFields = Array.isArray(formData.hash_content?.fields) ? formData.hash_content.fields : []
+                        const hashFields = Array.isArray(formData.fields?.hash?.fields) ? formData.fields.hash.fields : []
                         return hashFields.length > 0 ? (
                           <div className="flex flex-wrap gap-2 mt-2">
                             {hashFields.map((field) => (
@@ -1346,10 +1364,9 @@ export function EndpointForm() {
                                   onClick={() =>
                                     setFormData({
                                       ...formData,
-                                      hash_content: {
-                                        ...formData.hash_content,
-                                        enabled: true,
-                                        fields: hashFields.filter((f) => f !== field),
+                                      fields: {
+                                        ...formData.fields,
+                                        hash: { ...formData.fields?.hash, enabled: true, fields: hashFields.filter((f) => f !== field) },
                                       },
                                     })
                                   }
@@ -1370,7 +1387,7 @@ export function EndpointForm() {
                   </div>
                 )}
 
-                {!formData.hash_content?.enabled && (
+                {!formData.fields?.hash?.enabled && (
                   <p className="text-sm text-muted-foreground">
                     Content hashing is disabled. Enable it to detect duplicate form submissions.
                   </p>
@@ -1929,17 +1946,17 @@ export function EndpointForm() {
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && newHoneypotField) {
                             e.preventDefault()
-                            const honeypotFields = Array.isArray((formData as any).security?.honeypot_fields)
-                              ? (formData as any).security.honeypot_fields
+                            const honeypotFields = Array.isArray(formData.fields?.honeypot)
+                              ? formData.fields.honeypot
                               : []
                             if (!honeypotFields.includes(newHoneypotField)) {
                               setFormData({
                                 ...formData,
-                                security: {
-                                  ...(formData as any).security,
-                                  honeypot_fields: [...honeypotFields, newHoneypotField],
+                                fields: {
+                                  ...formData.fields,
+                                  honeypot: [...honeypotFields, newHoneypotField],
                                 },
-                              } as any)
+                              })
                             }
                             setNewHoneypotField('')
                           }
@@ -1949,17 +1966,17 @@ export function EndpointForm() {
                         type="button"
                         onClick={() => {
                           if (newHoneypotField) {
-                            const honeypotFields = Array.isArray((formData as any).security?.honeypot_fields)
-                              ? (formData as any).security.honeypot_fields
+                            const honeypotFields = Array.isArray(formData.fields?.honeypot)
+                              ? formData.fields.honeypot
                               : []
                             if (!honeypotFields.includes(newHoneypotField)) {
                               setFormData({
                                 ...formData,
-                                security: {
-                                  ...(formData as any).security,
-                                  honeypot_fields: [...honeypotFields, newHoneypotField],
+                                fields: {
+                                  ...formData.fields,
+                                  honeypot: [...honeypotFields, newHoneypotField],
                                 },
-                              } as any)
+                              })
                             }
                             setNewHoneypotField('')
                           }
@@ -1970,8 +1987,8 @@ export function EndpointForm() {
                     </div>
 
                     {(() => {
-                      const honeypotFields = Array.isArray((formData as any).security?.honeypot_fields)
-                        ? (formData as any).security.honeypot_fields
+                      const honeypotFields = Array.isArray(formData.fields?.honeypot)
+                        ? formData.fields.honeypot
                         : []
                       return honeypotFields.length > 0 ? (
                         <div className="flex flex-wrap gap-2">
@@ -1987,11 +2004,11 @@ export function EndpointForm() {
                                 onClick={() =>
                                   setFormData({
                                     ...formData,
-                                    security: {
-                                      ...(formData as any).security,
-                                      honeypot_fields: honeypotFields.filter((f: string) => f !== field),
+                                    fields: {
+                                      ...formData.fields,
+                                      honeypot: honeypotFields.filter((f: string) => f !== field),
                                     },
-                                  } as any)
+                                  })
                                 }
                                 className="ml-1 hover:text-red-600"
                               >
@@ -2312,10 +2329,10 @@ export function EndpointForm() {
                           <tbody className="divide-y">
                             {learnedFields.map((field) => {
                               const required = Array.isArray(formData.fields?.required) ? formData.fields.required : []
-                              const hashFields = Array.isArray(formData.hash_content?.fields) ? formData.hash_content.fields : []
-                              const ignoreFields = Array.isArray(formData.fields?.ignore_fields) ? formData.fields.ignore_fields : []
+                              const hashFields = Array.isArray(formData.fields?.hash?.fields) ? formData.fields.hash.fields : []
+                              const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
                               const expectedFields = Array.isArray(formData.fields?.expected) ? formData.fields.expected : []
-                              const honeypotFields = Array.isArray(formData.security?.honeypot_fields) ? formData.security.honeypot_fields : []
+                              const honeypotFields = Array.isArray(formData.fields?.honeypot) ? formData.fields.honeypot : []
 
                               const isRequired = required.includes(field.name)
                               const isHashed = hashFields.includes(field.name)

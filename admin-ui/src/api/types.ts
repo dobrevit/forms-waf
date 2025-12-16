@@ -54,7 +54,8 @@ export interface VhostKeywords {
   inherit_global: boolean
   additional_blocked?: string[]
   additional_flagged?: string[]
-  exclusions?: string[]
+  excluded_blocked?: string[]  // Canonical: separate arrays for blocked/flagged exclusions
+  excluded_flagged?: string[]
 }
 
 export interface VhostEndpoints {
@@ -103,11 +104,21 @@ export interface EndpointKeywords {
   additional_flagged?: string[]  // Legacy
 }
 
+// Canonical field names:
+//   fields.ignore (not ignore_fields)
+//   fields.expected (not expected_fields)
+//   fields.honeypot (array of field names)
+//   fields.hash (object with enabled/fields)
 export interface EndpointFields {
   required?: string[] | Record<string, unknown>
   max_length?: Record<string, number>
-  ignore_fields?: string[]
+  ignore?: string[]  // Canonical: fields to ignore (CSRF tokens, etc.)
   expected?: string[]  // Expected fields - unexpected fields will trigger action
+  honeypot?: string[]  // Canonical: honeypot field names (action/score in security)
+  hash?: {  // Canonical: hash configuration
+    enabled: boolean
+    fields?: string[]  // Only hash these specific fields
+  }
   unexpected_action?: 'flag' | 'block' | 'ignore' | 'filter'  // Action for unexpected fields
 }
 
@@ -119,8 +130,8 @@ export interface EndpointRateLimiting {
 
 export interface EndpointPatterns {
   inherit_global: boolean
-  disabled_patterns?: Record<string, boolean>
-  custom_patterns?: Record<string, unknown>
+  disabled?: Record<string, boolean>  // Canonical: disabled patterns
+  custom?: Record<string, unknown>  // Canonical: custom patterns
 }
 
 export interface EndpointActions {
@@ -129,9 +140,15 @@ export interface EndpointActions {
   log_level?: 'debug' | 'info' | 'warn' | 'error'
 }
 
-export interface EndpointHashContent {
-  enabled: boolean
-  fields?: string[]  // Only hash these specific fields
+// Security settings (honeypot action/score, disposable email checks, etc.)
+// Honeypot field NAMES are in fields.honeypot, but action/score are here
+export interface EndpointSecurity {
+  honeypot_action?: 'block' | 'flag'  // Action when honeypot triggered
+  honeypot_score?: number  // Score to add if honeypot_action is 'flag'
+  check_disposable_email?: boolean
+  disposable_email_action?: 'flag' | 'block' | 'ignore'
+  disposable_email_score?: number
+  check_field_anomalies?: boolean  // Detect bot-like field patterns
 }
 
 export interface Endpoint {
@@ -146,10 +163,10 @@ export interface Endpoint {
   thresholds?: EndpointThresholds
   keywords?: EndpointKeywords
   fields?: EndpointFields
+  security?: EndpointSecurity  // Security settings (honeypot action, disposable email, etc.)
   rate_limiting?: EndpointRateLimiting
   patterns?: EndpointPatterns
   actions?: EndpointActions
-  hash_content?: EndpointHashContent
 }
 
 // Config types
@@ -247,7 +264,7 @@ export interface EndpointCaptchaConfig {
   exempt_ips?: string[]       // IPs to skip CAPTCHA
 }
 
-// Extended Endpoint with CAPTCHA
+// Extended Endpoint with CAPTCHA (inherits security from Endpoint)
 export interface EndpointWithCaptcha extends Endpoint {
   captcha?: EndpointCaptchaConfig
 }

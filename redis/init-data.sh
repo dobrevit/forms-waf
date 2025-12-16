@@ -260,7 +260,8 @@ DEFAULT_VHOST='{
     "inherit_global": true,
     "additional_blocked": [],
     "additional_flagged": [],
-    "exclusions": []
+    "excluded_blocked": [],
+    "excluded_flagged": []
   }
 }'
 redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:vhosts:config:_default" "$DEFAULT_VHOST"
@@ -292,7 +293,8 @@ MAIN_WEBSITE_VHOST='{
     "inherit_global": true,
     "additional_blocked": ["competitor-spam"],
     "additional_flagged": ["promo:5", "deal:5"],
-    "exclusions": []
+    "excluded_blocked": [],
+    "excluded_flagged": []
   },
   "endpoints": {
     "inherit_global": true,
@@ -362,7 +364,8 @@ CUSTOMER_WILDCARD_VHOST='{
   },
   "keywords": {
     "inherit_global": true,
-    "exclusions": ["free"]
+    "excluded_blocked": ["free"],
+    "excluded_flagged": ["free"]
   }
 }'
 redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:vhosts:config:customer-sites" "$CUSTOMER_WILDCARD_VHOST"
@@ -418,7 +421,8 @@ PARTNER_VHOST='{
   },
   "keywords": {
     "inherit_global": true,
-    "exclusions": ["investment", "opportunity", "subscribe"],
+    "excluded_blocked": ["investment", "opportunity", "subscribe"],
+    "excluded_flagged": ["investment", "opportunity", "subscribe"],
     "additional_flagged": ["unauthorized:20", "reseller:10"]
   },
   "endpoints": {

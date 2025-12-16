@@ -531,15 +531,22 @@ function _M.get_ignore_fields(context)
     return {"_csrf", "_token", "csrf_token", "authenticity_token", "captcha", "g-recaptcha-response", "h-captcha-response"}
 end
 
--- Get hash_content configuration
+-- Get hash configuration
 -- Returns: { enabled = bool, fields = {field1, field2, ...} }
-function _M.get_hash_content_config(context)
-    if context and context.endpoint and context.endpoint.hash_content then
-        return context.endpoint.hash_content
+-- Canonical location: fields.hash
+function _M.get_hash_config(context)
+    if context and context.endpoint and context.endpoint.fields then
+        local fields_config = context.endpoint.fields
+        if fields_config.hash then
+            return fields_config.hash
+        end
     end
     -- Default: disabled (user must explicitly enable and specify fields)
     return { enabled = false, fields = {} }
 end
+
+-- Backward compatibility alias
+_M.get_hash_content_config = _M.get_hash_config
 
 -- Get expected fields for the endpoint (optional fields that are allowed)
 -- Returns: array of expected field names, or empty array if not configured
@@ -579,13 +586,20 @@ end
 
 -- Get honeypot fields for the endpoint
 -- Returns: array of honeypot field names, or empty array if not configured
+-- Canonical location: fields.honeypot (honeypot action/score in security)
 function _M.get_honeypot_fields(context)
-    if context and context.endpoint and context.endpoint.fields then
+    if not context or not context.endpoint then
+        return {}
+    end
+
+    -- Canonical location: fields.honeypot
+    if context.endpoint.fields then
         local fields_config = context.endpoint.fields
         if fields_config.honeypot and type(fields_config.honeypot) == "table" then
             return fields_config.honeypot
         end
     end
+
     return {}
 end
 
