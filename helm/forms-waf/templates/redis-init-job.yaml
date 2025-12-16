@@ -94,7 +94,7 @@ spec:
               # Virtual host: {{ $vhost.id }}
               VHOST_{{ $vhost.id | replace "-" "_" }}='{{ $vhost.config | toJson }}'
               redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:vhosts:config:{{ $vhost.id }}" "$VHOST_{{ $vhost.id | replace "-" "_" }}"
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD "waf:vhosts:index" "{{ $vhost.id }}"
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:vhosts:index" {{ $vhost.priority | default 100 }} "{{ $vhost.id }}"
               {{- range $hostname := $vhost.hostnames }}
               {{- if hasPrefix "*" $hostname }}
               redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:vhosts:hosts:wildcard" {{ $vhost.priority | default 100 }} "{{ $hostname }}|{{ $vhost.id }}"
@@ -109,7 +109,7 @@ spec:
               echo "Blocked keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:blocked)"
               echo "Flagged keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:flagged)"
               echo "Whitelisted IPs: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:whitelist:ips)"
-              echo "Virtual hosts: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:vhosts:index)"
+              echo "Virtual hosts: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZCARD waf:vhosts:index)"
               {{- if .Values.adminUI.enabled }}
               echo "Admin users: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" KEYS 'waf:admin:users:*' | wc -l)"
               echo ""
