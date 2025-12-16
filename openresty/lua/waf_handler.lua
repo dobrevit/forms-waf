@@ -540,20 +540,25 @@ function _M.process_request()
             if hp_value and hp_value ~= "" then
                 -- Honeypot triggered!
                 table.insert(spam_flags, "honeypot:" .. hp_field)
+
+                ngx.log(ngx.WARN, string.format(
+                    "HONEYPOT: ip=%s host=%s path=%s field=%s value=%s action=%s",
+                    client_ip, host, path, hp_field, tostring(hp_value):sub(1, 50), security.honeypot_action
+                ))
+
+                -- Structured audit log for honeypot
+                audit_log("honeypot_triggered", {
+                    vhost_id = summary.vhost_id,
+                    endpoint_id = summary.endpoint_id,
+                    honeypot_field = hp_field,
+                    value_preview = tostring(hp_value):sub(1, 50),
+                    action = security.honeypot_action,
+                })
+
                 if security.honeypot_action == "block" then
+                    -- Set blocked flag - actual blocking respects mode (monitoring vs blocking)
                     blocked = true
                     block_reason = "honeypot_triggered"
-                    ngx.log(ngx.WARN, string.format(
-                        "HONEYPOT: ip=%s host=%s path=%s field=%s value=%s",
-                        client_ip, host, path, hp_field, tostring(hp_value):sub(1, 50)
-                    ))
-                    -- Structured audit log for honeypot
-                    audit_log("honeypot_triggered", {
-                        vhost_id = summary.vhost_id,
-                        endpoint_id = summary.endpoint_id,
-                        honeypot_field = hp_field,
-                        value_preview = tostring(hp_value):sub(1, 50),
-                    })
                     -- Send webhook notification for honeypot trigger
                     webhooks.notify_honeypot(context, hp_field)
                 else
@@ -625,7 +630,8 @@ function _M.process_request()
     -- Step 2: Content hashing
     -- Inverted paradigm: if specific fields configured, hash ONLY those
     -- This prevents bots from changing hash by adding random fields
-    local hash_config = vhost_resolver.get_hash_content_config(context)
+    -- Canonical location: fields.hash = { enabled: bool, fields: [...] }
+    local hash_config = vhost_resolver.get_hash_config(context)
     local form_hash
 
     if hash_config.enabled and hash_config.fields and #hash_config.fields > 0 then
@@ -835,6 +841,9 @@ function _M.process_request()
         ngx.req.set_header("X-Submission-Fingerprint", submission_fingerprint)
     end
 
+    -- Determine if we should actually block
+    local should_block = blocked and vhost_resolver.should_block(context)
+
     -- Set response headers for debugging (only if expose_waf_headers is enabled)
     if expose_headers then
         if form_hash and form_hash ~= "empty" then
@@ -846,17 +855,17 @@ function _M.process_request()
         if submission_fingerprint then
             ngx.header["X-Submission-Fingerprint"] = submission_fingerprint
         end
-    end
 
-    -- Determine if we should actually block
-    local should_block = blocked and vhost_resolver.should_block(context)
+        -- Always show blocked state and reason when debug headers enabled
+        if blocked then
+            ngx.header["X-WAF-Would-Block"] = "true"
+            ngx.header["X-WAF-Block-Reason"] = block_reason
+            ngx.header["X-WAF-Blocked"] = should_block and "true" or "false"
+        end
+    end
 
     -- In monitoring mode, log but don't block
     if blocked and not should_block then
-        if expose_headers then
-            ngx.header["X-WAF-Would-Block"] = "true"
-            ngx.header["X-WAF-Block-Reason"] = block_reason
-        end
         ngx.log(ngx.WARN, string.format(
             "MONITORING (would block): ip=%s host=%s path=%s vhost=%s endpoint=%s reason=%s score=%d hash=%s flags=%s",
             client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",

@@ -343,7 +343,8 @@ redisInit:
           inherit_global: true
           additional_blocked: []
           additional_flagged: []
-          exclusions: []
+          excluded_blocked: []  # Canonical: separate arrays for blocked/flagged exclusions
+          excluded_flagged: []
         endpoints:
           inherit_global: true
 
