@@ -79,6 +79,8 @@ spec:
                 "password_hash": "${ADMIN_HASH}",
                 "salt": "${ADMIN_SALT}",
                 "role": "admin",
+                "vhost_scope": ["*"],
+                "auth_provider": "local",
                 "must_change_password": true,
                 "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
               }
@@ -106,8 +108,15 @@ spec:
                   "logs": ["read"],
                   "metrics": ["read", "reset"],
                   "bulk": ["import", "export", "clear"],
-                  "captcha": ["read", "update"],
-                  "security": ["read", "update"]
+                  "captcha": ["create", "read", "update", "delete", "enable", "disable", "test"],
+                  "webhooks": ["read", "update", "test"],
+                  "geoip": ["read", "update", "reload"],
+                  "reputation": ["read", "update"],
+                  "timing": ["read", "update"],
+                  "sync": ["execute"],
+                  "status": ["read"],
+                  "hashes": ["read", "create"],
+                  "whitelist": ["read", "create"]
                 },
                 "scope": "global"
               }
@@ -125,16 +134,20 @@ spec:
                   "vhosts": ["read", "update", "enable", "disable"],
                   "endpoints": ["create", "read", "update", "delete", "enable", "disable"],
                   "keywords": ["create", "read", "update", "delete"],
-                  "config": ["read", "update"],
-                  "users": [],
-                  "providers": [],
+                  "config": ["read"],
                   "logs": ["read"],
                   "metrics": ["read"],
                   "bulk": ["import", "export"],
-                  "captcha": ["read", "update"],
-                  "security": ["read", "update"]
+                  "captcha": ["read"],
+                  "webhooks": ["read"],
+                  "geoip": ["read"],
+                  "reputation": ["read"],
+                  "timing": ["read"],
+                  "status": ["read"],
+                  "hashes": ["read", "create"],
+                  "whitelist": ["read"]
                 },
-                "scope": "vhost"
+                "scope": "vhost-scoped"
               }
               ROLEEOF
               )
@@ -151,19 +164,26 @@ spec:
                   "endpoints": ["read"],
                   "keywords": ["read"],
                   "config": ["read"],
-                  "users": [],
-                  "providers": [],
                   "logs": ["read"],
                   "metrics": ["read"],
-                  "bulk": ["export"],
                   "captcha": ["read"],
-                  "security": ["read"]
+                  "webhooks": ["read"],
+                  "geoip": ["read"],
+                  "reputation": ["read"],
+                  "timing": ["read"],
+                  "status": ["read"],
+                  "hashes": ["read"],
+                  "whitelist": ["read"]
                 },
-                "scope": "vhost"
+                "scope": "vhost-scoped"
               }
               ROLEEOF
               )
               redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:auth:roles:config:viewer" "$VIEWER_ROLE_JSON"
+
+              # Create role index
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD "waf:auth:roles:index" "admin" "operator" "viewer"
+
               echo "Created 3 RBAC roles: admin, operator, viewer"
               {{- end }}
 

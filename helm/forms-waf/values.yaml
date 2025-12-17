@@ -29,15 +29,15 @@ openresty:
 
   resources:
     limits:
-      cpu: 500m
+      cpu: 250m
       memory: 512Mi
     requests:
-      cpu: 100m
+      cpu: 10m
       memory: 128Mi
 
   # Autoscaling (only for Deployment)
   autoscaling:
-    enabled: false
+    enabled: true
     minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 80
@@ -126,10 +126,10 @@ haproxy:
 
   resources:
     limits:
-      cpu: 500m
+      cpu: 250m
       memory: 512Mi
     requests:
-      cpu: 100m
+      cpu: 10m
       memory: 128Mi
 
   # Environment variables
