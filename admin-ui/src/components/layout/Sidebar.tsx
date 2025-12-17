@@ -17,6 +17,8 @@ import {
   MapPin,
   ShieldAlert,
   Info,
+  Users,
+  KeyRound,
 } from 'lucide-react'
 
 const navigation = [
@@ -57,6 +59,13 @@ const navigation = [
     children: [
       { name: 'Webhooks', href: '/operations/webhooks', icon: Bell },
       { name: 'Bulk Import/Export', href: '/operations/bulk', icon: FileJson },
+    ],
+  },
+  {
+    name: 'Admin',
+    children: [
+      { name: 'User Management', href: '/admin/users', icon: Users },
+      { name: 'Auth Providers', href: '/admin/providers', icon: KeyRound },
     ],
   },
   { name: 'About', href: '/about', icon: Info },

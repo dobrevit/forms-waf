@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { vhostsApi } from '@/api/client'
+import { usePermissions } from '@/hooks/usePermissions'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
@@ -25,15 +26,28 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Search, Pencil, Trash2, Globe, TestTube, Route } from 'lucide-react'
+import { Plus, Search, Pencil, Trash2, Globe, TestTube, Route, Copy } from 'lucide-react'
 import type { Vhost } from '@/api/types'
 
 export function VhostList() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const {
+    canCreateVhost,
+    canEditVhost,
+    canDeleteVhost,
+    canEnableVhost,
+    canDisableVhost,
+    hasVhostAccess,
+    isReadOnly
+  } = usePermissions()
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [copySourceId, setCopySourceId] = useState<string | null>(null)
+  const [copyNewId, setCopyNewId] = useState('')
+  const [copyNewName, setCopyNewName] = useState('')
   const [testHost, setTestHost] = useState('')
   const [testResult, setTestResult] = useState<unknown>(null)
 
@@ -88,17 +102,53 @@ export function VhostList() {
     },
   })
 
+  const copyMutation = useMutation({
+    mutationFn: async ({ sourceId, newId, newName }: { sourceId: string; newId: string; newName: string }) => {
+      const response = await vhostsApi.get(sourceId)
+      const original = (response as { vhost?: Vhost })?.vhost || response as Vhost
+      const copy = {
+        ...original,
+        id: newId,
+        name: newName,
+        enabled: false,  // Disabled by default
+        hostnames: [],   // Clear hostnames to avoid routing conflicts
+      }
+      return vhostsApi.create(copy)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['vhosts'] })
+      toast({ title: 'Virtual host copied', description: 'The copy is disabled by default' })
+      setCopySourceId(null)
+      setCopyNewId('')
+      setCopyNewName('')
+    },
+    onError: (error) => {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to copy',
+        variant: 'destructive',
+      })
+    },
+  })
+
   // Ensure arrays (Lua cjson may encode empty arrays as objects)
   const rawVhosts = (data as { vhosts: Vhost[] } | undefined)?.vhosts
   const vhosts = (Array.isArray(rawVhosts) ? rawVhosts : []) as Vhost[]
-  const filteredVhosts = vhosts.filter((v) => {
-    const hostnames = Array.isArray(v.hostnames) ? v.hostnames : []
-    return (
-      v.id.toLowerCase().includes(search.toLowerCase()) ||
-      v.name?.toLowerCase().includes(search.toLowerCase()) ||
-      hostnames.some((h) => h.toLowerCase().includes(search.toLowerCase()))
-    )
-  })
+  // Filter vhosts by search and user's vhost scope
+  const filteredVhosts = useMemo(() => {
+    return vhosts.filter((v) => {
+      // First check vhost scope access
+      if (!hasVhostAccess(v.id)) return false
+
+      // Then apply search filter
+      const hostnames = Array.isArray(v.hostnames) ? v.hostnames : []
+      return (
+        v.id.toLowerCase().includes(search.toLowerCase()) ||
+        v.name?.toLowerCase().includes(search.toLowerCase()) ||
+        hostnames.some((h) => h.toLowerCase().includes(search.toLowerCase()))
+      )
+    })
+  }, [vhosts, search, hasVhostAccess])
 
   const getModeColor = (mode: string) => {
     switch (mode) {
@@ -115,6 +165,20 @@ export function VhostList() {
     }
   }
 
+  // Check if ID already exists
+  const isIdTaken = (id: string) => vhosts.some((v) => v.id === id)
+
+  // Open copy dialog with pre-filled values
+  const openCopyDialog = (vhost: Vhost) => {
+    setCopySourceId(vhost.id)
+    setCopyNewId(`${vhost.id}-copy`)
+    setCopyNewName(`${vhost.name || vhost.id} (Copy)`)
+  }
+
+  // Validate copy form
+  const copyIdError = copyNewId && isIdTaken(copyNewId) ? 'This ID already exists' : ''
+  const canCopy = copyNewId && !copyIdError && !copyMutation.isPending
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -124,12 +188,14 @@ export function VhostList() {
             Manage host-based routing and WAF configuration
           </p>
         </div>
-        <Button asChild>
-          <Link to="/vhosts/new">
-            <Plus className="mr-2 h-4 w-4" />
-            Add Virtual Host
-          </Link>
-        </Button>
+        {canCreateVhost && (
+          <Button asChild>
+            <Link to="/vhosts/new">
+              <Plus className="mr-2 h-4 w-4" />
+              Add Virtual Host
+            </Link>
+          </Button>
+        )}
       </div>
 
       {/* Test Host Matching */}
@@ -266,24 +332,42 @@ export function VhostList() {
                       onCheckedChange={(checked) =>
                         toggleMutation.mutate({ id: vhost.id, enabled: checked })
                       }
-                      disabled={vhost.id === '_default'}
+                      disabled={
+                        vhost.id === '_default' ||
+                        (vhost.enabled ? !canDisableVhost(vhost.id) : !canEnableVhost(vhost.id))
+                      }
                     />
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button variant="ghost" size="icon" asChild>
-                        <Link to={`/vhosts/${vhost.id}`}>
-                          <Pencil className="h-4 w-4" />
-                        </Link>
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setDeleteId(vhost.id)}
-                        disabled={vhost.id === '_default'}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {canEditVhost(vhost.id) && (
+                        <Button variant="ghost" size="icon" asChild>
+                          <Link to={`/vhosts/${vhost.id}`}>
+                            <Pencil className="h-4 w-4" />
+                          </Link>
+                        </Button>
+                      )}
+                      {canCreateVhost && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openCopyDialog(vhost)}
+                          disabled={vhost.id === '_default'}
+                          title="Copy virtual host"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {canDeleteVhost(vhost.id) && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setDeleteId(vhost.id)}
+                          disabled={vhost.id === '_default'}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -309,6 +393,51 @@ export function VhostList() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Copy Confirmation */}
+      <AlertDialog open={!!copySourceId} onOpenChange={() => setCopySourceId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Copy Virtual Host</AlertDialogTitle>
+            <AlertDialogDescription>
+              Create a copy of this virtual host. The copy will be disabled by default
+              and hostnames will be cleared to avoid routing conflicts.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="copy-id">ID</Label>
+              <Input
+                id="copy-id"
+                value={copyNewId}
+                onChange={(e) => setCopyNewId(e.target.value)}
+                placeholder="Enter unique ID"
+              />
+              {copyIdError && (
+                <p className="text-sm text-destructive">{copyIdError}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="copy-name">Name</Label>
+              <Input
+                id="copy-name"
+                value={copyNewName}
+                onChange={(e) => setCopyNewName(e.target.value)}
+                placeholder="Enter display name"
+              />
+            </div>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => copySourceId && copyMutation.mutate({ sourceId: copySourceId, newId: copyNewId, newName: copyNewName })}
+              disabled={!canCopy}
+            >
+              {copyMutation.isPending ? 'Copying...' : 'Copy'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

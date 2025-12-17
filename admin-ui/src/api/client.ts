@@ -68,6 +68,179 @@ export const authApi = {
     }),
 }
 
+// User Management API
+import type { User, UserRole } from './types'
+
+export interface CreateUserRequest {
+  username: string
+  password: string
+  role: UserRole
+  vhost_scope?: string[]
+  display_name?: string
+  email?: string
+}
+
+export interface UpdateUserRequest {
+  role?: UserRole
+  vhost_scope?: string[]
+  display_name?: string
+  email?: string
+}
+
+export const usersApi = {
+  list: () =>
+    request<{ users: User[] }>('/users'),
+
+  get: (username: string) =>
+    request<{ user: User }>(`/users/${encodeURIComponent(username)}`),
+
+  create: (data: CreateUserRequest) =>
+    request<{ created: boolean; user: User }>('/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  update: (username: string, data: UpdateUserRequest) =>
+    request<{ updated: boolean; user: User }>(`/users/${encodeURIComponent(username)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  delete: (username: string) =>
+    request<{ deleted: boolean; username: string }>(`/users/${encodeURIComponent(username)}`, {
+      method: 'DELETE',
+    }),
+
+  resetPassword: (username: string, newPassword: string) =>
+    request<{ reset: boolean; username: string }>(`/users/${encodeURIComponent(username)}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ new_password: newPassword }),
+    }),
+}
+
+// Auth Providers API
+export interface AuthProviderPublic {
+  id: string
+  name: string
+  type: 'oidc' | 'ldap' | 'saml'
+  icon?: string
+}
+
+export interface OIDCConfig {
+  issuer?: string
+  discovery?: string
+  client_id: string
+  client_secret?: string
+  scopes?: string[]
+  ssl_verify?: boolean
+  use_pkce?: boolean
+}
+
+export interface LDAPConfig {
+  host: string
+  port?: number
+  use_ssl?: boolean
+  ssl_verify?: boolean
+  timeout?: number
+  base_dn: string
+  user_base_dn?: string
+  user_dn_template?: string
+  user_filter?: string
+  group_base_dn?: string
+  group_filter?: string
+  group_attribute?: string
+  bind_dn?: string
+  bind_password?: string
+}
+
+export interface RoleMapping {
+  group: string
+  role: 'admin' | 'operator' | 'viewer'
+  vhosts?: string[]
+  priority?: number
+}
+
+export interface RoleMappingConfig {
+  default_role: 'admin' | 'operator' | 'viewer'
+  default_vhosts?: string[]
+  claim_name?: string
+  sync_on_login?: boolean
+  mappings?: RoleMapping[]
+}
+
+export interface AuthProviderConfig {
+  id: string
+  name: string
+  type: 'oidc' | 'ldap' | 'saml'
+  enabled: boolean
+  priority?: number
+  icon?: string
+  oidc?: OIDCConfig
+  ldap?: LDAPConfig
+  role_mapping?: RoleMappingConfig
+  created_at?: string
+  updated_at?: string
+}
+
+export const authProvidersApi = {
+  // Public endpoint - list available providers for login
+  listPublic: () =>
+    request<{ providers: AuthProviderPublic[]; local_auth_enabled: boolean }>('/auth/providers'),
+
+  // Admin endpoints
+  list: () =>
+    request<{ providers: AuthProviderConfig[] }>('/auth/providers/config'),
+
+  get: (id: string) =>
+    request<{ provider: AuthProviderConfig }>(`/auth/providers/config/${encodeURIComponent(id)}`),
+
+  create: (data: Omit<AuthProviderConfig, 'created_at' | 'updated_at'>) =>
+    request<{ created: boolean; provider: AuthProviderConfig }>('/auth/providers/config', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  update: (id: string, data: Partial<AuthProviderConfig>) =>
+    request<{ updated: boolean; provider: AuthProviderConfig }>(`/auth/providers/config/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  delete: (id: string) =>
+    request<{ deleted: boolean; provider_id: string }>(`/auth/providers/config/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  test: (id: string) =>
+    request<{ success: boolean; message: string; issuer?: string }>(`/auth/providers/config/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+    }),
+
+  enable: (id: string) =>
+    request<{ enabled: boolean; provider_id: string }>(`/auth/providers/config/${encodeURIComponent(id)}/enable`, {
+      method: 'POST',
+    }),
+
+  disable: (id: string) =>
+    request<{ disabled: boolean; provider_id: string }>(`/auth/providers/config/${encodeURIComponent(id)}/disable`, {
+      method: 'POST',
+    }),
+
+  // Get SSO login URL (for OIDC redirect flow)
+  getSSOUrl: (type: 'oidc' | 'saml', providerId: string) =>
+    `/api/auth/sso/${type}/${encodeURIComponent(providerId)}`,
+
+  // LDAP authentication (takes username/password directly)
+  authenticateLdap: (providerId: string, username: string, password: string) =>
+    request<{ authenticated: boolean; user: { username: string; role: string; vhost_scope: string[] } }>(
+      `/auth/sso/ldap/${encodeURIComponent(providerId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      }
+    ),
+}
+
 // Status API
 export const statusApi = {
   get: () => request<ApiResponse<unknown>>('/status'),

@@ -6,9 +6,47 @@ export interface ApiResponse<T> {
 }
 
 // Auth types
+export type UserRole = 'admin' | 'operator' | 'viewer'
+export type AuthProvider = 'local' | 'oidc' | 'saml' | 'ldap'
+
 export interface User {
   username: string
+  role: UserRole
+  vhost_scope: string[]  // ["*"] for global access, or specific vhost IDs
+  auth_provider: AuthProvider
+  display_name?: string
+  email?: string
   must_change_password?: boolean
+}
+
+// Permission types
+export interface RolePermissions {
+  vhosts?: string[]
+  endpoints?: string[]
+  keywords?: string[]
+  config?: string[]
+  users?: string[]
+  providers?: string[]
+  logs?: string[]
+  metrics?: string[]
+  bulk?: string[]
+  captcha?: string[]
+  webhooks?: string[]
+  geoip?: string[]
+  reputation?: string[]
+  timing?: string[]
+  sync?: string[]
+  status?: string[]
+  hashes?: string[]
+  whitelist?: string[]
+}
+
+export interface Role {
+  id: string
+  name: string
+  description?: string
+  permissions: RolePermissions
+  scope: 'global' | 'vhost-scoped'
 }
 
 export interface LoginRequest {

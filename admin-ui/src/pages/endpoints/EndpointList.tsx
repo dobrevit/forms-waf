@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { endpointsApi, vhostsApi } from '@/api/client'
+import { usePermissions } from '@/hooks/usePermissions'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
@@ -25,6 +26,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -33,15 +35,27 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Search, Pencil, Trash2, Route, TestTube, Globe, Server } from 'lucide-react'
+import { Plus, Search, Pencil, Trash2, Route, TestTube, Globe, Server, Copy } from 'lucide-react'
 import type { Endpoint, Vhost } from '@/api/types'
 
 export function EndpointList() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const {
+    canCreateEndpoint,
+    canEditEndpoint,
+    canDeleteEndpoint,
+    canEnableEndpoint,
+    canDisableEndpoint,
+    hasVhostAccess,
+    isReadOnly
+  } = usePermissions()
   const [search, setSearch] = useState('')
   const [vhostFilter, setVhostFilter] = useState<string>('all')
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [copySourceId, setCopySourceId] = useState<string | null>(null)
+  const [copyNewId, setCopyNewId] = useState('')
+  const [copyNewName, setCopyNewName] = useState('')
   const [testPath, setTestPath] = useState('')
   const [testMethod, setTestMethod] = useState('POST')
   const [testResult, setTestResult] = useState<unknown>(null)
@@ -104,14 +118,51 @@ export function EndpointList() {
     },
   })
 
+  const copyMutation = useMutation({
+    mutationFn: async ({ sourceId, newId, newName }: { sourceId: string; newId: string; newName: string }) => {
+      const response = await endpointsApi.get(sourceId)
+      const original = (response as { endpoint?: Endpoint })?.endpoint || response as Endpoint
+      const copy = {
+        ...original,
+        id: newId,
+        name: newName,
+        enabled: false,  // Disabled by default
+      }
+      return endpointsApi.create(copy)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['endpoints'] })
+      toast({ title: 'Endpoint copied', description: 'The copy is disabled by default' })
+      setCopySourceId(null)
+      setCopyNewId('')
+      setCopyNewName('')
+    },
+    onError: (error) => {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to copy',
+        variant: 'destructive',
+      })
+    },
+  })
+
   // Ensure arrays (Lua cjson may encode empty arrays as objects)
   const rawEndpoints = (data as { endpoints: Endpoint[] } | undefined)?.endpoints
   const endpoints = (Array.isArray(rawEndpoints) ? rawEndpoints : []) as Endpoint[]
-  const filteredEndpoints = endpoints.filter(
-    (e) =>
-      e.id.toLowerCase().includes(search.toLowerCase()) ||
-      e.name?.toLowerCase().includes(search.toLowerCase())
-  )
+  // Filter endpoints by search and user's vhost scope
+  const filteredEndpoints = useMemo(() => {
+    return endpoints.filter((e) => {
+      // Check vhost scope - global endpoints (no vhost_id) are always visible
+      // Vhost-specific endpoints need scope check
+      if (e.vhost_id && !hasVhostAccess(e.vhost_id)) return false
+
+      // Apply search filter
+      return (
+        e.id.toLowerCase().includes(search.toLowerCase()) ||
+        e.name?.toLowerCase().includes(search.toLowerCase())
+      )
+    })
+  }, [endpoints, search, hasVhostAccess])
 
   // Extract vhosts for filter dropdown
   const rawVhosts = (vhostsData as { vhosts: Vhost[] } | undefined)?.vhosts
@@ -153,6 +204,20 @@ export function EndpointList() {
     return 'N/A'
   }
 
+  // Check if ID already exists
+  const isIdTaken = (id: string) => endpoints.some((e) => e.id === id)
+
+  // Open copy dialog with pre-filled values
+  const openCopyDialog = (endpoint: Endpoint) => {
+    setCopySourceId(endpoint.id)
+    setCopyNewId(`${endpoint.id}-copy`)
+    setCopyNewName(`${endpoint.name || endpoint.id} (Copy)`)
+  }
+
+  // Validate copy form
+  const copyIdError = copyNewId && isIdTaken(copyNewId) ? 'This ID already exists' : ''
+  const canCopy = copyNewId && !copyIdError && !copyMutation.isPending
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -162,12 +227,14 @@ export function EndpointList() {
             Configure path-based WAF rules and routing
           </p>
         </div>
-        <Button asChild>
-          <Link to="/endpoints/new">
-            <Plus className="mr-2 h-4 w-4" />
-            Add Endpoint
-          </Link>
-        </Button>
+        {canCreateEndpoint && (
+          <Button asChild>
+            <Link to="/endpoints/new">
+              <Plus className="mr-2 h-4 w-4" />
+              Add Endpoint
+            </Link>
+          </Button>
+        )}
       </div>
 
       {/* Test Endpoint Matching */}
@@ -332,22 +399,41 @@ export function EndpointList() {
                       onCheckedChange={(checked) =>
                         toggleMutation.mutate({ id: endpoint.id, enabled: checked })
                       }
+                      disabled={
+                        endpoint.enabled
+                          ? !canDisableEndpoint(endpoint.vhost_id)
+                          : !canEnableEndpoint(endpoint.vhost_id)
+                      }
                     />
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button variant="ghost" size="icon" asChild>
-                        <Link to={`/endpoints/${endpoint.id}`}>
-                          <Pencil className="h-4 w-4" />
-                        </Link>
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setDeleteId(endpoint.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {canEditEndpoint(endpoint.vhost_id) && (
+                        <Button variant="ghost" size="icon" asChild>
+                          <Link to={`/endpoints/${endpoint.id}`}>
+                            <Pencil className="h-4 w-4" />
+                          </Link>
+                        </Button>
+                      )}
+                      {canCreateEndpoint && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openCopyDialog(endpoint)}
+                          title="Copy endpoint"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {canDeleteEndpoint(endpoint.vhost_id) && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setDeleteId(endpoint.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -373,6 +459,50 @@ export function EndpointList() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Copy Confirmation */}
+      <AlertDialog open={!!copySourceId} onOpenChange={() => setCopySourceId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Copy Endpoint</AlertDialogTitle>
+            <AlertDialogDescription>
+              Create a copy of this endpoint. The copy will be disabled by default.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="copy-endpoint-id">ID</Label>
+              <Input
+                id="copy-endpoint-id"
+                value={copyNewId}
+                onChange={(e) => setCopyNewId(e.target.value)}
+                placeholder="Enter unique ID"
+              />
+              {copyIdError && (
+                <p className="text-sm text-destructive">{copyIdError}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="copy-endpoint-name">Name</Label>
+              <Input
+                id="copy-endpoint-name"
+                value={copyNewName}
+                onChange={(e) => setCopyNewName(e.target.value)}
+                placeholder="Enter display name"
+              />
+            </div>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => copySourceId && copyMutation.mutate({ sourceId: copySourceId, newId: copyNewId, newName: copyNewName })}
+              disabled={!canCopy}
+            >
+              {copyMutation.isPending ? 'Copying...' : 'Copy'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

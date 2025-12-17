@@ -87,6 +87,100 @@ spec:
               redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:admin:users:{{ .Values.adminUI.auth.defaultUsername }}" "$ADMIN_USER_JSON"
               echo "Created admin user: {{ .Values.adminUI.auth.defaultUsername }} (password: {{ .Values.adminUI.auth.defaultPassword }})"
               echo "WARNING: Change the default password on first login!"
+
+              {{- if .Values.adminUI.auth.rbac.enabled }}
+              echo "Creating RBAC role definitions..."
+              # Admin role - full access
+              ADMIN_ROLE_JSON=$(cat <<'ROLEEOF'
+              {
+                "id": "admin",
+                "name": "Administrator",
+                "description": "Full administrative access to all features",
+                "permissions": {
+                  "vhosts": ["create", "read", "update", "delete", "enable", "disable"],
+                  "endpoints": ["create", "read", "update", "delete", "enable", "disable"],
+                  "keywords": ["create", "read", "update", "delete"],
+                  "config": ["read", "update"],
+                  "users": ["create", "read", "update", "delete"],
+                  "providers": ["create", "read", "update", "delete"],
+                  "logs": ["read"],
+                  "metrics": ["read", "reset"],
+                  "bulk": ["import", "export", "clear"],
+                  "captcha": ["read", "update"],
+                  "security": ["read", "update"]
+                },
+                "scope": "global"
+              }
+              ROLEEOF
+              )
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:auth:roles:config:admin" "$ADMIN_ROLE_JSON"
+
+              # Operator role - manage configurations but not users/providers
+              OPERATOR_ROLE_JSON=$(cat <<'ROLEEOF'
+              {
+                "id": "operator",
+                "name": "Operator",
+                "description": "Manage WAF configurations within assigned vhosts",
+                "permissions": {
+                  "vhosts": ["read", "update", "enable", "disable"],
+                  "endpoints": ["create", "read", "update", "delete", "enable", "disable"],
+                  "keywords": ["create", "read", "update", "delete"],
+                  "config": ["read", "update"],
+                  "users": [],
+                  "providers": [],
+                  "logs": ["read"],
+                  "metrics": ["read"],
+                  "bulk": ["import", "export"],
+                  "captcha": ["read", "update"],
+                  "security": ["read", "update"]
+                },
+                "scope": "vhost"
+              }
+              ROLEEOF
+              )
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:auth:roles:config:operator" "$OPERATOR_ROLE_JSON"
+
+              # Viewer role - read-only access
+              VIEWER_ROLE_JSON=$(cat <<'ROLEEOF'
+              {
+                "id": "viewer",
+                "name": "Viewer",
+                "description": "Read-only access to WAF configurations",
+                "permissions": {
+                  "vhosts": ["read"],
+                  "endpoints": ["read"],
+                  "keywords": ["read"],
+                  "config": ["read"],
+                  "users": [],
+                  "providers": [],
+                  "logs": ["read"],
+                  "metrics": ["read"],
+                  "bulk": ["export"],
+                  "captcha": ["read"],
+                  "security": ["read"]
+                },
+                "scope": "vhost"
+              }
+              ROLEEOF
+              )
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:auth:roles:config:viewer" "$VIEWER_ROLE_JSON"
+              echo "Created 3 RBAC roles: admin, operator, viewer"
+              {{- end }}
+
+              {{- if .Values.adminUI.auth.providers }}
+              echo "Loading auth providers from Helm values..."
+              {{- range $provider := .Values.adminUI.auth.providers }}
+              {{- if $provider.enabled }}
+              # Provider: {{ $provider.id }} ({{ $provider.type }})
+              PROVIDER_{{ $provider.id | replace "-" "_" }}_JSON=$(cat <<'PROVIDEREOF'
+              {{ $provider | toJson }}
+              PROVIDEREOF
+              )
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:auth:providers:config:{{ $provider.id }}" "$PROVIDER_{{ $provider.id | replace "-" "_" }}_JSON"
+              echo "  - Added provider: {{ $provider.id }} ({{ $provider.type }})"
+              {{- end }}
+              {{- end }}
+              {{- end }}
               {{- end }}
 
               echo "Loading virtual hosts..."
@@ -112,9 +206,24 @@ spec:
               echo "Virtual hosts: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZCARD waf:vhosts:index)"
               {{- if .Values.adminUI.enabled }}
               echo "Admin users: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" KEYS 'waf:admin:users:*' | wc -l)"
+              {{- if .Values.adminUI.auth.rbac.enabled }}
+              echo "RBAC roles: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" KEYS 'waf:auth:roles:config:*' | wc -l)"
+              {{- end }}
+              {{- if .Values.adminUI.auth.providers }}
+              echo "Auth providers: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" KEYS 'waf:auth:providers:config:*' | wc -l)"
+              {{- end }}
               echo ""
               echo "=== Admin UI Access ==="
               echo "Default credentials: {{ .Values.adminUI.auth.defaultUsername }} / {{ .Values.adminUI.auth.defaultPassword }}"
               echo "WARNING: Change password on first login!"
+              {{- if .Values.adminUI.auth.providers }}
+              echo ""
+              echo "=== SSO Providers Configured ==="
+              {{- range $provider := .Values.adminUI.auth.providers }}
+              {{- if $provider.enabled }}
+              echo "  - {{ $provider.name }} ({{ $provider.type }})"
+              {{- end }}
+              {{- end }}
+              {{- end }}
               {{- end }}
 {{- end }}
