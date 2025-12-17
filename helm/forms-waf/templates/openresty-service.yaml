@@ -18,6 +18,10 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    - port: {{ .Values.openresty.service.httpsPort | default 8443 }}
+      targetPort: https
+      protocol: TCP
+      name: https
     - port: {{ .Values.openresty.service.metricsPort }}
       targetPort: metrics
       protocol: TCP
