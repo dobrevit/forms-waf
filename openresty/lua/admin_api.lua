@@ -13,9 +13,12 @@ local config_resolver = require "config_resolver"
 local vhost_matcher = require "vhost_matcher"
 local vhost_resolver = require "vhost_resolver"
 local admin_auth = require "admin_auth"
+local rbac = require "rbac"
 local field_learner = require "field_learner"
 local metrics = require "metrics"
 local captcha_providers = require "captcha_providers"
+local users_handler = require "api_handlers.users"
+local providers_handler = require "api_handlers.providers"
 
 -- Configuration
 local REQUIRE_AUTH = os.getenv("WAF_ADMIN_AUTH") ~= "false"  -- Default: require auth
@@ -2955,6 +2958,48 @@ handlers["PUT:/timing/config"] = function()
     })
 end
 
+-- ==================== User Management Endpoints ====================
+-- Delegated to api_handlers/users.lua module
+
+handlers["GET:/users"] = users_handler.list
+handlers["POST:/users"] = users_handler.create
+
+local user_handlers = {
+    ["GET"] = users_handler.get,
+    ["PUT"] = users_handler.update,
+    ["DELETE"] = users_handler.delete,
+    ["POST:reset-password"] = users_handler.reset_password,
+}
+
+-- ==================== Auth Provider Endpoints ====================
+-- Delegated to api_handlers/providers.lua module
+
+-- Public endpoint (no auth required - handled specially in handle_request)
+handlers["GET:/auth/providers"] = providers_handler.list_public
+
+-- Admin endpoints for provider management
+handlers["GET:/auth/providers/config"] = providers_handler.list_config
+handlers["POST:/auth/providers/config"] = providers_handler.create
+
+-- SSO flow endpoints (no auth required - handled specially)
+handlers["GET:/auth/callback/oidc"] = providers_handler.oidc_callback
+
+local auth_provider_handlers = {
+    ["GET"] = providers_handler.get,
+    ["PUT"] = providers_handler.update,
+    ["DELETE"] = providers_handler.delete,
+    ["POST:test"] = providers_handler.test,
+    ["POST:enable"] = providers_handler.enable,
+    ["POST:disable"] = providers_handler.disable,
+}
+
+-- SSO initiation handlers (provider-specific)
+local sso_handlers = {
+    ["GET:oidc"] = providers_handler.initiate_oidc,
+    ["GET:saml"] = providers_handler.initiate_saml,
+    ["POST:ldap"] = providers_handler.authenticate_ldap,
+}
+
 -- Main request handler
 function _M.handle_request()
     local method = ngx.req.get_method()
@@ -2969,11 +3014,27 @@ function _M.handle_request()
         path = "/"
     end
 
-    -- Check authentication (skip for auth endpoints themselves)
-    if REQUIRE_AUTH then
+    -- Check authentication (skip for public/SSO endpoints)
+    local skip_auth = false
+    local skip_rbac = false
+
+    -- Public endpoints that don't require authentication
+    if path == "/auth/providers" or
+       path:match("^/auth/callback/") or
+       path:match("^/auth/sso/") then
+        skip_auth = true
+        skip_rbac = true
+    end
+
+    if REQUIRE_AUTH and not skip_auth then
         -- Auth endpoints are handled separately in admin_auth.lua via nginx routing
         -- All requests here should be authenticated
         admin_auth.check_auth()
+
+        -- Check RBAC permissions (unless skipped)
+        if not skip_rbac then
+            rbac.check_request()
+        end
     end
 
     -- Try exact handler first
@@ -3041,6 +3102,56 @@ function _M.handle_request()
             if crud_handler then
                 return crud_handler(provider_id)
             end
+        end
+    end
+
+    -- Check for parameterized user routes: /users/{username} or /users/{username}/action
+    local user_username, user_action = path:match("^/users/([a-zA-Z0-9_.-]+)/?([a-z-]*)$")
+
+    if user_username then
+        -- Route to appropriate user handler
+        if user_action and user_action ~= "" then
+            -- Action route: /users/{username}/reset-password
+            local action_handler = user_handlers[method .. ":" .. user_action]
+            if action_handler then
+                return action_handler(user_username)
+            end
+        else
+            -- CRUD route: GET/PUT/DELETE /users/{username}
+            local crud_handler = user_handlers[method]
+            if crud_handler then
+                return crud_handler(user_username)
+            end
+        end
+    end
+
+    -- Check for parameterized auth provider routes: /auth/providers/config/{id} or /auth/providers/config/{id}/action
+    local auth_provider_id, auth_provider_action = path:match("^/auth/providers/config/([a-zA-Z0-9_-]+)/?([a-z]*)$")
+
+    if auth_provider_id then
+        -- Route to appropriate auth provider handler
+        if auth_provider_action and auth_provider_action ~= "" then
+            -- Action route: /auth/providers/config/{id}/test, /auth/providers/config/{id}/enable, etc.
+            local action_handler = auth_provider_handlers[method .. ":" .. auth_provider_action]
+            if action_handler then
+                return action_handler(auth_provider_id)
+            end
+        else
+            -- CRUD route: GET/PUT/DELETE /auth/providers/config/{id}
+            local crud_handler = auth_provider_handlers[method]
+            if crud_handler then
+                return crud_handler(auth_provider_id)
+            end
+        end
+    end
+
+    -- Check for SSO initiation routes: /auth/sso/{type}/{provider_id}
+    local sso_type, sso_provider_id = path:match("^/auth/sso/([a-z]+)/([a-zA-Z0-9_-]+)$")
+
+    if sso_type and sso_provider_id then
+        local sso_handler = sso_handlers[method .. ":" .. sso_type]
+        if sso_handler then
+            return sso_handler(sso_provider_id)
         end
     end
 

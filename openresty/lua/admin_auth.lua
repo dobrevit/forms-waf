@@ -217,6 +217,8 @@ function _M.handle_login()
     local session_data = {
         username = username,
         role = user.role or "admin",
+        vhost_scope = user.vhost_scope or {"*"},  -- Default to global access
+        auth_provider = user.auth_provider or "local",
         created_at = ngx.time(),
         expires_at = ngx.time() + SESSION_TTL,
         must_change_password = user.must_change_password or false
@@ -240,6 +242,10 @@ function _M.handle_login()
             user = {
                 username = session_data.username,
                 role = session_data.role,
+                vhost_scope = session_data.vhost_scope,
+                auth_provider = session_data.auth_provider,
+                display_name = user.display_name,
+                email = user.email,
                 must_change_password = session_data.must_change_password
             }
         }
@@ -297,6 +303,8 @@ function _M.handle_verify()
             user = {
                 username = session.username,
                 role = session.role,
+                vhost_scope = session.vhost_scope or {"*"},
+                auth_provider = session.auth_provider or "local",
                 must_change_password = session.must_change_password
             }
         }
@@ -418,6 +426,12 @@ function _M.handle_request()
         return _M.handle_verify()
     elseif uri == "/api/auth/change-password" then
         return _M.handle_change_password()
+    elseif uri:match("^/api/auth/providers") or
+           uri:match("^/api/auth/sso/") or
+           uri:match("^/api/auth/callback/") then
+        -- Forward provider/SSO related requests to admin_api
+        local admin_api = require "admin_api"
+        return admin_api.handle_request()
     else
         send_json(404, { success = false, error = "Auth endpoint not found" })
     end

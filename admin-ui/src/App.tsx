@@ -19,6 +19,8 @@ import TimingConfig from '@/pages/security/TimingConfig'
 import GeoIPConfig from '@/pages/security/GeoIPConfig'
 import ReputationConfig from '@/pages/security/ReputationConfig'
 import { About } from '@/pages/About'
+import { Users } from '@/pages/admin/Users'
+import { AuthProviders } from '@/pages/admin/AuthProviders'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -67,6 +69,8 @@ export default function App() {
                 <Route path="/security/geoip" element={<GeoIPConfig />} />
                 <Route path="/security/reputation" element={<ReputationConfig />} />
                 <Route path="/about" element={<About />} />
+                <Route path="/admin/users" element={<Users />} />
+                <Route path="/admin/providers" element={<AuthProviders />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </AppLayout>

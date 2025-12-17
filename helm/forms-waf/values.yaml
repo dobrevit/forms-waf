@@ -275,8 +275,120 @@ adminUI:
     # Default credentials (change in production!)
     defaultUsername: admin
     defaultPassword: changeme
-    # Session timeout in seconds
+    # Session timeout in seconds (default: 24 hours)
     sessionTimeout: 86400
+    # Allow local authentication alongside SSO
+    localAuthEnabled: true
+    # Cookie settings
+    cookieName: waf_admin_session
+    cookieSecure: true
+
+    # RBAC settings
+    rbac:
+      enabled: true
+      # Default roles are: admin, operator, viewer
+
+    # SSO Providers
+    # Configure one or more identity providers for Single Sign-On
+    providers: []
+    # Example OIDC provider (Keycloak, Okta, Azure AD, etc.):
+    # providers:
+    #   - id: corporate-sso
+    #     name: "Corporate SSO"
+    #     type: oidc
+    #     enabled: true
+    #     priority: 100
+    #     oidc:
+    #       # Use either discovery URL or issuer
+    #       discovery: "https://keycloak.example.com/realms/corp/.well-known/openid-configuration"
+    #       # issuer: "https://keycloak.example.com/realms/corp"
+    #       clientId: "waf-admin"
+    #       # Client secret - use existingSecret for production
+    #       clientSecret: ""
+    #       existingSecret:
+    #         name: ""
+    #         key: "client-secret"
+    #       scopes:
+    #         - openid
+    #         - profile
+    #         - email
+    #         - groups
+    #       sslVerify: true
+    #       usePkce: true
+    #     roleMapping:
+    #       defaultRole: viewer
+    #       defaultVhosts:
+    #         - "*"
+    #       claimName: groups  # JWT claim containing group info
+    #       syncOnLogin: true  # Update role from IdP on each login
+    #       mappings:
+    #         - group: "WAF-Admins"
+    #           role: admin
+    #           vhosts: ["*"]
+    #         - group: "WAF-Operators"
+    #           role: operator
+    #           vhosts: ["*"]
+    #         - group: "Team-Alpha"
+    #           role: operator
+    #           vhosts: ["alpha-vhost"]
+
+    # Example LDAP provider (Active Directory, OpenLDAP, etc.):
+    # providers:
+    #   - id: corp-ldap
+    #     name: "Corporate Directory"
+    #     type: ldap
+    #     enabled: true
+    #     priority: 100
+    #     ldap:
+    #       host: "ldap.example.com"
+    #       port: 636
+    #       useSsl: true
+    #       sslVerify: true
+    #       timeout: 5000
+    #       baseDn: "dc=example,dc=com"
+    #       # Service account for user search (optional, for search+bind auth)
+    #       bindDn: "cn=service,ou=accounts,dc=example,dc=com"
+    #       bindPassword: ""
+    #       existingSecret:
+    #         name: ""
+    #         key: "bind-password"
+    #       # User search settings
+    #       userBaseDn: "ou=users,dc=example,dc=com"
+    #       userFilter: "(sAMAccountName={username})"  # AD style
+    #       # userFilter: "(uid={username})"  # OpenLDAP style
+    #       userDnTemplate: ""  # For direct bind: "uid={username},ou=users,dc=example,dc=com"
+    #       # Group search settings
+    #       groupBaseDn: "ou=groups,dc=example,dc=com"
+    #       groupFilter: "(member={user_dn})"
+    #       groupAttribute: "cn"
+    #     roleMapping:
+    #       defaultRole: viewer
+    #       defaultVhosts: ["*"]
+    #       syncOnLogin: true
+    #       mappings:
+    #         - group: "WAF-Admins"
+    #           role: admin
+    #           vhosts: ["*"]
+
+    # Example SAML provider (via OIDC bridge like Keycloak/Dex):
+    # Note: SAML uses OIDC bridge approach - configure OIDC settings for the bridge
+    # providers:
+    #   - id: saml-okta
+    #     name: "Okta SAML"
+    #     type: saml
+    #     enabled: true
+    #     priority: 100
+    #     oidc:  # SAML uses OIDC bridge configuration
+    #       discovery: "https://dex.example.com/.well-known/openid-configuration"
+    #       clientId: "waf-admin"
+    #       clientSecret: ""
+    #       existingSecret:
+    #         name: ""
+    #         key: "client-secret"
+    #     roleMapping:
+    #       defaultRole: viewer
+    #       claimName: groups
+    #       mappings: []
 
 # Redis initialization job
 redisInit:

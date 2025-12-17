@@ -125,6 +125,8 @@ ADMIN_USER_JSON=$(cat <<EOF
   "password_hash": "${ADMIN_HASH}",
   "salt": "${ADMIN_SALT}",
   "role": "admin",
+  "vhost_scope": ["*"],
+  "auth_provider": "local",
   "must_change_password": true,
   "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -135,6 +137,108 @@ redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:admin:users:admin" "$ADMIN_
 
 echo "Loaded default admin user (username: admin, password: changeme)"
 echo "WARNING: Change the default password on first login!"
+
+# ============================================================================
+# RBAC Role Definitions
+# ============================================================================
+
+echo "Loading RBAC role definitions..."
+
+# Admin role - full access
+ADMIN_ROLE=$(cat <<'EOF'
+{
+  "id": "admin",
+  "name": "Administrator",
+  "description": "Full access to all resources",
+  "permissions": {
+    "vhosts": ["create", "read", "update", "delete", "enable", "disable"],
+    "endpoints": ["create", "read", "update", "delete", "enable", "disable"],
+    "keywords": ["create", "read", "update", "delete"],
+    "config": ["read", "update"],
+    "users": ["create", "read", "update", "delete"],
+    "providers": ["create", "read", "update", "delete"],
+    "logs": ["read"],
+    "metrics": ["read", "reset"],
+    "bulk": ["import", "export", "clear"],
+    "captcha": ["create", "read", "update", "delete", "enable", "disable", "test"],
+    "webhooks": ["read", "update", "test"],
+    "geoip": ["read", "update", "reload"],
+    "reputation": ["read", "update"],
+    "timing": ["read", "update"],
+    "sync": ["execute"],
+    "status": ["read"],
+    "hashes": ["read", "create"],
+    "whitelist": ["read", "create"]
+  },
+  "scope": "global"
+}
+EOF
+)
+
+# Operator role - can manage most resources but not users/providers
+OPERATOR_ROLE=$(cat <<'EOF'
+{
+  "id": "operator",
+  "name": "Operator",
+  "description": "Can manage vhosts, endpoints, keywords; view logs and metrics",
+  "permissions": {
+    "vhosts": ["read", "update", "enable", "disable"],
+    "endpoints": ["create", "read", "update", "delete", "enable", "disable"],
+    "keywords": ["create", "read", "update", "delete"],
+    "config": ["read"],
+    "logs": ["read"],
+    "metrics": ["read"],
+    "bulk": ["import", "export"],
+    "captcha": ["read"],
+    "webhooks": ["read"],
+    "geoip": ["read"],
+    "reputation": ["read"],
+    "timing": ["read"],
+    "status": ["read"],
+    "hashes": ["read", "create"],
+    "whitelist": ["read"]
+  },
+  "scope": "vhost-scoped"
+}
+EOF
+)
+
+# Viewer role - read-only access
+VIEWER_ROLE=$(cat <<'EOF'
+{
+  "id": "viewer",
+  "name": "Viewer",
+  "description": "Read-only access to all resources",
+  "permissions": {
+    "vhosts": ["read"],
+    "endpoints": ["read"],
+    "keywords": ["read"],
+    "config": ["read"],
+    "logs": ["read"],
+    "metrics": ["read"],
+    "captcha": ["read"],
+    "webhooks": ["read"],
+    "geoip": ["read"],
+    "reputation": ["read"],
+    "timing": ["read"],
+    "status": ["read"],
+    "hashes": ["read"],
+    "whitelist": ["read"]
+  },
+  "scope": "vhost-scoped"
+}
+EOF
+)
+
+# Store roles in Redis
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:auth:roles:config:admin" "$ADMIN_ROLE"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:auth:roles:config:operator" "$OPERATOR_ROLE"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:auth:roles:config:viewer" "$VIEWER_ROLE"
+
+# Create role index
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD "waf:auth:roles:index" "admin" "operator" "viewer"
+
+echo "Loaded RBAC roles: admin, operator, viewer"
 
 # ============================================================================
 # Example Endpoint Configurations
