@@ -19,6 +19,7 @@ local webhooks = require "webhooks"
 local timing_token = require "timing_token"
 local geoip = require "geoip"
 local ip_reputation = require "ip_reputation"
+local ip_utils = require "ip_utils"
 local cjson = require "cjson.safe"
 
 -- Structured audit logging for security events
@@ -358,9 +359,21 @@ function _M.process_request()
         client_ip = client_ip:match("([^,]+)")
     end
 
-    -- Check IP allow list first
+    -- Check IP allowlist first (supports both exact IPs and CIDR ranges)
     local allowlist = ngx.shared.ip_whitelist
-    if allowlist and allowlist:get(client_ip) then
+    local cidr_cache = ngx.shared.ip_whitelist_cidr
+    local cidr_list = nil
+
+    -- Load CIDR list from cache if available
+    if cidr_cache then
+        local cidr_json = cidr_cache:get("cidrs")
+        if cidr_json then
+            cidr_list = cjson.decode(cidr_json)
+        end
+    end
+
+    -- Check both exact IP match and CIDR range match
+    if ip_utils.is_ip_allowlisted(client_ip, allowlist, cidr_list) then
         if expose_headers then
             ngx.header["X-Allowed-IP"] = "true"
         end

@@ -56,6 +56,7 @@ local KEYS = {
 -- Shared dictionaries
 local config_cache = ngx.shared.config_cache
 local ip_whitelist = ngx.shared.ip_whitelist
+local ip_whitelist_cidr = ngx.shared.ip_whitelist_cidr
 
 -- Get Redis connection
 local function get_redis_connection()
@@ -219,22 +220,39 @@ local function sync_routing(red)
     end
 end
 
--- Sync IP whitelist
+-- Sync IP allowlist (separates exact IPs from CIDR ranges)
 local function sync_ip_whitelist(red)
     local ips, err = red:smembers(KEYS.ip_whitelist)
     if not ips then
-        ngx.log(ngx.WARN, "Failed to get IP whitelist: ", err)
+        ngx.log(ngx.WARN, "Failed to get IP allowlist: ", err)
         return
     end
 
-    -- Clear existing whitelist
+    -- Clear existing allowlist
     ip_whitelist:flush_all()
+
+    -- Separate exact IPs from CIDR ranges
+    local cidr_list = {}
+    local exact_count = 0
 
     if type(ips) == "table" then
         for _, ip in ipairs(ips) do
-            ip_whitelist:set(ip, true, 120)
+            if ip:match("/%d+$") then
+                -- CIDR notation -> store in CIDR list
+                table.insert(cidr_list, ip)
+            else
+                -- Exact IP -> store in shared dict for fast O(1) lookup
+                ip_whitelist:set(ip, true, 120)
+                exact_count = exact_count + 1
+            end
         end
-        ngx.log(ngx.DEBUG, "Synced ", #ips, " whitelisted IPs")
+
+        -- Store CIDR list as JSON in separate cache
+        if ip_whitelist_cidr then
+            ip_whitelist_cidr:set("cidrs", cjson.encode(cidr_list), 120)
+        end
+
+        ngx.log(ngx.DEBUG, "Synced IP allowlist: ", exact_count, " exact IPs, ", #cidr_list, " CIDR ranges")
     end
 end
 

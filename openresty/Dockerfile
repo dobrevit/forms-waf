@@ -25,6 +25,7 @@ RUN apk add --no-cache curl perl openssl libmaxminddb libmaxminddb-dev && \
              /usr/local/openresty/nginx/scgi_temp \
              /var/run && \
     ln -s /dev/stdout /var/log/nginx/access.log && \
+    ln -s /dev/stdout /var/log/nginx/admin-access.log && \
     ln -s /dev/stderr /var/log/nginx/error.log && \
     chown -R nobody:nobody /etc/nginx/ssl /var/log/nginx \
            /usr/local/openresty/nginx/client_body_temp \
