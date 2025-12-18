@@ -32,7 +32,10 @@ local function build_host_mappings(red, vhost_id, config)
     for _, host in ipairs(config.hostnames) do
         local host_lower = host:lower()
 
-        if host_lower:find("%*") then
+        if host_lower == "_" or host_lower == "*" then
+            -- Catch-all patterns are stored as exact matches (handled specially in vhost_matcher)
+            red:hset(VHOST_KEYS.hosts_exact, host_lower, vhost_id)
+        elseif host_lower:find("%*") then
             -- Wildcard pattern (e.g., *.example.com, www.*.example.com)
             local pattern = host_lower .. "|" .. vhost_id
             local priority = config.priority or 100
@@ -58,7 +61,10 @@ local function remove_host_mappings(red, vhost_id, config)
     for _, host in ipairs(config.hostnames) do
         local host_lower = host:lower()
 
-        if host_lower:find("%*") then
+        if host_lower == "_" or host_lower == "*" then
+            -- Catch-all patterns are stored as exact matches
+            red:hdel(VHOST_KEYS.hosts_exact, host_lower)
+        elseif host_lower:find("%*") then
             -- Wildcard pattern
             local pattern = host_lower .. "|" .. vhost_id
             red:zrem(VHOST_KEYS.hosts_wildcard, pattern)
