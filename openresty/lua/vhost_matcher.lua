@@ -93,7 +93,16 @@ function _M.match(host)
         end
     end
 
-    -- 3. Return default vhost
+    -- 3. Check for catch-all hostnames ("_" or "*")
+    -- These are nginx-style catch-all patterns that match any unmatched host
+    if exact_hosts["_"] then
+        return exact_hosts["_"], "catchall"
+    end
+    if exact_hosts["*"] then
+        return exact_hosts["*"], "catchall"
+    end
+
+    -- 4. Return default vhost
     return DEFAULT_VHOST, "default"
 end
 
@@ -211,6 +220,115 @@ function _M.get_stats()
     }
 end
 
+-- Validate timing configuration
+local function validate_timing_config(timing)
+    local errors = {}
+
+    -- enabled must be boolean if present
+    if timing.enabled ~= nil and type(timing.enabled) ~= "boolean" then
+        table.insert(errors, "enabled must be a boolean")
+    end
+
+    -- cookie_ttl must be positive number within range
+    if timing.cookie_ttl ~= nil then
+        local ttl = tonumber(timing.cookie_ttl)
+        if not ttl or ttl < 1 or ttl > 86400 then
+            table.insert(errors, "cookie_ttl must be between 1 and 86400 seconds")
+        end
+    end
+
+    -- min_time_block must be non-negative within range
+    if timing.min_time_block ~= nil then
+        local val = tonumber(timing.min_time_block)
+        if not val or val < 0 or val > 3600 then
+            table.insert(errors, "min_time_block must be between 0 and 3600 seconds")
+        end
+    end
+
+    -- min_time_flag must be >= min_time_block
+    if timing.min_time_flag ~= nil then
+        local val = tonumber(timing.min_time_flag)
+        if not val or val < 0 or val > 3600 then
+            table.insert(errors, "min_time_flag must be between 0 and 3600 seconds")
+        end
+        local block_val = tonumber(timing.min_time_block) or 2
+        if val and val < block_val then
+            table.insert(errors, "min_time_flag must be >= min_time_block")
+        end
+    end
+
+    -- Score values must be within range
+    local score_fields = {"score_no_cookie", "score_too_fast", "score_suspicious"}
+    for _, field in ipairs(score_fields) do
+        if timing[field] ~= nil then
+            local val = tonumber(timing[field])
+            if not val or val < 0 or val > 100 then
+                table.insert(errors, field .. " must be between 0 and 100")
+            end
+        end
+    end
+
+    -- start_paths must be array of strings
+    if timing.start_paths ~= nil then
+        if type(timing.start_paths) ~= "table" then
+            table.insert(errors, "start_paths must be an array")
+        else
+            for i, path in ipairs(timing.start_paths) do
+                if type(path) ~= "string" or path == "" then
+                    table.insert(errors, "start_paths[" .. i .. "] must be a non-empty string")
+                    break
+                end
+            end
+        end
+    end
+
+    -- end_paths must be array of strings
+    if timing.end_paths ~= nil then
+        if type(timing.end_paths) ~= "table" then
+            table.insert(errors, "end_paths must be an array")
+        else
+            for i, path in ipairs(timing.end_paths) do
+                if type(path) ~= "string" or path == "" then
+                    table.insert(errors, "end_paths[" .. i .. "] must be a non-empty string")
+                    break
+                end
+            end
+        end
+    end
+
+    -- path_match_mode validation
+    if timing.path_match_mode ~= nil then
+        local valid_modes = {exact = true, prefix = true, regex = true}
+        if not valid_modes[timing.path_match_mode] then
+            table.insert(errors, "path_match_mode must be one of: exact, prefix, regex")
+        end
+
+        -- Validate regex patterns if regex mode
+        if timing.path_match_mode == "regex" then
+            local paths_to_check = {}
+            if timing.start_paths then
+                for _, p in ipairs(timing.start_paths) do
+                    table.insert(paths_to_check, {field = "start_paths", pattern = p})
+                end
+            end
+            if timing.end_paths then
+                for _, p in ipairs(timing.end_paths) do
+                    table.insert(paths_to_check, {field = "end_paths", pattern = p})
+                end
+            end
+
+            for _, item in ipairs(paths_to_check) do
+                local ok, err = pcall(ngx.re.match, "", item.pattern)
+                if not ok then
+                    table.insert(errors, item.field .. " contains invalid regex: " .. item.pattern)
+                end
+            end
+        end
+    end
+
+    return errors
+end
+
 -- Validate vhost configuration
 function _M.validate_config(config)
     local errors = {}
@@ -222,10 +340,15 @@ function _M.validate_config(config)
         table.insert(errors, "id must contain only alphanumeric characters, dashes, and underscores")
     end
 
-    -- Required: at least one hostname
-    if not config.hostnames or type(config.hostnames) ~= "table" or #config.hostnames == 0 then
-        table.insert(errors, "at least one hostname is required")
-    else
+    -- Required: at least one hostname (except for _default vhost which can have empty hostnames)
+    if config.id ~= "_default" then
+        if not config.hostnames or type(config.hostnames) ~= "table" or #config.hostnames == 0 then
+            table.insert(errors, "at least one hostname is required")
+        end
+    end
+
+    -- Validate hostname format if hostnames are provided
+    if config.hostnames and type(config.hostnames) == "table" then
         for _, hostname in ipairs(config.hostnames) do
             if type(hostname) ~= "string" or hostname == "" then
                 table.insert(errors, "each hostname must be a non-empty string")
@@ -290,6 +413,14 @@ function _M.validate_config(config)
             if not valid_modes[config.waf.default_mode] then
                 table.insert(errors, "invalid waf.default_mode: must be blocking, monitoring, passthrough, or strict")
             end
+        end
+    end
+
+    -- Validate timing configuration if provided
+    if config.timing then
+        local timing_errors = validate_timing_config(config.timing)
+        for _, err in ipairs(timing_errors) do
+            table.insert(errors, "timing." .. err)
         end
     end
 

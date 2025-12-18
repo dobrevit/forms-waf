@@ -246,6 +246,27 @@ export const statusApi = {
   get: () => request<ApiResponse<unknown>>('/status'),
 }
 
+// Vhost Timing Configuration
+export interface VhostTimingConfig {
+  enabled: boolean
+  cookie_ttl?: number
+  min_time_block?: number
+  min_time_flag?: number
+  score_no_cookie?: number
+  score_too_fast?: number
+  score_suspicious?: number
+  start_paths?: string[]
+  end_paths?: string[]
+  path_match_mode?: 'exact' | 'prefix' | 'regex'
+}
+
+export interface VhostTimingResponse {
+  vhost_id: string
+  timing: VhostTimingConfig
+  resolved_timing: VhostTimingConfig
+  cookie_name: string | null
+}
+
 // Vhosts API
 export const vhostsApi = {
   list: () => request<ApiResponse<{ vhosts: unknown[] }>>('/vhosts'),
@@ -280,6 +301,21 @@ export const vhostsApi = {
     request<ApiResponse<unknown>>(
       `/vhosts/context?host=${encodeURIComponent(host)}&path=${encodeURIComponent(path)}&method=${method}`
     ),
+
+  // Timing configuration per vhost
+  getTiming: (id: string) =>
+    request<VhostTimingResponse>(`/vhosts/${id}/timing`),
+
+  updateTiming: (id: string, data: VhostTimingConfig) =>
+    request<{ updated: boolean; vhost_id: string; timing: VhostTimingConfig }>(`/vhosts/${id}/timing`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  deleteTiming: (id: string) =>
+    request<{ deleted: boolean; vhost_id: string }>(`/vhosts/${id}/timing`, {
+      method: 'DELETE',
+    }),
 }
 
 // Endpoints API
@@ -718,11 +754,19 @@ export interface TimingTokenConfig {
   cookie_name?: string
   cookie_ttl?: number
   encryption_key?: string
-  min_time_seconds?: number
-  suspicious_time_seconds?: number
-  no_cookie_score?: number
-  too_fast_score?: number
-  suspicious_score?: number
+  min_time_block?: number
+  min_time_flag?: number
+  score_no_cookie?: number
+  score_too_fast?: number
+  score_suspicious?: number
+}
+
+export interface TimingVhostItem {
+  vhost_id: string
+  name?: string
+  hostnames?: string[]
+  timing: VhostTimingConfig
+  cookie_name: string
 }
 
 export const timingApi = {
@@ -737,6 +781,10 @@ export const timingApi = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
+
+  // List all vhosts with timing enabled
+  listVhosts: () =>
+    request<{ vhosts: TimingVhostItem[]; total: number }>('/timing/vhosts'),
 }
 
 export const captchaApi = {

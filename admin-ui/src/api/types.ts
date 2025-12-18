@@ -96,6 +96,19 @@ export interface VhostKeywords {
   excluded_flagged?: string[]
 }
 
+export interface VhostTimingConfig {
+  enabled: boolean
+  cookie_ttl?: number
+  min_time_block?: number
+  min_time_flag?: number
+  score_no_cookie?: number
+  score_too_fast?: number
+  score_suspicious?: number
+  start_paths?: string[]
+  end_paths?: string[]
+  path_match_mode?: 'exact' | 'prefix' | 'regex'
+}
+
 export interface VhostEndpoints {
   inherit_global: boolean
   overrides?: Record<string, unknown>
@@ -113,6 +126,7 @@ export interface Vhost {
   thresholds?: VhostThresholds
   keywords?: VhostKeywords
   endpoints?: VhostEndpoints
+  timing?: VhostTimingConfig  // Per-vhost timing validation configuration
   endpoint_count?: number  // Number of vhost-specific endpoints
 }
 

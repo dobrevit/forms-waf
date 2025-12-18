@@ -44,6 +44,11 @@ local function build_host_mappings(red, vhost_id, config)
     end
 end
 
+-- Helper: Check if hostname is a catch-all pattern
+local function is_catchall_hostname(hostname)
+    return hostname == "_" or hostname == "*"
+end
+
 -- Helper: Remove host mappings for a vhost
 local function remove_host_mappings(red, vhost_id, config)
     if not config or not config.hostnames then
@@ -151,14 +156,23 @@ _M.handlers["POST:/vhosts"] = function()
     end
 
     -- Check for conflicting hostnames
-    for _, host in ipairs(config.hostnames) do
-        local host_lower = host:lower()
-        if not host_lower:match("^%*%.") then
-            -- Check if exact host already mapped to another vhost
-            local existing_vhost = red:hget(VHOST_KEYS.hosts_exact, host_lower)
-            if existing_vhost and existing_vhost ~= ngx.null then
-                utils.close_redis(red)
-                return utils.error_response("Host '" .. host .. "' already mapped to vhost: " .. existing_vhost, 409)
+    if config.hostnames and type(config.hostnames) == "table" then
+        for _, host in ipairs(config.hostnames) do
+            local host_lower = host:lower()
+            if is_catchall_hostname(host_lower) then
+                -- Check if catch-all hostname is already used by another vhost
+                local existing_vhost = red:hget(VHOST_KEYS.hosts_exact, host_lower)
+                if existing_vhost and existing_vhost ~= ngx.null then
+                    utils.close_redis(red)
+                    return utils.error_response("Catch-all hostname '" .. host .. "' already used by vhost: " .. existing_vhost, 409)
+                end
+            elseif not host_lower:match("^%*%.") then
+                -- Check if exact host already mapped to another vhost
+                local existing_vhost = red:hget(VHOST_KEYS.hosts_exact, host_lower)
+                if existing_vhost and existing_vhost ~= ngx.null then
+                    utils.close_redis(red)
+                    return utils.error_response("Host '" .. host .. "' already mapped to vhost: " .. existing_vhost, 409)
+                end
             end
         end
     end
@@ -388,8 +402,34 @@ _M.resource_handlers["PUT"] = function(vhost_id)
 
     local existing_config = cjson.decode(existing_json)
 
-    -- Remove old host mappings
+    -- Remove old host mappings first (so we can check for conflicts without hitting ourselves)
     remove_host_mappings(red, vhost_id, existing_config)
+
+    -- Check for conflicting hostnames (including catch-all)
+    if new_config.hostnames and type(new_config.hostnames) == "table" then
+        for _, host in ipairs(new_config.hostnames) do
+            local host_lower = host:lower()
+            if is_catchall_hostname(host_lower) then
+                -- Check if catch-all hostname is already used by another vhost
+                local existing_vhost = red:hget(VHOST_KEYS.hosts_exact, host_lower)
+                if existing_vhost and existing_vhost ~= ngx.null and existing_vhost ~= vhost_id then
+                    -- Restore old mappings before returning error
+                    build_host_mappings(red, vhost_id, existing_config)
+                    utils.close_redis(red)
+                    return utils.error_response("Catch-all hostname '" .. host .. "' already used by vhost: " .. existing_vhost, 409)
+                end
+            elseif not host_lower:match("^%*%.") then
+                -- Check if exact host already mapped to another vhost
+                local existing_vhost = red:hget(VHOST_KEYS.hosts_exact, host_lower)
+                if existing_vhost and existing_vhost ~= ngx.null and existing_vhost ~= vhost_id then
+                    -- Restore old mappings before returning error
+                    build_host_mappings(red, vhost_id, existing_config)
+                    utils.close_redis(red)
+                    return utils.error_response("Host '" .. host .. "' already mapped to vhost: " .. existing_vhost, 409)
+                end
+            end
+        end
+    end
 
     -- Preserve created_at, update updated_at
     new_config.metadata = new_config.metadata or {}
@@ -516,6 +556,135 @@ _M.resource_handlers["POST:disable"] = function(vhost_id)
 
     return utils.json_response({
         disabled = true,
+        vhost_id = vhost_id
+    })
+end
+
+-- ==================== Timing Configuration Handlers ====================
+
+-- GET /vhosts/{id}/timing - Get vhost timing configuration
+_M.resource_handlers["GET:timing"] = function(vhost_id)
+    local red, err = utils.get_redis()
+    if not red then
+        return utils.error_response("Redis error: " .. (err or "unknown"), 500)
+    end
+
+    local config_json = red:get(VHOST_KEYS.config_prefix .. vhost_id)
+    utils.close_redis(red)
+
+    if not config_json or config_json == ngx.null then
+        return utils.error_response("Vhost not found: " .. vhost_id, 404)
+    end
+
+    local config = cjson.decode(config_json)
+    if not config then
+        return utils.error_response("Invalid vhost configuration", 500)
+    end
+
+    -- Get resolved timing config
+    local resolved = vhost_resolver.resolve(vhost_id)
+
+    -- Determine cookie name for this vhost
+    local cookie_name = "_waf_timing"
+    if vhost_id and vhost_id ~= "_default" then
+        local safe_id = vhost_id:gsub("[^%w_-]", "")
+        cookie_name = cookie_name .. "_" .. safe_id
+    end
+
+    return utils.json_response({
+        vhost_id = vhost_id,
+        timing = config.timing or {},
+        resolved_timing = resolved.timing,
+        cookie_name = resolved.timing and resolved.timing.enabled and cookie_name or nil
+    })
+end
+
+-- PUT /vhosts/{id}/timing - Update vhost timing configuration
+_M.resource_handlers["PUT:timing"] = function(vhost_id)
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local timing_config = cjson.decode(body or "{}")
+
+    if not timing_config then
+        return utils.error_response("Invalid JSON body")
+    end
+
+    -- Validate timing config by wrapping it in a vhost config
+    local temp_config = { id = vhost_id, hostnames = {"_"}, timing = timing_config }
+    local valid, errors = vhost_matcher.validate_config(temp_config)
+    if not valid then
+        -- Filter to only timing errors
+        local timing_errors = {}
+        for _, err in ipairs(errors) do
+            if err:match("^timing%.") then
+                table.insert(timing_errors, err)
+            end
+        end
+        if #timing_errors > 0 then
+            return utils.error_response("Validation failed: " .. table.concat(timing_errors, ", "), 400)
+        end
+    end
+
+    local red, err = utils.get_redis()
+    if not red then
+        return utils.error_response("Redis error: " .. (err or "unknown"), 500)
+    end
+
+    -- Get existing vhost config
+    local config_json = red:get(VHOST_KEYS.config_prefix .. vhost_id)
+    if not config_json or config_json == ngx.null then
+        utils.close_redis(red)
+        return utils.error_response("Vhost not found: " .. vhost_id, 404)
+    end
+
+    local config = cjson.decode(config_json)
+
+    -- Update timing section
+    config.timing = timing_config
+    config.metadata = config.metadata or {}
+    config.metadata.updated_at = ngx.utctime()
+
+    -- Save
+    red:set(VHOST_KEYS.config_prefix .. vhost_id, cjson.encode(config))
+    utils.close_redis(red)
+
+    -- Trigger sync
+    redis_sync.sync_now()
+
+    return utils.json_response({
+        updated = true,
+        vhost_id = vhost_id,
+        timing = config.timing
+    })
+end
+
+-- DELETE /vhosts/{id}/timing - Remove/disable vhost timing configuration
+_M.resource_handlers["DELETE:timing"] = function(vhost_id)
+    local red, err = utils.get_redis()
+    if not red then
+        return utils.error_response("Redis error: " .. (err or "unknown"), 500)
+    end
+
+    local config_json = red:get(VHOST_KEYS.config_prefix .. vhost_id)
+    if not config_json or config_json == ngx.null then
+        utils.close_redis(red)
+        return utils.error_response("Vhost not found: " .. vhost_id, 404)
+    end
+
+    local config = cjson.decode(config_json)
+
+    -- Remove timing section
+    config.timing = nil
+    config.metadata = config.metadata or {}
+    config.metadata.updated_at = ngx.utctime()
+
+    red:set(VHOST_KEYS.config_prefix .. vhost_id, cjson.encode(config))
+    utils.close_redis(red)
+
+    redis_sync.sync_now()
+
+    return utils.json_response({
+        deleted = true,
         vhost_id = vhost_id
     })
 end
