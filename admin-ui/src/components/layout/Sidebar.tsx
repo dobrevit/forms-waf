@@ -20,6 +20,7 @@ import {
   Info,
   Users,
   KeyRound,
+  Activity,
 } from 'lucide-react'
 
 const navigation = [
@@ -46,6 +47,12 @@ const navigation = [
       { name: 'Form Timing', href: '/security/timing', icon: Clock },
       { name: 'GeoIP', href: '/security/geoip', icon: MapPin },
       { name: 'IP Reputation', href: '/security/reputation', icon: ShieldAlert },
+    ],
+  },
+  {
+    name: 'Analytics',
+    children: [
+      { name: 'Behavioral', href: '/analytics/behavioral', icon: Activity },
     ],
   },
   {
