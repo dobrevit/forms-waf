@@ -55,17 +55,27 @@ local function normalize_host(host)
     return host:lower()
 end
 
--- Check if hostname matches wildcard pattern (e.g., *.example.com)
+-- Check if hostname matches wildcard pattern
+-- Supports:
+--   - Leading wildcards: *.example.com matches foo.example.com, a.b.example.com
+--   - Middle wildcards: www.*.example.com matches www.foo.example.com, www.a.b.example.com
+--   - Multi-level matching: * matches one or more subdomain levels
 local function match_wildcard(hostname, pattern)
     if not hostname or not pattern then
         return false
     end
 
     -- Convert wildcard pattern to Lua pattern
-    -- *.example.com -> [^.]+%.example%.com$
-    local lua_pattern = pattern:gsub("%.", "%%.")  -- Escape dots
-    lua_pattern = lua_pattern:gsub("^%*", "[^.]+") -- Replace leading * with match
-    lua_pattern = lua_pattern .. "$"
+    -- 1. Escape all dots first
+    local lua_pattern = pattern:gsub("%.", "%%.")
+
+    -- 2. Replace ALL * with .+ (matches one or more of any char including dots)
+    -- This supports both leading wildcards (*.example.com) and
+    -- middle wildcards (www.*.example.com)
+    lua_pattern = lua_pattern:gsub("%*", ".+")
+
+    -- 3. Anchor at start and end for exact matching
+    lua_pattern = "^" .. lua_pattern .. "$"
 
     return hostname:match(lua_pattern) ~= nil
 end

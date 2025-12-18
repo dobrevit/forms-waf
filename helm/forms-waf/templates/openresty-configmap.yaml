@@ -11,10 +11,15 @@ data:
     env REDIS_HOST;
     env REDIS_PORT;
     env REDIS_PASSWORD;
+    env REDIS_DB;
+    env WAF_ADMIN_AUTH;
     env WAF_SYNC_INTERVAL;
     env HTTP_PROXY;
     env HTTPS_PROXY;
     env NO_PROXY;
+    env HAPROXY_UPSTREAM;
+    env HAPROXY_UPSTREAM_SSL;
+    env UPSTREAM_SSL;
 
     worker_processes auto;
     error_log /var/log/nginx/error.log warn;
@@ -39,6 +44,11 @@ data:
         resolver local=on ipv6=off valid=10s;
         resolver_timeout 5s;
 
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        'spam_score=$sent_http_x_spam_score form_hash=$sent_http_x_form_hash';
+
         log_format json_combined escape=json '{'
             '"time":"$time_iso8601",'
             '"remote_addr":"$remote_addr",'
@@ -60,14 +70,17 @@ data:
         tcp_nopush on;
         tcp_nodelay on;
         keepalive_timeout 65;
+        types_hash_max_size 2048;
 
         lua_package_path "/etc/nginx/lua/?.lua;;";
         lua_package_cpath "/usr/local/openresty/lualib/?.so;;";
 
+        # Shared dictionaries for caching
         lua_shared_dict keyword_cache 10m;
         lua_shared_dict hash_cache 50m;
         lua_shared_dict config_cache 1m;
         lua_shared_dict ip_whitelist 5m;
+        lua_shared_dict ip_whitelist_cidr 1m;
         lua_shared_dict rate_limit 20m;
         lua_shared_dict endpoint_cache 10m;
         lua_shared_dict vhost_cache 10m;
@@ -75,6 +88,7 @@ data:
         lua_shared_dict waf_metrics 10m;
         lua_shared_dict waf_timing 1m;
 
+        # Initialize modules on worker start
         init_worker_by_lua_block {
             local redis_sync = require "redis_sync"
             -- Initialize Redis with defaults if keys are missing (only on worker 0)
@@ -87,9 +101,7 @@ data:
             redis_sync.start_sync_timer()
         }
 
-        # Backend services - resolved dynamically at request time via variables
-        # This allows nginx to start even if backends aren't ready yet
-
+        # Health check and metrics endpoint
         server {
             listen 8081;
             location /health {
@@ -110,6 +122,7 @@ data:
             listen 8082;
             server_name _;
 
+            # Separate access log for admin operations (audit trail)
             access_log /var/log/nginx/admin-access.log json_combined;
 
             # Authentication endpoints (no auth required)
@@ -122,14 +135,6 @@ data:
 
             # Admin API endpoints (auth required)
             location /api/ {
-                content_by_lua_block {
-                    local admin = require "admin_api"
-                    admin.handle_request()
-                }
-            }
-
-            # Legacy admin API endpoints (backward compatibility)
-            location /waf-admin/ {
                 content_by_lua_block {
                     local admin = require "admin_api"
                     admin.handle_request()
@@ -154,6 +159,10 @@ data:
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 proxy_set_header X-Forwarded-Proto $scheme;
                 proxy_set_header Connection "";
+
+                # WebSocket support (for HMR in development)
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
             }
             {{- else }}
             location / {
@@ -163,29 +172,42 @@ data:
             {{- end }}
         }
 
+        # Main server (HTTP)
         server {
             listen 8080;
             server_name _;
 
+            # Client body settings for form handling
             client_body_buffer_size 128k;
             client_max_body_size 10m;
 
+            # Health check bypass
             location /health {
                 access_log off;
                 return 200 "OK\n";
             }
 
-            location / {
-                lua_need_request_body on;
+            # CAPTCHA verification endpoint (public - users submit CAPTCHA solutions here)
+            location /captcha/verify {
+                content_by_lua_block {
+                    local captcha_handler = require "captcha_handler"
+                    captcha_handler.handle_verification()
+                }
+            }
 
+            # Main form processing location
+            location / {
+                # Initialize upstream variable (will be set by Lua based on vhost routing config)
+                set $upstream_url "";
+
+                # Process forms with Lua
                 access_by_lua_block {
                     local waf = require "waf_handler"
                     waf.process_request()
                 }
 
-                # Dynamic resolution - resolve hostname at request time
-                set $haproxy_upstream "{{ include "forms-waf.fullname" . }}-haproxy.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.haproxy.service.port }}";
-                proxy_pass http://$haproxy_upstream;
+                # Dynamic proxy based on vhost routing config (set by waf_handler)
+                proxy_pass $upstream_url;
                 proxy_http_version 1.1;
                 proxy_set_header Connection "";
                 proxy_set_header Host $host;
@@ -193,7 +215,7 @@ data:
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 proxy_set_header X-Forwarded-Proto $scheme;
 
-                # Pass computed headers to HAProxy
+                # Pass computed headers to upstream
                 # Note: Headers set by ngx.req.set_header() are forwarded automatically
                 # These proxy_set_header lines use $http_* to forward modified request headers
                 proxy_set_header X-Form-Hash $http_x_form_hash;
@@ -206,7 +228,76 @@ data:
                 proxy_set_header X-WAF-Rate-Limit $http_x_waf_rate_limit;
                 proxy_set_header X-WAF-Rate-Limit-Value $http_x_waf_rate_limit_value;
             }
+        }
 
+        # Main server (HTTPS)
+        # Self-signed certificate is generated at container startup
+        # Mount your own certificate to /etc/nginx/ssl/ to override
+        server {
+            listen 8443 ssl;
+            server_name _;
+
+            # SSL configuration
+            ssl_certificate /etc/nginx/ssl/server.crt;
+            ssl_certificate_key /etc/nginx/ssl/server.key;
+
+            # Modern SSL settings
+            ssl_protocols TLSv1.2 TLSv1.3;
+            ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+            ssl_prefer_server_ciphers off;
+            ssl_session_cache shared:SSL:10m;
+            ssl_session_timeout 1d;
+            ssl_session_tickets off;
+
+            # Client body settings for form handling
+            client_body_buffer_size 128k;
+            client_max_body_size 10m;
+
+            # Health check bypass
+            location /health {
+                access_log off;
+                return 200 "OK\n";
+            }
+
+            # CAPTCHA verification endpoint (public - users submit CAPTCHA solutions here)
+            location /captcha/verify {
+                content_by_lua_block {
+                    local captcha_handler = require "captcha_handler"
+                    captcha_handler.handle_verification()
+                }
+            }
+
+            # Main form processing location
+            location / {
+                # Initialize upstream variable (will be set by Lua based on vhost routing config)
+                set $upstream_url "";
+
+                # Process forms with Lua
+                access_by_lua_block {
+                    local waf = require "waf_handler"
+                    waf.process_request()
+                }
+
+                # Dynamic proxy based on vhost routing config (set by waf_handler)
+                proxy_pass $upstream_url;
+                proxy_http_version 1.1;
+                proxy_set_header Connection "";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto https;
+
+                # Pass computed headers to upstream
+                proxy_set_header X-Form-Hash $http_x_form_hash;
+                proxy_set_header X-Spam-Score $http_x_spam_score;
+                proxy_set_header X-Spam-Flags $http_x_spam_flags;
+                proxy_set_header X-Client-IP $http_x_client_ip;
+                proxy_set_header X-Submission-Fingerprint $http_x_submission_fingerprint;
+                proxy_set_header X-WAF-Debug $http_x_waf_debug;
+                proxy_set_header X-WAF-Mode $http_x_waf_mode;
+                proxy_set_header X-WAF-Rate-Limit $http_x_waf_rate_limit;
+                proxy_set_header X-WAF-Rate-Limit-Value $http_x_waf_rate_limit_value;
+            }
         }
     }
 {{- end }}
