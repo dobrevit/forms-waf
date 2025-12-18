@@ -771,7 +771,9 @@ function _M.process_request()
     end
 
     if should_inherit_patterns then
-        local pattern_result = keyword_filter.pattern_scan(form_data)
+        -- Get ignore fields to exclude from pattern scanning (e.g., CSRF tokens)
+        local ignore_fields = vhost_resolver.get_ignore_fields(context)
+        local pattern_result = keyword_filter.pattern_scan(form_data, ignore_fields)
 
         -- Filter out disabled patterns
         if pattern_result.flags and context.endpoint then
@@ -795,7 +797,13 @@ function _M.process_request()
     if context.endpoint then
         local custom_patterns = config_resolver.get_custom_patterns(context.endpoint)
         if #custom_patterns > 0 then
-            local combined_text = form_parser.get_combined_text(form_data)
+            -- Build exclude set from ignore fields
+            local custom_ignore_fields = vhost_resolver.get_ignore_fields(context)
+            local exclude_set = {}
+            for _, f in ipairs(custom_ignore_fields) do
+                exclude_set[f] = true
+            end
+            local combined_text = form_parser.get_combined_text(form_data, exclude_set)
             for _, pattern_def in ipairs(custom_patterns) do
                 local matches = {}
                 for match in combined_text:gmatch(pattern_def.pattern) do

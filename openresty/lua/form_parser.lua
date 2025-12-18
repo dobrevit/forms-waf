@@ -199,7 +199,9 @@ function _M.parse()
 end
 
 -- Utility: Get all form values as a single string (for scanning)
-function _M.get_combined_text(form_data)
+-- @param form_data: table of form field key-value pairs
+-- @param exclude_set: optional table of field names to exclude (keys are field names, values are truthy)
+function _M.get_combined_text(form_data, exclude_set)
     if not form_data then
         return ""
     end
@@ -207,12 +209,15 @@ function _M.get_combined_text(form_data)
     local parts = {}
 
     for key, value in pairs(form_data) do
-        if type(value) == "table" then
-            for _, v in ipairs(value) do
-                table.insert(parts, tostring(v))
+        -- Skip excluded fields (e.g., CSRF tokens, captchas)
+        if not exclude_set or not exclude_set[key] then
+            if type(value) == "table" then
+                for _, v in ipairs(value) do
+                    table.insert(parts, tostring(v))
+                end
+            else
+                table.insert(parts, tostring(value))
             end
-        else
-            table.insert(parts, tostring(value))
         end
     end
 

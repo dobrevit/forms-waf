@@ -178,7 +178,9 @@ function _M.is_hash_blocked(hash)
 end
 
 -- Scan for patterns (regex-like matching)
-function _M.pattern_scan(form_data)
+-- @param form_data: table of form field key-value pairs
+-- @param exclude_fields: optional array of field names to exclude from scanning
+function _M.pattern_scan(form_data, exclude_fields)
     local result = {
         score = 0,
         flags = {}
@@ -188,7 +190,16 @@ function _M.pattern_scan(form_data)
         return result
     end
 
-    local combined_text = form_parser.get_combined_text(form_data)
+    -- Build exclude set for efficient lookup
+    local exclude_set = nil
+    if exclude_fields and #exclude_fields > 0 then
+        exclude_set = {}
+        for _, field in ipairs(exclude_fields) do
+            exclude_set[field] = true
+        end
+    end
+
+    local combined_text = form_parser.get_combined_text(form_data, exclude_set)
     if not combined_text or combined_text == "" then
         return result
     end

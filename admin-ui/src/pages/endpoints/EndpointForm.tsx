@@ -119,7 +119,7 @@ export function EndpointForm() {
   const [newRequiredField, setNewRequiredField] = useState('')
   const [newMaxLengthField, setNewMaxLengthField] = useState('')
   const [newMaxLengthValue, setNewMaxLengthValue] = useState('')
-  const [newIgnoreField, setNewIgnoreField] = useState('')
+  const [customIgnoreField, setCustomIgnoreField] = useState('')
   const [newHashField, setNewHashField] = useState('')
   const [newExpectedField, setNewExpectedField] = useState('')
   const [newHoneypotField, setNewHoneypotField] = useState('')
@@ -984,9 +984,8 @@ export function EndpointForm() {
                   <p className="text-sm text-muted-foreground">
                     Fields to exclude from WAF inspection (CSRF tokens, captchas, etc.)
                   </p>
-                  <div className="flex gap-2">
+                  <div className="space-y-2">
                     <Select
-                      value={newIgnoreField}
                       onValueChange={(value) => {
                         const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
                         if (value && !ignoreFields.includes(value)) {
@@ -998,11 +997,10 @@ export function EndpointForm() {
                             },
                           })
                         }
-                        setNewIgnoreField('')
                       }}
                     >
-                      <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="Add common field..." />
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select common field..." />
                       </SelectTrigger>
                       <SelectContent>
                         {COMMON_IGNORE_FIELDS.filter(
@@ -1014,48 +1012,52 @@ export function EndpointForm() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <Input
-                      value={newIgnoreField}
-                      onChange={(e) => setNewIgnoreField(e.target.value)}
-                      placeholder="Or enter custom..."
-                      className="flex-1"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && newIgnoreField) {
-                          e.preventDefault()
-                          const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
-                          if (!ignoreFields.includes(newIgnoreField)) {
-                            setFormData({
-                              ...formData,
-                              fields: {
-                                ...formData.fields,
-                                ignore: [...ignoreFields, newIgnoreField],
-                              },
-                            })
+                    <div className="flex gap-2">
+                      <Input
+                        value={customIgnoreField}
+                        onChange={(e) => setCustomIgnoreField(e.target.value)}
+                        placeholder="Or enter custom field name..."
+                        className="flex-1"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && customIgnoreField.trim()) {
+                            e.preventDefault()
+                            const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
+                            const trimmed = customIgnoreField.trim()
+                            if (!ignoreFields.includes(trimmed)) {
+                              setFormData({
+                                ...formData,
+                                fields: {
+                                  ...formData.fields,
+                                  ignore: [...ignoreFields, trimmed],
+                                },
+                              })
+                            }
+                            setCustomIgnoreField('')
                           }
-                          setNewIgnoreField('')
-                        }
-                      }}
-                    />
-                    <Button
-                      type="button"
-                      onClick={() => {
-                        if (newIgnoreField) {
-                          const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
-                          if (!ignoreFields.includes(newIgnoreField)) {
-                            setFormData({
-                              ...formData,
-                              fields: {
-                                ...formData.fields,
-                                ignore: [...ignoreFields, newIgnoreField],
-                              },
-                            })
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          const trimmed = customIgnoreField.trim()
+                          if (trimmed) {
+                            const ignoreFields = Array.isArray(formData.fields?.ignore) ? formData.fields.ignore : []
+                            if (!ignoreFields.includes(trimmed)) {
+                              setFormData({
+                                ...formData,
+                                fields: {
+                                  ...formData.fields,
+                                  ignore: [...ignoreFields, trimmed],
+                                },
+                              })
+                            }
+                            setCustomIgnoreField('')
                           }
-                          setNewIgnoreField('')
-                        }
-                      }}
-                    >
-                      <Plus className="h-4 w-4" />
-                    </Button>
+                        }}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
 
                   {(() => {

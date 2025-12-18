@@ -321,11 +321,13 @@ function _M.resolve_request_context(host, path, method)
 
     -- 5. Apply vhost-level overrides to endpoint config
     if endpoint_resolved then
-        -- Inherit vhost mode only if endpoint config has no explicit mode set
-        -- Note: We check endpoint_config.mode (raw) rather than endpoint_resolved.mode
-        -- because config_resolver.resolve() defaults mode to "blocking" if not set.
-        -- This ensures explicitly set endpoint modes take precedence over vhost mode.
-        if endpoint_config and not endpoint_config.mode and vhost_resolved.waf and vhost_resolved.waf.mode then
+        -- Inherit vhost mode if:
+        -- 1. endpoint_config is nil (no explicit endpoint configured), OR
+        -- 2. endpoint_config exists but has no explicit mode field
+        -- Note: config_resolver.resolve() defaults mode to "blocking" if not set,
+        -- but we want to inherit vhost mode in that case.
+        local should_inherit_vhost_mode = not endpoint_config or not endpoint_config.mode
+        if should_inherit_vhost_mode and vhost_resolved.waf and vhost_resolved.waf.mode then
             endpoint_resolved.mode = vhost_resolved.waf.mode
         end
 
