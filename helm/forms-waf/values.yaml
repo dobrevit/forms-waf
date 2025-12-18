@@ -54,6 +54,16 @@ openresty:
   # Environment variables
   env:
     WAF_SYNC_INTERVAL: "30"
+    # HAProxy upstream HTTP endpoint (FQDN:port) - leave empty to auto-generate
+    # Auto-generated: {release}-haproxy.{namespace}.svc.cluster.local:8080
+    HAPROXY_UPSTREAM: ""
+    # HAProxy upstream HTTPS endpoint (FQDN:port) - leave empty to auto-generate
+    # Auto-generated: {release}-haproxy.{namespace}.svc.cluster.local:8443
+    HAPROXY_UPSTREAM_SSL: ""
+    # Toggle: use SSL endpoint (HAPROXY_UPSTREAM_SSL) instead of HTTP (HAPROXY_UPSTREAM)
+    UPSTREAM_SSL: "false"
+    # HAProxy connection timeout in seconds
+    HAPROXY_TIMEOUT: "30"
 
   # Extra environment variables from secrets/configmaps
   envFrom: []
@@ -116,6 +126,7 @@ haproxy:
   service:
     type: ClusterIP
     port: 8080
+    httpsPort: 8443
     statsPort: 8404
     healthPort: 8405
     peerPort: 10000
@@ -424,6 +435,13 @@ redisInit:
     spam_score_flag: 50
     hash_count_block: 10
     ip_rate_limit: 30
+
+  # Initial routing configuration (optional - seeds Redis for admin UI)
+  # Primary config is via openresty.env.HAPROXY_* environment variables
+  # This section seeds Redis so values are visible/editable in admin UI
+  routing:
+    # Set to false to skip seeding routing config in Redis
+    enabled: true
 
   # Initial whitelisted IPs
   whitelistedIPs:

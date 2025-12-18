@@ -29,9 +29,12 @@ local DEFAULT_THRESHOLDS = {
 }
 
 -- Default routing settings (use environment variables with fallbacks)
+-- haproxy_upstream: HTTP endpoint address (FQDN:port)
+-- haproxy_upstream_ssl: HTTPS endpoint address (FQDN:port)
+-- upstream_ssl: boolean toggle - when true, use haproxy_upstream_ssl instead of haproxy_upstream
 local DEFAULT_ROUTING = {
     haproxy_upstream = os.getenv("HAPROXY_UPSTREAM") or "haproxy:8080",
-    haproxy_ssl = env_bool("HAPROXY_UPSTREAM_SSL", false),
+    haproxy_upstream_ssl = os.getenv("HAPROXY_UPSTREAM_SSL") or "haproxy:8443",
     upstream_ssl = env_bool("UPSTREAM_SSL", false),
     haproxy_timeout = 30,
 }
@@ -82,10 +85,30 @@ function _M.get_routing()
     return DEFAULT_ROUTING
 end
 
--- Get HAProxy upstream address
+-- Get HAProxy upstream address (returns appropriate endpoint based on upstream_ssl toggle)
 function _M.get_haproxy_upstream()
     local routing = _M.get_routing()
+    if routing.upstream_ssl then
+        return routing.haproxy_upstream_ssl or DEFAULT_ROUTING.haproxy_upstream_ssl
+    end
     return routing.haproxy_upstream or DEFAULT_ROUTING.haproxy_upstream
+end
+
+-- Get HAProxy upstream URL (includes scheme based on upstream_ssl toggle)
+function _M.get_haproxy_upstream_url()
+    local routing = _M.get_routing()
+    if routing.upstream_ssl then
+        local upstream = routing.haproxy_upstream_ssl or DEFAULT_ROUTING.haproxy_upstream_ssl
+        return "https://" .. upstream
+    end
+    local upstream = routing.haproxy_upstream or DEFAULT_ROUTING.haproxy_upstream
+    return "http://" .. upstream
+end
+
+-- Check if upstream SSL is enabled
+function _M.is_upstream_ssl()
+    local routing = _M.get_routing()
+    return routing.upstream_ssl == true
 end
 
 -- Get HAProxy timeout

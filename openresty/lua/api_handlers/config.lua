@@ -97,9 +97,14 @@ _M.handlers["GET:/config/routing"] = function()
         for i = 1, #config, 2 do
             local key = config[i]
             local value = config[i + 1]
-            -- Try to convert to number if applicable
-            local num_value = tonumber(value)
-            routing[key] = num_value or value
+            -- Handle boolean for upstream_ssl
+            if key == "upstream_ssl" then
+                routing[key] = value == "true"
+            else
+                -- Try to convert to number if applicable
+                local num_value = tonumber(value)
+                routing[key] = num_value or value
+            end
         end
     end
 
@@ -110,6 +115,11 @@ _M.handlers["GET:/config/routing"] = function()
 end
 
 -- PUT /config/routing - Update global routing config
+-- Fields:
+--   haproxy_upstream: HTTP endpoint address (FQDN:port)
+--   haproxy_upstream_ssl: HTTPS endpoint address (FQDN:port)
+--   upstream_ssl: boolean toggle - when true, use haproxy_upstream_ssl
+--   haproxy_timeout: connection timeout in seconds
 _M.handlers["PUT:/config/routing"] = function()
     ngx.req.read_body()
     local body = ngx.req.get_body_data()
@@ -129,6 +139,14 @@ _M.handlers["PUT:/config/routing"] = function()
     if data.haproxy_upstream then
         red:hset("waf:config:routing", "haproxy_upstream", data.haproxy_upstream)
         table.insert(updated, "haproxy_upstream")
+    end
+    if data.haproxy_upstream_ssl then
+        red:hset("waf:config:routing", "haproxy_upstream_ssl", data.haproxy_upstream_ssl)
+        table.insert(updated, "haproxy_upstream_ssl")
+    end
+    if data.upstream_ssl ~= nil then
+        red:hset("waf:config:routing", "upstream_ssl", data.upstream_ssl and "true" or "false")
+        table.insert(updated, "upstream_ssl")
     end
     if data.haproxy_timeout then
         red:hset("waf:config:routing", "haproxy_timeout", tonumber(data.haproxy_timeout))

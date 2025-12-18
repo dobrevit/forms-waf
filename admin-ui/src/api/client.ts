@@ -838,3 +838,85 @@ export const captchaApi = {
       body: JSON.stringify(data),
     }),
 }
+
+// Behavioral Tracking API
+import type {
+  BehavioralStats,
+  BehavioralBaseline,
+  BehavioralFlow,
+  BehavioralVhostSummary,
+} from './types'
+
+export interface BehavioralVhostItem {
+  vhost_id: string
+  name?: string
+  hostnames?: string[]
+  flows: string[]
+  tracking?: {
+    fill_duration?: boolean
+    submission_counts?: boolean
+    unique_ips?: boolean
+    avg_spam_score?: boolean
+  }
+  anomaly_detection?: {
+    enabled?: boolean
+    std_dev_threshold?: number
+    action?: 'flag' | 'score'
+    score_addition?: number
+  }
+}
+
+export const behavioralApi = {
+  // Get stats for a specific flow
+  getStats: (vhostId: string, flowName: string, bucketType: 'hour' | 'day' | 'week' | 'month' | 'year' = 'hour', count: number = 24) =>
+    request<{
+      vhost_id: string
+      flow_name: string
+      bucket_type: string
+      count: number
+      stats: BehavioralStats[]
+    }>(`/behavioral/stats?vhost_id=${encodeURIComponent(vhostId)}&flow_name=${encodeURIComponent(flowName)}&bucket_type=${bucketType}&count=${count}`),
+
+  // Get baseline data for a flow
+  getBaseline: (vhostId: string, flowName: string) =>
+    request<{
+      vhost_id: string
+      flow_name: string
+      baseline: BehavioralBaseline | null
+      status: 'ready' | 'learning' | 'no_data'
+      message?: string
+    }>(`/behavioral/baseline?vhost_id=${encodeURIComponent(vhostId)}&flow_name=${encodeURIComponent(flowName)}`),
+
+  // Force baseline recalculation
+  recalculateBaseline: (vhostId: string, flowName?: string) => {
+    const params = flowName
+      ? `?vhost_id=${encodeURIComponent(vhostId)}&flow_name=${encodeURIComponent(flowName)}`
+      : `?vhost_id=${encodeURIComponent(vhostId)}`
+    return request<{
+      vhost_id: string
+      flow_name: string
+      results: Record<string, { success: boolean; error?: string }>
+    }>(`/behavioral/recalculate${params}`, { method: 'POST' })
+  },
+
+  // Get all flows for a vhost
+  getFlows: (vhostId: string) =>
+    request<{
+      vhost_id: string
+      flows: string[]
+      configs: Record<string, BehavioralFlow>
+    }>(`/behavioral/flows?vhost_id=${encodeURIComponent(vhostId)}`),
+
+  // List all vhosts with behavioral tracking enabled
+  listVhosts: () =>
+    request<{ vhosts: BehavioralVhostItem[]; total: number }>('/behavioral/vhosts'),
+
+  // Get summary of behavioral tracking status
+  getSummary: (vhostId?: string) => {
+    const params = vhostId ? `?vhost_id=${encodeURIComponent(vhostId)}` : ''
+    return request<{
+      total_tracked_vhosts: number
+      vhosts: BehavioralVhostSummary[]
+    }>(`/behavioral/summary${params}`)
+  },
+}

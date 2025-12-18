@@ -60,6 +60,27 @@ spec:
                 placeholder 0
               redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HDEL waf:config:thresholds placeholder
 
+              {{- if .Values.redisInit.routing.enabled }}
+              echo "Loading routing configuration..."
+              {{- $haproxyFqdn := printf "%s-haproxy.%s.svc.cluster.local" (include "forms-waf.fullname" .) .Release.Namespace }}
+              {{- $haproxyUpstream := .Values.openresty.env.HAPROXY_UPSTREAM | default "" }}
+              {{- if not $haproxyUpstream }}
+              {{- $haproxyUpstream = printf "%s:%d" $haproxyFqdn (int .Values.haproxy.service.port) }}
+              {{- end }}
+              {{- $haproxyUpstreamSsl := .Values.openresty.env.HAPROXY_UPSTREAM_SSL | default "" }}
+              {{- if not $haproxyUpstreamSsl }}
+              {{- $haproxyUpstreamSsl = printf "%s:%d" $haproxyFqdn (int .Values.haproxy.service.httpsPort) }}
+              {{- end }}
+              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET waf:config:routing \
+                haproxy_upstream "{{ $haproxyUpstream }}" \
+                haproxy_upstream_ssl "{{ $haproxyUpstreamSsl }}" \
+                upstream_ssl "{{ .Values.openresty.env.UPSTREAM_SSL | default "false" }}" \
+                haproxy_timeout "{{ .Values.openresty.env.HAPROXY_TIMEOUT | default "30" }}"
+              echo "  HAProxy upstream (HTTP): {{ $haproxyUpstream }}"
+              echo "  HAProxy upstream (SSL):  {{ $haproxyUpstreamSsl }}"
+              echo "  Use SSL: {{ .Values.openresty.env.UPSTREAM_SSL | default "false" }}"
+              {{- end }}
+
               echo "Loading IP whitelist..."
               redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:whitelist:ips \
               {{- range .Values.redisInit.whitelistedIPs }}
@@ -224,6 +245,14 @@ spec:
               echo "Flagged keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:flagged)"
               echo "Whitelisted IPs: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:whitelist:ips)"
               echo "Virtual hosts: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZCARD waf:vhosts:index)"
+              {{- if .Values.redisInit.routing.enabled }}
+              echo ""
+              echo "=== Routing Configuration ==="
+              echo "HAProxy upstream (HTTP): $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HGET waf:config:routing haproxy_upstream)"
+              echo "HAProxy upstream (SSL):  $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HGET waf:config:routing haproxy_upstream_ssl)"
+              echo "Use SSL: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HGET waf:config:routing upstream_ssl)"
+              echo "Timeout: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HGET waf:config:routing haproxy_timeout)s"
+              {{- end }}
               {{- if .Values.adminUI.enabled }}
               echo "Admin users: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" KEYS 'waf:admin:users:*' | wc -l)"
               {{- if .Values.adminUI.auth.rbac.enabled }}

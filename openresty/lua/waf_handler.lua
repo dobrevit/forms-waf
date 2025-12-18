@@ -20,6 +20,7 @@ local timing_token = require "timing_token"
 local geoip = require "geoip"
 local ip_reputation = require "ip_reputation"
 local ip_utils = require "ip_utils"
+local behavioral_tracker = require "behavioral_tracker"
 local cjson = require "cjson.safe"
 
 -- Structured audit logging for security events
@@ -298,10 +299,13 @@ function _M.process_request()
     if upstream_url then
         ngx.var.upstream_url = upstream_url
     else
-        -- Fallback to global HAProxy (uses HAPROXY_UPSTREAM env var)
+        -- Fallback to global HAProxy (uses HAPROXY_UPSTREAM/HAPROXY_UPSTREAM_SSL env vars)
         local global_routing = waf_config.get_routing()
-        local scheme = global_routing.haproxy_ssl and "https" or "http"
-        ngx.var.upstream_url = scheme .. "://" .. global_routing.haproxy_upstream
+        if global_routing.upstream_ssl then
+            ngx.var.upstream_url = "https://" .. (global_routing.haproxy_upstream_ssl or "haproxy:8443")
+        else
+            ngx.var.upstream_url = "http://" .. (global_routing.haproxy_upstream or "haproxy:8080")
+        end
     end
 
     -- Set rate limiting headers for HAProxy (request headers, not response)
@@ -581,6 +585,42 @@ function _M.process_request()
             end
             -- Strip timing cookie before forwarding to backend
             timing_token.strip_cookie(context)
+
+            -- Store timing result for behavioral tracking (elapsed time)
+            ngx.ctx.timing_result = timing_result
+        end
+    end
+
+    -- Step 0a2: Behavioral tracking - match flow and check anomalies
+    -- Check if this request matches a behavioral flow (end path)
+    local behavioral_context = nil
+    local vhost_config = context.vhost_config
+    if vhost_config and vhost_config.behavioral and vhost_config.behavioral.enabled then
+        local flows = vhost_config.behavioral.flows
+        if flows and #flows > 0 then
+            local matched_flow = behavioral_tracker.match_flow(flows, path, method, false) -- false = end path
+            if matched_flow then
+                behavioral_context = {
+                    vhost_id = summary.vhost_id,
+                    flow_name = matched_flow.name,
+                    vhost_config = vhost_config
+                }
+                ngx.ctx.behavioral_context = behavioral_context
+
+                -- Check for anomalies against baseline
+                local behavioral_result = behavioral_tracker.check_anomaly(behavioral_context)
+                if behavioral_result.score > 0 then
+                    spam_score = spam_score + behavioral_result.score
+                    for _, flag in ipairs(behavioral_result.flags) do
+                        table.insert(spam_flags, flag)
+                    end
+                    ngx.log(ngx.INFO, string.format(
+                        "BEHAVIORAL_ANOMALY: ip=%s vhost=%s flow=%s score=%d z_score=%.2f",
+                        client_ip, summary.vhost_id, matched_flow.name, behavioral_result.score,
+                        behavioral_result.details.z_score or 0
+                    ))
+                end
+            end
         end
     end
 
@@ -948,6 +988,18 @@ function _M.process_request()
             block_reason, spam_score, form_hash, table.concat(spam_flags, ",")
         ))
         metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", spam_score)
+
+        -- Record behavioral tracking data (if flow matched)
+        if ngx.ctx.behavioral_context then
+            local fill_duration = ngx.ctx.timing_result and ngx.ctx.timing_result.elapsed or nil
+            behavioral_tracker.record_submission(
+                ngx.ctx.behavioral_context,
+                fill_duration,
+                spam_score,
+                "monitored",
+                client_ip
+            )
+        end
         return
     end
 
@@ -1009,6 +1061,18 @@ function _M.process_request()
             -- Record blocked request in metrics
             metrics.record_request(summary.vhost_id, summary.endpoint_id, "blocked", spam_score)
 
+            -- Record behavioral tracking data (if flow matched)
+            if ngx.ctx.behavioral_context then
+                local fill_duration = ngx.ctx.timing_result and ngx.ctx.timing_result.elapsed or nil
+                behavioral_tracker.record_submission(
+                    ngx.ctx.behavioral_context,
+                    fill_duration,
+                    spam_score,
+                    "blocked",
+                    client_ip
+                )
+            end
+
             -- Send webhook notification (async, non-blocking)
             webhooks.notify_blocked(context, block_reason, spam_score, spam_flags)
 
@@ -1036,6 +1100,18 @@ function _M.process_request()
 
     -- Record allowed request in metrics
     metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", spam_score)
+
+    -- Record behavioral tracking data (if flow matched)
+    if ngx.ctx.behavioral_context then
+        local fill_duration = ngx.ctx.timing_result and ngx.ctx.timing_result.elapsed or nil
+        behavioral_tracker.record_submission(
+            ngx.ctx.behavioral_context,
+            fill_duration,
+            spam_score,
+            "allowed",
+            client_ip
+        )
+    end
 end
 
 -- Get routing decision for balancer phase

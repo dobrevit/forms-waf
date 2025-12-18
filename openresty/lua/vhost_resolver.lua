@@ -115,6 +115,7 @@ end
 
 -- Resolve routing configuration
 -- Resolves haproxy_upstream with fallback: vhost override -> global config -> default
+-- Note: upstream_ssl is the toggle that determines whether to use haproxy_upstream_ssl
 local function resolve_routing(vhost_config)
     -- Get global routing config
     local global_routing = waf_config.get_routing()
@@ -122,7 +123,9 @@ local function resolve_routing(vhost_config)
     local result = {
         use_haproxy = true,
         haproxy_backend = nil,
-        haproxy_upstream = global_routing.haproxy_upstream,  -- Default from global
+        haproxy_upstream = global_routing.haproxy_upstream,  -- HTTP endpoint
+        haproxy_upstream_ssl = global_routing.haproxy_upstream_ssl,  -- HTTPS endpoint
+        upstream_ssl = global_routing.upstream_ssl,  -- Toggle: use SSL endpoint
         haproxy_timeout = global_routing.haproxy_timeout,
         upstream = nil
     }
@@ -138,9 +141,19 @@ local function resolve_routing(vhost_config)
         if vhost_config.routing.haproxy_backend then
             result.haproxy_backend = vhost_config.routing.haproxy_backend
         end
-        -- Vhost-specific HAProxy upstream override
+        -- Vhost-specific HAProxy upstream overrides
         if vhost_config.routing.haproxy_upstream then
             result.haproxy_upstream = vhost_config.routing.haproxy_upstream
+        end
+        if vhost_config.routing.haproxy_upstream_ssl then
+            result.haproxy_upstream_ssl = vhost_config.routing.haproxy_upstream_ssl
+        end
+        -- Vhost-specific SSL toggle override (haproxy_ssl is legacy alias for upstream_ssl)
+        if vhost_config.routing.upstream_ssl ~= nil then
+            result.upstream_ssl = vhost_config.routing.upstream_ssl
+        elseif vhost_config.routing.haproxy_ssl ~= nil then
+            -- Legacy support: haproxy_ssl as alias for upstream_ssl
+            result.upstream_ssl = vhost_config.routing.haproxy_ssl
         end
         -- Upstream configuration is nested under routing (for direct routing)
         if vhost_config.routing.upstream then
@@ -495,6 +508,8 @@ function _M.get_routing(context)
             use_haproxy = true,
             haproxy_backend = nil,
             haproxy_upstream = global_routing.haproxy_upstream,
+            haproxy_upstream_ssl = global_routing.haproxy_upstream_ssl,
+            upstream_ssl = global_routing.upstream_ssl,
             haproxy_timeout = global_routing.haproxy_timeout,
             upstream = nil
         }
@@ -557,38 +572,58 @@ end
 -- Get upstream URL based on routing config
 -- For HAProxy routing: returns HAProxy address with SSL support
 -- For direct routing: returns one of the configured upstream servers with SSL support
--- SSL configuration is hierarchical: vhost -> global -> env var -> default (false)
+-- Routing uses two separate endpoints:
+--   haproxy_upstream: HTTP endpoint (FQDN:port)
+--   haproxy_upstream_ssl: HTTPS endpoint (FQDN:port)
+--   upstream_ssl: boolean toggle - when true, use haproxy_upstream_ssl
+-- Configuration is hierarchical: vhost -> global -> env var -> default
 function _M.get_upstream_url(context)
     local global_routing = waf_config.get_routing()
 
     if not context or not context.vhost then
-        -- Default to HAProxy with SSL from global/env
-        local scheme = global_routing.haproxy_ssl and "https" or "http"
-        return scheme .. "://" .. global_routing.haproxy_upstream
+        -- Default to HAProxy with appropriate endpoint based on upstream_ssl toggle
+        if global_routing.upstream_ssl then
+            return "https://" .. (global_routing.haproxy_upstream_ssl or "haproxy:8443")
+        end
+        return "http://" .. (global_routing.haproxy_upstream or "haproxy:8080")
     end
 
     local routing = context.vhost.routing
     if not routing then
-        local scheme = global_routing.haproxy_ssl and "https" or "http"
-        return scheme .. "://" .. global_routing.haproxy_upstream
+        if global_routing.upstream_ssl then
+            return "https://" .. (global_routing.haproxy_upstream_ssl or "haproxy:8443")
+        end
+        return "http://" .. (global_routing.haproxy_upstream or "haproxy:8080")
     end
 
     if routing.use_haproxy or routing.use_haproxy == nil then
-        -- HAProxy mode (default): resolve SSL hierarchically
-        local ssl = routing.haproxy_ssl  -- vhost override
-        if ssl == nil then
-            ssl = global_routing.haproxy_ssl  -- global/env default
+        -- HAProxy mode (default): resolve SSL toggle hierarchically
+        -- Check vhost override first, then fall back to global
+        local use_ssl = routing.upstream_ssl
+        if use_ssl == nil then
+            -- Legacy support: check haproxy_ssl as alias
+            use_ssl = routing.haproxy_ssl
         end
-        local scheme = ssl and "https" or "http"
-        local upstream = routing.haproxy_upstream or global_routing.haproxy_upstream
-        return scheme .. "://" .. upstream
+        if use_ssl == nil then
+            use_ssl = global_routing.upstream_ssl
+        end
+
+        if use_ssl then
+            local upstream = routing.haproxy_upstream_ssl or global_routing.haproxy_upstream_ssl or "haproxy:8443"
+            return "https://" .. upstream
+        else
+            local upstream = routing.haproxy_upstream or global_routing.haproxy_upstream or "haproxy:8080"
+            return "http://" .. upstream
+        end
     else
         -- Direct routing mode (use_haproxy = false)
         local server = vhost_matcher.select_upstream_server(context.vhost.vhost_id)
         if not server then
             ngx.log(ngx.WARN, "Direct routing configured but no upstream servers, falling back to HAProxy")
-            local scheme = global_routing.haproxy_ssl and "https" or "http"
-            return scheme .. "://" .. global_routing.haproxy_upstream
+            if global_routing.upstream_ssl then
+                return "https://" .. (global_routing.haproxy_upstream_ssl or "haproxy:8443")
+            end
+            return "http://" .. (global_routing.haproxy_upstream or "haproxy:8080")
         end
 
         -- Resolve SSL hierarchically for direct upstream
