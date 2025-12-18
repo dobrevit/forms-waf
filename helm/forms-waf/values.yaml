@@ -204,6 +204,34 @@ haproxy:
     timeoutSeconds: 3
     failureThreshold: 3
 
+  # TLS configuration for inter-service communication
+  tls:
+    # Enable HTTPS on port 8443
+    enabled: false
+
+    # Certificate source: "self-signed" or "cert-manager"
+    source: "self-signed"
+
+    # Self-signed certificate settings
+    selfSigned:
+      # Certificate validity in days
+      validityDays: 365
+      # Common name for certificate
+      commonName: "haproxy"
+      # Organization for certificate
+      organization: "Forms WAF"
+
+    # cert-manager settings (when source: "cert-manager")
+    certManager:
+      # Use existing certificate Secret
+      existingSecret: ""
+      # Or create Certificate resource
+      issuerRef:
+        name: ""          # e.g., "letsencrypt-prod" or "selfsigned-issuer"
+        kind: "ClusterIssuer"  # or "Issuer"
+      # Additional DNS names for the certificate
+      dnsNames: []
+
 # Redis configuration (using Bitnami chart)
 redis:
   image:
@@ -569,6 +597,10 @@ backend:
     replicaCount: 1
     service:
       port: 8080
+      httpsPort: 8443
+    # TLS configuration for mock backend
+    tls:
+      enabled: false  # Enable HTTPS on mock backend
 
 # Network policies
 networkPolicy:

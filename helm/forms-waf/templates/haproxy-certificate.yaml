@@ -1,0 +1,30 @@
+{{- if and .Values.haproxy.enabled .Values.haproxy.tls.enabled (eq .Values.haproxy.tls.source "cert-manager") }}
+{{- if not .Values.haproxy.tls.certManager.existingSecret }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "forms-waf.fullname" . }}-haproxy-tls
+  labels:
+    {{- include "forms-waf.haproxy.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "forms-waf.fullname" . }}-haproxy-tls
+  issuerRef:
+    name: {{ .Values.haproxy.tls.certManager.issuerRef.name }}
+    kind: {{ .Values.haproxy.tls.certManager.issuerRef.kind }}
+  dnsNames:
+    - {{ include "forms-waf.fullname" . }}-haproxy
+    - {{ include "forms-waf.fullname" . }}-haproxy.{{ .Release.Namespace }}
+    - {{ include "forms-waf.fullname" . }}-haproxy.{{ .Release.Namespace }}.svc
+    - {{ include "forms-waf.fullname" . }}-haproxy.{{ .Release.Namespace }}.svc.cluster.local
+    - "*.{{ include "forms-waf.haproxy.headlessServiceName" . }}"
+    - "*.{{ include "forms-waf.haproxy.headlessServiceName" . }}.{{ .Release.Namespace }}"
+    - "*.{{ include "forms-waf.haproxy.headlessServiceName" . }}.{{ .Release.Namespace }}.svc"
+    - "*.{{ include "forms-waf.haproxy.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+    {{- range .Values.haproxy.tls.certManager.dnsNames }}
+    - {{ . | quote }}
+    {{- end }}
+  privateKey:
+    algorithm: RSA
+    size: 2048
+{{- end }}
+{{- end }}

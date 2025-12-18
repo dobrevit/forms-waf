@@ -37,6 +37,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            {{- if .Values.haproxy.tls.enabled }}
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            {{- end }}
             - name: stats
               containerPort: 8404
               protocol: TCP
@@ -55,6 +60,16 @@ spec:
               value: {{ .Values.haproxy.env.KUBERNETES_MODE | quote }}
             - name: HAPROXY_PEER_PORT
               value: {{ .Values.haproxy.service.peerPort | quote }}
+            {{- if .Values.haproxy.tls.enabled }}
+            - name: HAPROXY_SSL_ENABLED
+              value: "true"
+            - name: SSL_VALIDITY_DAYS
+              value: {{ .Values.haproxy.tls.selfSigned.validityDays | quote }}
+            - name: SSL_COMMON_NAME
+              value: {{ .Values.haproxy.tls.selfSigned.commonName | quote }}
+            - name: SSL_ORGANIZATION
+              value: {{ .Values.haproxy.tls.selfSigned.organization | quote }}
+            {{- end }}
           livenessProbe:
             {{- toYaml .Values.haproxy.livenessProbe | nindent 12 }}
           readinessProbe:
@@ -67,12 +82,28 @@ spec:
               subPath: haproxy.cfg
             - name: run
               mountPath: /var/run
+            {{- if .Values.haproxy.tls.enabled }}
+            - name: ssl-certs
+              mountPath: /etc/haproxy/ssl
+            {{- end }}
       volumes:
         - name: haproxy-config
           configMap:
             name: {{ include "forms-waf.fullname" . }}-haproxy-config
         - name: run
           emptyDir: {}
+        {{- if .Values.haproxy.tls.enabled }}
+        - name: ssl-certs
+          {{- if and (eq .Values.haproxy.tls.source "cert-manager") .Values.haproxy.tls.certManager.existingSecret }}
+          secret:
+            secretName: {{ .Values.haproxy.tls.certManager.existingSecret }}
+          {{- else if eq .Values.haproxy.tls.source "cert-manager" }}
+          secret:
+            secretName: {{ include "forms-waf.fullname" . }}-haproxy-tls
+          {{- else }}
+          emptyDir: {}  # Self-signed generated at runtime
+          {{- end }}
+        {{- end }}
       {{- with .Values.haproxy.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

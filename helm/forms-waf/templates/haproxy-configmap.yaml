@@ -21,6 +21,13 @@ data:
         maxconn 4096
         stats socket /var/run/haproxy.sock mode 600 level admin expose-fd listeners
         stats timeout 30s
+        {{- if .Values.haproxy.tls.enabled }}
+        # SSL settings for internal TLS communication
+        ssl-default-bind-ciphers ECDHE+AESGCM:DHE+AESGCM
+        ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11 no-tls-tickets
+        ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+        tune.ssl.default-dh-param 2048
+        {{- end }}
 
     defaults
         log     global
@@ -47,6 +54,9 @@ data:
     #---------------------------------------------------------------------
     frontend ft_waf
         bind *:8080
+        {{- if .Values.haproxy.tls.enabled }}
+        bind *:8443 ssl crt /etc/haproxy/ssl/haproxy.pem alpn h2,http/1.1
+        {{- end }}
 
         # ACL definitions for WAF headers
         acl has_form_hash req.hdr(X-Form-Hash) -m found
