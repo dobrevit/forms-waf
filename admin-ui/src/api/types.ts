@@ -69,17 +69,21 @@ export interface VhostRouting {
   use_haproxy: boolean
   haproxy_backend?: string
   haproxy_upstream?: string  // Override global HAProxy upstream
+  haproxy_ssl?: boolean      // Use HTTPS for HAProxy upstream (overrides global)
   upstream?: {
     servers: string[]
     health_check?: string
     timeout?: number
+    ssl?: boolean            // Use HTTPS for direct upstream servers
   }
 }
 
 // Global routing configuration
 export interface GlobalRouting {
-  haproxy_upstream: string  // Default HAProxy upstream address (e.g., "haproxy:80")
-  haproxy_timeout?: number  // Default timeout for HAProxy connections
+  haproxy_upstream: string   // Default HAProxy upstream address (e.g., "haproxy:80")
+  haproxy_ssl?: boolean      // Use HTTPS for HAProxy upstream connections (default: false)
+  upstream_ssl?: boolean     // Use HTTPS for direct upstream connections (default: false)
+  haproxy_timeout?: number   // Default timeout for HAProxy connections
 }
 
 export interface VhostThresholds {

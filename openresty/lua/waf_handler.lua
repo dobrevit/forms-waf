@@ -276,6 +276,17 @@ function _M.process_request()
     ngx.ctx.waf_context = context
     ngx.ctx.waf_routing = vhost_resolver.get_routing(context)
 
+    -- Set upstream URL for nginx proxy_pass (dynamic routing based on vhost config)
+    local upstream_url = vhost_resolver.get_upstream_url(context)
+    if upstream_url then
+        ngx.var.upstream_url = upstream_url
+    else
+        -- Fallback to global HAProxy (uses HAPROXY_UPSTREAM env var)
+        local global_routing = waf_config.get_routing()
+        local scheme = global_routing.haproxy_ssl and "https" or "http"
+        ngx.var.upstream_url = scheme .. "://" .. global_routing.haproxy_upstream
+    end
+
     -- Set rate limiting headers for HAProxy (request headers, not response)
     local rate_limiting = vhost_resolver.get_rate_limiting(context)
     if rate_limiting and rate_limiting.enabled then

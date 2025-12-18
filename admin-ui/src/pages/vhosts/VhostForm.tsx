@@ -496,6 +496,25 @@ export function VhostForm() {
                         Override global HAProxy address. Leave empty to use global: <code className="bg-muted px-1 rounded">{globalRouting.haproxy_upstream}</code>
                       </p>
                     </div>
+
+                    <div className="flex items-center justify-between rounded-lg border p-3">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="haproxy_ssl">Use HTTPS for HAProxy</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Connect to HAProxy using HTTPS. Leave unchecked to inherit from global config.
+                        </p>
+                      </div>
+                      <Switch
+                        id="haproxy_ssl"
+                        checked={formData.routing?.haproxy_ssl ?? false}
+                        onCheckedChange={(checked) =>
+                          setFormData({
+                            ...formData,
+                            routing: { ...formData.routing, use_haproxy: true, haproxy_ssl: checked },
+                          })
+                        }
+                      />
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -588,6 +607,33 @@ export function VhostForm() {
                           Optional path for health checks (e.g., /health)
                         </p>
                       </div>
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-lg border p-3">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="upstream_ssl">Use HTTPS for Upstreams</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Connect to upstream servers using HTTPS. Leave unchecked to inherit from global config.
+                        </p>
+                      </div>
+                      <Switch
+                        id="upstream_ssl"
+                        checked={formData.routing?.upstream?.ssl ?? false}
+                        onCheckedChange={(checked) =>
+                          setFormData({
+                            ...formData,
+                            routing: {
+                              ...formData.routing,
+                              use_haproxy: false,
+                              upstream: {
+                                ...formData.routing?.upstream,
+                                servers: formData.routing?.upstream?.servers || [],
+                                ssl: checked,
+                              },
+                            },
+                          })
+                        }
+                      />
                     </div>
                   </div>
                 )}

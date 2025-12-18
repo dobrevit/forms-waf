@@ -1,4 +1,4 @@
-import type { ApiResponse } from './types'
+import type { ApiResponse, GlobalRouting } from './types'
 
 const API_BASE = '/api'
 
@@ -411,9 +411,9 @@ export const configApi = {
     }),
 
   getRouting: () =>
-    request<{ routing: { haproxy_upstream: string; haproxy_timeout?: number }; defaults: { haproxy_upstream: string; haproxy_timeout: number } }>('/config/routing'),
+    request<{ routing: GlobalRouting; defaults: GlobalRouting }>('/config/routing'),
 
-  updateRouting: (data: { haproxy_upstream?: string; haproxy_timeout?: number }) =>
+  updateRouting: (data: Partial<GlobalRouting>) =>
     request<ApiResponse<null>>('/config/routing', {
       method: 'PUT',
       body: JSON.stringify(data),
