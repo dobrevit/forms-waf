@@ -324,8 +324,15 @@ function _M.process_request()
     if not method_allowed then
         -- Not a form submission method
         -- But if this is a GET request, set timing token for future form submissions
-        if method == "GET" and timing_token.should_set_token(context) then
-            timing_token.set_token()
+        -- Now uses vhost timing config for path-aware timing
+        if method == "GET" then
+            local timing_config = vhost_resolver.get_timing_config(context)
+            if timing_config and timing_config.enabled then
+                local current_path = ngx.var.uri
+                if timing_token.should_set_token_for_path(current_path, timing_config) then
+                    timing_token.set_token(context)
+                end
+            end
         end
         metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", 0)
         return
@@ -527,21 +534,26 @@ function _M.process_request()
 
     -- Step 0a: Timing token validation
     -- Check if submission has valid timing (not too fast, has cookie)
-    if timing_token.is_enabled() then
-        local timing_result = timing_token.validate_token(context)
-        if timing_result.score > 0 then
-            spam_score = spam_score + timing_result.score
-            if timing_result.flag then
-                table.insert(spam_flags, timing_result.flag)
+    -- Now uses vhost timing config for path-aware validation
+    local timing_config = vhost_resolver.get_timing_config(context)
+    if timing_config and timing_config.enabled then
+        local current_path = ngx.var.uri
+        if timing_token.should_validate_for_path(current_path, timing_config) then
+            local timing_result = timing_token.validate_token(context)
+            if timing_result.score > 0 then
+                spam_score = spam_score + timing_result.score
+                if timing_result.flag then
+                    table.insert(spam_flags, timing_result.flag)
+                end
+                ngx.log(ngx.INFO, string.format(
+                    "TIMING_CHECK: ip=%s vhost=%s reason=%s score=%d elapsed=%s",
+                    client_ip, summary.vhost_id, timing_result.reason, timing_result.score,
+                    timing_result.elapsed and string.format("%.2fs", timing_result.elapsed) or "n/a"
+                ))
             end
-            ngx.log(ngx.INFO, string.format(
-                "TIMING_CHECK: ip=%s reason=%s score=%d elapsed=%s",
-                client_ip, timing_result.reason, timing_result.score,
-                timing_result.elapsed and string.format("%.2fs", timing_result.elapsed) or "n/a"
-            ))
+            -- Strip timing cookie before forwarding to backend
+            timing_token.strip_cookie(context)
         end
-        -- Strip timing cookie before forwarding to backend
-        timing_token.strip_cookie()
     end
 
     -- Step 0b: Honeypot field detection

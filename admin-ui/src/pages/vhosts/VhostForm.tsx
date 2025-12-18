@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { vhostsApi, configApi, learningApi, LearnedField } from '@/api/client'
+import { vhostsApi, configApi, learningApi, LearnedField, VhostTimingConfig } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info, Check } from 'lucide-react'
+import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info, Check, Timer } from 'lucide-react'
 import type { Vhost } from '@/api/types'
 
 const defaultVhost: Partial<Vhost> = {
@@ -44,6 +44,18 @@ const defaultVhost: Partial<Vhost> = {
     additional_flagged: [],
     exclusions: [],
   },
+  timing: {
+    enabled: false,
+    cookie_ttl: 3600,
+    min_time_block: 2,
+    min_time_flag: 5,
+    score_no_cookie: 30,
+    score_too_fast: 40,
+    score_suspicious: 20,
+    start_paths: [],
+    end_paths: [],
+    path_match_mode: 'exact',
+  },
 }
 
 export function VhostForm() {
@@ -59,6 +71,8 @@ export function VhostForm() {
   const [newBlockedKeyword, setNewBlockedKeyword] = useState('')
   const [newFlaggedKeyword, setNewFlaggedKeyword] = useState('')
   const [newExclusion, setNewExclusion] = useState('')
+  const [newStartPath, setNewStartPath] = useState('')
+  const [newEndPath, setNewEndPath] = useState('')
   const [shouldNavigate, setShouldNavigate] = useState(true)
 
   const { data, isLoading } = useQuery({
@@ -106,6 +120,11 @@ export function VhostForm() {
           additional_flagged: Array.isArray(vhost.keywords.additional_flagged) ? vhost.keywords.additional_flagged : [],
           exclusions: Array.isArray(vhost.keywords.exclusions) ? vhost.keywords.exclusions : [],
         } : defaultVhost.keywords,
+        timing: vhost.timing ? {
+          ...vhost.timing,
+          start_paths: Array.isArray(vhost.timing.start_paths) ? vhost.timing.start_paths : [],
+          end_paths: Array.isArray(vhost.timing.end_paths) ? vhost.timing.end_paths : [],
+        } : defaultVhost.timing,
       }
       setFormData(normalized)
     }
@@ -262,6 +281,35 @@ export function VhostForm() {
     })
   }
 
+  const addTimingPath = (type: 'start_paths' | 'end_paths') => {
+    const value = type === 'start_paths' ? newStartPath : newEndPath
+    const setter = type === 'start_paths' ? setNewStartPath : setNewEndPath
+    const currentPaths = formData.timing?.[type] || []
+
+    if (value && !currentPaths.includes(value)) {
+      setFormData({
+        ...formData,
+        timing: {
+          ...formData.timing,
+          enabled: formData.timing?.enabled ?? false,
+          [type]: [...currentPaths, value],
+        },
+      })
+      setter('')
+    }
+  }
+
+  const removeTimingPath = (type: 'start_paths' | 'end_paths', path: string) => {
+    setFormData({
+      ...formData,
+      timing: {
+        ...formData.timing,
+        enabled: formData.timing?.enabled ?? false,
+        [type]: (formData.timing?.[type] || []).filter((p) => p !== path),
+      },
+    })
+  }
+
   if (!isNew && isLoading) {
     return <div>Loading...</div>
   }
@@ -289,6 +337,10 @@ export function VhostForm() {
             <TabsTrigger value="routing">Routing</TabsTrigger>
             <TabsTrigger value="waf">WAF Settings</TabsTrigger>
             <TabsTrigger value="keywords">Keywords</TabsTrigger>
+            <TabsTrigger value="timing" className="flex items-center gap-1">
+              <Timer className="h-3 w-3" />
+              Timing
+            </TabsTrigger>
             {!isNew && (
               <TabsTrigger value="learned-fields" className="flex items-center gap-1">
                 <BookOpen className="h-3 w-3" />
@@ -743,6 +795,286 @@ export function VhostForm() {
                     ))}
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="timing">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Timer className="h-5 w-5" />
+                  Timing Configuration
+                </CardTitle>
+                <CardDescription>
+                  Configure form timing validation to detect bot submissions. Timing cookies track how long users spend
+                  on forms before submitting.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="timing_enabled"
+                    checked={formData.timing?.enabled}
+                    onCheckedChange={(checked) =>
+                      setFormData({
+                        ...formData,
+                        timing: { ...formData.timing, enabled: checked },
+                      })
+                    }
+                  />
+                  <Label htmlFor="timing_enabled">Enable Timing Validation</Label>
+                </div>
+
+                {formData.timing?.enabled && (
+                  <>
+                    {/* Time Thresholds */}
+                    <div className="space-y-4">
+                      <h4 className="font-medium text-sm">Time Thresholds (seconds)</h4>
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <div className="space-y-2">
+                          <Label htmlFor="min_time_block">Block Time</Label>
+                          <Input
+                            id="min_time_block"
+                            type="number"
+                            min={0}
+                            max={3600}
+                            value={formData.timing?.min_time_block ?? 2}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                timing: { ...formData.timing, enabled: true, min_time_block: parseInt(e.target.value) || 0 },
+                              })
+                            }
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Submissions faster than this are blocked (definite bot)
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="min_time_flag">Flag Time</Label>
+                          <Input
+                            id="min_time_flag"
+                            type="number"
+                            min={0}
+                            max={3600}
+                            value={formData.timing?.min_time_flag ?? 5}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                timing: { ...formData.timing, enabled: true, min_time_flag: parseInt(e.target.value) || 0 },
+                              })
+                            }
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Submissions faster than this are flagged as suspicious
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="cookie_ttl">Cookie TTL</Label>
+                          <Input
+                            id="cookie_ttl"
+                            type="number"
+                            min={1}
+                            max={86400}
+                            value={formData.timing?.cookie_ttl ?? 3600}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                timing: { ...formData.timing, enabled: true, cookie_ttl: parseInt(e.target.value) || 3600 },
+                              })
+                            }
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            How long timing cookie is valid (seconds)
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Scoring */}
+                    <div className="space-y-4">
+                      <h4 className="font-medium text-sm">Scoring</h4>
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <div className="space-y-2">
+                          <Label htmlFor="score_no_cookie">No Cookie Score</Label>
+                          <Input
+                            id="score_no_cookie"
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={formData.timing?.score_no_cookie ?? 30}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                timing: { ...formData.timing, enabled: true, score_no_cookie: parseInt(e.target.value) || 0 },
+                              })
+                            }
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Score added when no timing cookie present
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="score_too_fast">Too Fast Score</Label>
+                          <Input
+                            id="score_too_fast"
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={formData.timing?.score_too_fast ?? 40}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                timing: { ...formData.timing, enabled: true, score_too_fast: parseInt(e.target.value) || 0 },
+                              })
+                            }
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Score added when submission is faster than block time
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="score_suspicious">Suspicious Score</Label>
+                          <Input
+                            id="score_suspicious"
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={formData.timing?.score_suspicious ?? 20}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                timing: { ...formData.timing, enabled: true, score_suspicious: parseInt(e.target.value) || 0 },
+                              })
+                            }
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Score added when submission is faster than flag time
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Path Configuration */}
+                    <div className="space-y-4">
+                      <h4 className="font-medium text-sm">Path Configuration</h4>
+                      <div className="space-y-2">
+                        <Label htmlFor="path_match_mode">Path Match Mode</Label>
+                        <Select
+                          value={formData.timing?.path_match_mode || 'exact'}
+                          onValueChange={(value) =>
+                            setFormData({
+                              ...formData,
+                              timing: { ...formData.timing, enabled: true, path_match_mode: value as 'exact' | 'prefix' | 'regex' },
+                            })
+                          }
+                        >
+                          <SelectTrigger className="w-48">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="exact">Exact Match</SelectItem>
+                            <SelectItem value="prefix">Prefix Match</SelectItem>
+                            <SelectItem value="regex">Regex Match</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          How start/end paths are matched against request URIs
+                        </p>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        {/* Start Paths */}
+                        <div className="space-y-2">
+                          <Label>Start Paths (GET requests set cookie)</Label>
+                          <div className="flex gap-2">
+                            <Input
+                              value={newStartPath}
+                              onChange={(e) => setNewStartPath(e.target.value)}
+                              placeholder="/contact, /form/*"
+                              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addTimingPath('start_paths'))}
+                            />
+                            <Button type="button" onClick={() => addTimingPath('start_paths')}>
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {(formData.timing?.start_paths || []).map((path) => (
+                              <div
+                                key={path}
+                                className="flex items-center gap-1 rounded-md bg-green-100 px-2 py-1 text-sm text-green-800"
+                              >
+                                {path}
+                                <button
+                                  type="button"
+                                  onClick={() => removeTimingPath('start_paths', path)}
+                                  className="ml-1 hover:text-green-600"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Empty = all GET requests set timing cookie
+                          </p>
+                        </div>
+
+                        {/* End Paths */}
+                        <div className="space-y-2">
+                          <Label>End Paths (POST requests validated)</Label>
+                          <div className="flex gap-2">
+                            <Input
+                              value={newEndPath}
+                              onChange={(e) => setNewEndPath(e.target.value)}
+                              placeholder="/contact/submit, /form/*/submit"
+                              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addTimingPath('end_paths'))}
+                            />
+                            <Button type="button" onClick={() => addTimingPath('end_paths')}>
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {(formData.timing?.end_paths || []).map((path) => (
+                              <div
+                                key={path}
+                                className="flex items-center gap-1 rounded-md bg-blue-100 px-2 py-1 text-sm text-blue-800"
+                              >
+                                {path}
+                                <button
+                                  type="button"
+                                  onClick={() => removeTimingPath('end_paths', path)}
+                                  className="ml-1 hover:text-blue-600"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Empty = all POST requests are validated
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Info note */}
+                    <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <Info className="h-5 w-5 text-yellow-600 mt-0.5" />
+                        <div>
+                          <p className="font-medium text-yellow-800">How Timing Validation Works</p>
+                          <p className="text-sm text-yellow-700 mt-1">
+                            When a user visits a start path (GET), a timing cookie is set. When they submit to an end path (POST),
+                            the time elapsed is checked. Submissions faster than the thresholds add to the spam score.
+                            The cookie is unique to this vhost: <code className="bg-yellow-100 px-1 rounded">_waf_timing_{formData.id || 'vhost_id'}</code>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

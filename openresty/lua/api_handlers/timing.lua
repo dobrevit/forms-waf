@@ -61,4 +61,48 @@ _M.handlers["PUT:/timing/config"] = function()
     })
 end
 
+-- GET /timing/vhosts - List all vhosts with timing enabled
+_M.handlers["GET:/timing/vhosts"] = function()
+    local red, err = utils.get_redis()
+    if not red then
+        return utils.error_response("Redis connection failed: " .. err)
+    end
+
+    -- Get all vhost IDs from index
+    local vhost_ids = red:zrange("waf:vhosts:index", 0, -1)
+    local timing_vhosts = {}
+
+    if type(vhost_ids) == "table" then
+        for _, vhost_id in ipairs(vhost_ids) do
+            local config_json = red:get("waf:vhosts:config:" .. vhost_id)
+            if config_json and config_json ~= ngx.null then
+                local config = cjson.decode(config_json)
+                if config and config.timing and config.timing.enabled then
+                    -- Determine cookie name for this vhost
+                    local cookie_name = "_waf_timing"
+                    if vhost_id and vhost_id ~= "_default" then
+                        local safe_id = vhost_id:gsub("[^%w_-]", "")
+                        cookie_name = cookie_name .. "_" .. safe_id
+                    end
+
+                    table.insert(timing_vhosts, {
+                        vhost_id = vhost_id,
+                        name = config.name,
+                        hostnames = config.hostnames,
+                        timing = config.timing,
+                        cookie_name = cookie_name
+                    })
+                end
+            end
+        end
+    end
+
+    utils.close_redis(red)
+
+    return utils.json_response({
+        vhosts = timing_vhosts,
+        total = #timing_vhosts
+    })
+end
+
 return _M

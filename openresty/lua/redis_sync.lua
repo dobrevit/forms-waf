@@ -1080,7 +1080,7 @@ local DEFAULT_VHOST = {
     id = "_default",
     name = "Default Virtual Host",
     enabled = true,
-    hostnames = {},
+    hostnames = {"_"},  -- Nginx-style catch-all hostname
     waf = {
         enabled = true,
         default_mode = "monitoring",
@@ -1129,6 +1129,10 @@ function _M.initialize_defaults()
         local config_json = cjson.encode(DEFAULT_VHOST)
         red:set(KEYS.vhost_config_prefix .. DEFAULT_VHOST.id, config_json)
         red:zadd(KEYS.vhost_index, DEFAULT_VHOST.priority, DEFAULT_VHOST.id)
+        -- Create host mapping for the catch-all hostname
+        for _, hostname in ipairs(DEFAULT_VHOST.hostnames) do
+            red:hset(KEYS.vhost_hosts_exact, hostname, DEFAULT_VHOST.id)
+        end
         table.insert(initialized, "default_vhost")
     end
 

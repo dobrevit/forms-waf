@@ -186,6 +186,64 @@ local function resolve_waf_settings(vhost_config)
     return result
 end
 
+-- Resolve timing configuration for vhost with inheritance from global
+local function resolve_timing_config(vhost_config)
+    -- Default timing config (inherits from global timing_token defaults)
+    local result = {
+        enabled = false,
+        cookie_ttl = 3600,
+        min_time_block = 2,
+        min_time_flag = 5,
+        score_no_cookie = 30,
+        score_too_fast = 40,
+        score_suspicious = 20,
+        start_paths = {},
+        end_paths = {},
+        path_match_mode = "exact"
+    }
+
+    -- No vhost timing config, return defaults (disabled)
+    if not vhost_config or not vhost_config.timing then
+        return result
+    end
+
+    local vhost_timing = vhost_config.timing
+
+    -- Override with vhost-specific values
+    if vhost_timing.enabled ~= nil then
+        result.enabled = vhost_timing.enabled
+    end
+    if vhost_timing.cookie_ttl then
+        result.cookie_ttl = vhost_timing.cookie_ttl
+    end
+    if vhost_timing.min_time_block then
+        result.min_time_block = vhost_timing.min_time_block
+    end
+    if vhost_timing.min_time_flag then
+        result.min_time_flag = vhost_timing.min_time_flag
+    end
+    if vhost_timing.score_no_cookie then
+        result.score_no_cookie = vhost_timing.score_no_cookie
+    end
+    if vhost_timing.score_too_fast then
+        result.score_too_fast = vhost_timing.score_too_fast
+    end
+    if vhost_timing.score_suspicious then
+        result.score_suspicious = vhost_timing.score_suspicious
+    end
+    if vhost_timing.start_paths then
+        result.start_paths = vhost_timing.start_paths
+    end
+    if vhost_timing.end_paths then
+        result.end_paths = vhost_timing.end_paths
+    end
+    if vhost_timing.path_match_mode then
+        result.path_match_mode = vhost_timing.path_match_mode
+    end
+
+    return result
+end
+
 -- Main resolution function for vhost
 -- Returns complete resolved configuration for a vhost
 function _M.resolve(vhost_id)
@@ -199,6 +257,7 @@ function _M.resolve(vhost_id)
         enabled = true,
         waf = resolve_waf_settings(vhost_config),
         routing = resolve_routing(vhost_config),
+        timing = resolve_timing_config(vhost_config),
         thresholds = merge_thresholds(global_thresholds, vhost_config and vhost_config.thresholds),
         keywords = merge_keywords(vhost_config and vhost_config.keywords),
         endpoints = {
@@ -479,6 +538,15 @@ function _M.get_rate_limiting(context)
 
     -- Return global defaults
     return default_rate_limiting
+end
+
+-- Get timing configuration for request context
+-- Returns resolved timing config from vhost, or nil if not available
+function _M.get_timing_config(context)
+    if not context or not context.vhost then
+        return nil
+    end
+    return context.vhost.timing
 end
 
 -- Get upstream URL based on routing config
