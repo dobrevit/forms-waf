@@ -103,7 +103,10 @@ end
 
 -- Field anomaly detection
 -- Returns: { score = number, flags = {} }
-local function detect_field_anomalies(form_data, security_settings)
+-- @param form_data: table of form field key-value pairs
+-- @param security_settings: security configuration
+-- @param ignore_fields: optional array of field names to exclude from analysis
+local function detect_field_anomalies(form_data, security_settings, ignore_fields)
     local result = {
         score = 0,
         flags = {}
@@ -111,6 +114,15 @@ local function detect_field_anomalies(form_data, security_settings)
 
     if not form_data or type(form_data) ~= "table" then
         return result
+    end
+
+    -- Build ignore set from configurable ignore_fields
+    local ignore_set = {}
+    if ignore_fields then
+        for _, f in ipairs(ignore_fields) do
+            ignore_set[f] = true
+            ignore_set[f:lower()] = true  -- Also match lowercase version
+        end
     end
 
     -- Gather field statistics
@@ -121,11 +133,16 @@ local function detect_field_anomalies(form_data, security_settings)
 
     for field_name, value in pairs(form_data) do
         if type(value) == "string" and #value > 0 then
-            -- Skip obvious non-text fields
+            -- Skip fields in the ignore list (CSRF tokens, captchas, etc.)
             local name_lower = field_name:lower()
-            if not (name_lower:match("csrf") or name_lower:match("token") or
-                    name_lower:match("captcha") or name_lower:match("password") or
-                    name_lower:match("_id$")) then
+            local should_skip = ignore_set[field_name] or ignore_set[name_lower]
+            -- Also skip fields matching common security patterns
+            if not should_skip then
+                should_skip = name_lower:match("csrf") or name_lower:match("token") or
+                              name_lower:match("captcha") or name_lower:match("password") or
+                              name_lower:match("_id$")
+            end
+            if not should_skip then
 
                 table.insert(text_fields, { name = field_name, value = value })
                 table.insert(field_lengths, #value)
@@ -606,7 +623,9 @@ function _M.process_request()
     end
 
     -- Step 1: Keyword filtering
-    local keyword_result = keyword_filter.scan(form_data)
+    -- Get ignore fields to exclude from keyword scanning (e.g., CSRF tokens)
+    local keyword_ignore_fields = vhost_resolver.get_ignore_fields(context)
+    local keyword_result = keyword_filter.scan(form_data, keyword_ignore_fields)
 
     -- Apply context-specific keyword exclusions
     if keyword_result.blocked_keywords and #keyword_result.blocked_keywords > 0 then
@@ -643,7 +662,13 @@ function _M.process_request()
     -- Check context-specific additional keywords (vhost + endpoint)
     local additional = vhost_resolver.get_additional_keywords(context)
     if #additional.blocked > 0 or #additional.flagged > 0 then
-        local combined_text = form_parser.get_combined_text(form_data):lower()
+        -- Build exclude set from ignore fields
+        local additional_ignore = vhost_resolver.get_ignore_fields(context)
+        local additional_exclude = {}
+        for _, f in ipairs(additional_ignore) do
+            additional_exclude[f] = true
+        end
+        local combined_text = form_parser.get_combined_text(form_data, additional_exclude):lower()
 
         for _, kw in ipairs(additional.blocked) do
             if combined_text:find(kw:lower(), 1, true) then
@@ -853,7 +878,9 @@ function _M.process_request()
     -- Step 3c: Field anomaly detection
     -- Detects bot-like patterns: same field lengths, sequential data, all caps, test data
     if security.check_field_anomalies ~= false then  -- Enabled by default
-        local anomaly_result = detect_field_anomalies(form_data, security)
+        -- Pass ignore_fields to exclude CSRF tokens, captchas, etc. from anomaly detection
+        local anomaly_ignore_fields = vhost_resolver.get_ignore_fields(context)
+        local anomaly_result = detect_field_anomalies(form_data, security, anomaly_ignore_fields)
         if anomaly_result.score > 0 then
             spam_score = spam_score + anomaly_result.score
             for _, flag in ipairs(anomaly_result.flags) do
