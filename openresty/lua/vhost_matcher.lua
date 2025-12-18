@@ -339,6 +339,200 @@ local function validate_timing_config(timing)
     return errors
 end
 
+-- Validate behavioral tracking configuration
+local function validate_behavioral_config(behavioral)
+    local errors = {}
+
+    -- enabled must be boolean if present
+    if behavioral.enabled ~= nil and type(behavioral.enabled) ~= "boolean" then
+        table.insert(errors, "enabled must be a boolean")
+    end
+
+    -- Validate flows array
+    if behavioral.flows ~= nil then
+        if type(behavioral.flows) ~= "table" then
+            table.insert(errors, "flows must be an array")
+        else
+            for i, flow in ipairs(behavioral.flows) do
+                local flow_prefix = "flows[" .. i .. "]."
+
+                -- name is required
+                if not flow.name or flow.name == "" then
+                    table.insert(errors, flow_prefix .. "name is required")
+                elseif type(flow.name) ~= "string" then
+                    table.insert(errors, flow_prefix .. "name must be a string")
+                elseif flow.name:match("[^a-zA-Z0-9_-]") then
+                    table.insert(errors, flow_prefix .. "name must contain only alphanumeric characters, dashes, and underscores")
+                end
+
+                -- start_paths validation
+                if flow.start_paths ~= nil then
+                    if type(flow.start_paths) ~= "table" then
+                        table.insert(errors, flow_prefix .. "start_paths must be an array")
+                    else
+                        for j, path in ipairs(flow.start_paths) do
+                            if type(path) ~= "string" or path == "" then
+                                table.insert(errors, flow_prefix .. "start_paths[" .. j .. "] must be a non-empty string")
+                                break
+                            end
+                        end
+                    end
+                end
+
+                -- start_methods validation
+                if flow.start_methods ~= nil then
+                    if type(flow.start_methods) ~= "table" then
+                        table.insert(errors, flow_prefix .. "start_methods must be an array")
+                    else
+                        local valid_methods = {GET = true, POST = true, PUT = true, PATCH = true, DELETE = true, OPTIONS = true, HEAD = true}
+                        for j, method in ipairs(flow.start_methods) do
+                            if type(method) ~= "string" then
+                                table.insert(errors, flow_prefix .. "start_methods[" .. j .. "] must be a string")
+                                break
+                            elseif not valid_methods[method:upper()] then
+                                table.insert(errors, flow_prefix .. "start_methods[" .. j .. "] must be a valid HTTP method")
+                                break
+                            end
+                        end
+                    end
+                end
+
+                -- end_paths validation
+                if flow.end_paths ~= nil then
+                    if type(flow.end_paths) ~= "table" then
+                        table.insert(errors, flow_prefix .. "end_paths must be an array")
+                    else
+                        for j, path in ipairs(flow.end_paths) do
+                            if type(path) ~= "string" or path == "" then
+                                table.insert(errors, flow_prefix .. "end_paths[" .. j .. "] must be a non-empty string")
+                                break
+                            end
+                        end
+                    end
+                end
+
+                -- end_methods validation
+                if flow.end_methods ~= nil then
+                    if type(flow.end_methods) ~= "table" then
+                        table.insert(errors, flow_prefix .. "end_methods must be an array")
+                    else
+                        local valid_methods = {GET = true, POST = true, PUT = true, PATCH = true, DELETE = true, OPTIONS = true, HEAD = true}
+                        for j, method in ipairs(flow.end_methods) do
+                            if type(method) ~= "string" then
+                                table.insert(errors, flow_prefix .. "end_methods[" .. j .. "] must be a string")
+                                break
+                            elseif not valid_methods[method:upper()] then
+                                table.insert(errors, flow_prefix .. "end_methods[" .. j .. "] must be a valid HTTP method")
+                                break
+                            end
+                        end
+                    end
+                end
+
+                -- path_match_mode validation
+                if flow.path_match_mode ~= nil then
+                    local valid_modes = {exact = true, prefix = true, regex = true}
+                    if not valid_modes[flow.path_match_mode] then
+                        table.insert(errors, flow_prefix .. "path_match_mode must be one of: exact, prefix, regex")
+                    end
+
+                    -- Validate regex patterns if regex mode
+                    if flow.path_match_mode == "regex" then
+                        local paths_to_check = {}
+                        if flow.start_paths then
+                            for _, p in ipairs(flow.start_paths) do
+                                table.insert(paths_to_check, {field = flow_prefix .. "start_paths", pattern = p})
+                            end
+                        end
+                        if flow.end_paths then
+                            for _, p in ipairs(flow.end_paths) do
+                                table.insert(paths_to_check, {field = flow_prefix .. "end_paths", pattern = p})
+                            end
+                        end
+
+                        for _, item in ipairs(paths_to_check) do
+                            local ok, _ = pcall(ngx.re.match, "", item.pattern)
+                            if not ok then
+                                table.insert(errors, item.field .. " contains invalid regex: " .. item.pattern)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Validate tracking settings
+    if behavioral.tracking ~= nil then
+        if type(behavioral.tracking) ~= "table" then
+            table.insert(errors, "tracking must be an object")
+        else
+            local bool_fields = {"fill_duration", "submission_counts", "unique_ips", "avg_spam_score"}
+            for _, field in ipairs(bool_fields) do
+                if behavioral.tracking[field] ~= nil and type(behavioral.tracking[field]) ~= "boolean" then
+                    table.insert(errors, "tracking." .. field .. " must be a boolean")
+                end
+            end
+        end
+    end
+
+    -- Validate baselines settings
+    if behavioral.baselines ~= nil then
+        if type(behavioral.baselines) ~= "table" then
+            table.insert(errors, "baselines must be an object")
+        else
+            if behavioral.baselines.learning_period_days ~= nil then
+                local val = tonumber(behavioral.baselines.learning_period_days)
+                if not val or val < 1 or val > 90 then
+                    table.insert(errors, "baselines.learning_period_days must be between 1 and 90")
+                end
+            end
+            if behavioral.baselines.min_samples ~= nil then
+                local val = tonumber(behavioral.baselines.min_samples)
+                if not val or val < 10 or val > 10000 then
+                    table.insert(errors, "baselines.min_samples must be between 10 and 10000")
+                end
+            end
+        end
+    end
+
+    -- Validate anomaly_detection settings
+    if behavioral.anomaly_detection ~= nil then
+        if type(behavioral.anomaly_detection) ~= "table" then
+            table.insert(errors, "anomaly_detection must be an object")
+        else
+            local ad = behavioral.anomaly_detection
+
+            if ad.enabled ~= nil and type(ad.enabled) ~= "boolean" then
+                table.insert(errors, "anomaly_detection.enabled must be a boolean")
+            end
+
+            if ad.std_dev_threshold ~= nil then
+                local val = tonumber(ad.std_dev_threshold)
+                if not val or val < 0.5 or val > 10 then
+                    table.insert(errors, "anomaly_detection.std_dev_threshold must be between 0.5 and 10")
+                end
+            end
+
+            if ad.action ~= nil then
+                local valid_actions = {flag = true, score = true}
+                if not valid_actions[ad.action] then
+                    table.insert(errors, "anomaly_detection.action must be one of: flag, score")
+                end
+            end
+
+            if ad.score_addition ~= nil then
+                local val = tonumber(ad.score_addition)
+                if not val or val < 0 or val > 100 then
+                    table.insert(errors, "anomaly_detection.score_addition must be between 0 and 100")
+                end
+            end
+        end
+    end
+
+    return errors
+end
+
 -- Validate vhost configuration
 function _M.validate_config(config)
     local errors = {}
@@ -431,6 +625,14 @@ function _M.validate_config(config)
         local timing_errors = validate_timing_config(config.timing)
         for _, err in ipairs(timing_errors) do
             table.insert(errors, "timing." .. err)
+        end
+    end
+
+    -- Validate behavioral tracking configuration if provided
+    if config.behavioral then
+        local behavioral_errors = validate_behavioral_config(config.behavioral)
+        for _, err in ipairs(behavioral_errors) do
+            table.insert(errors, "behavioral." .. err)
         end
     end
 

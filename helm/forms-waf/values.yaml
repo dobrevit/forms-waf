@@ -54,6 +54,16 @@ openresty:
   # Environment variables
   env:
     WAF_SYNC_INTERVAL: "30"
+    # HAProxy upstream HTTP endpoint (FQDN:port) - leave empty to auto-generate
+    # Auto-generated: {release}-haproxy.{namespace}.svc.cluster.local:8080
+    HAPROXY_UPSTREAM: ""
+    # HAProxy upstream HTTPS endpoint (FQDN:port) - leave empty to auto-generate
+    # Auto-generated: {release}-haproxy.{namespace}.svc.cluster.local:8443
+    HAPROXY_UPSTREAM_SSL: ""
+    # Toggle: use SSL endpoint (HAPROXY_UPSTREAM_SSL) instead of HTTP (HAPROXY_UPSTREAM)
+    UPSTREAM_SSL: "false"
+    # HAProxy connection timeout in seconds
+    HAPROXY_TIMEOUT: "30"
 
   # Extra environment variables from secrets/configmaps
   envFrom: []
@@ -116,6 +126,7 @@ haproxy:
   service:
     type: ClusterIP
     port: 8080
+    httpsPort: 8443
     statsPort: 8404
     healthPort: 8405
     peerPort: 10000
@@ -192,6 +203,34 @@ haproxy:
     periodSeconds: 5
     timeoutSeconds: 3
     failureThreshold: 3
+
+  # TLS configuration for inter-service communication
+  tls:
+    # Enable HTTPS on port 8443
+    enabled: false
+
+    # Certificate source: "self-signed" or "cert-manager"
+    source: "self-signed"
+
+    # Self-signed certificate settings
+    selfSigned:
+      # Certificate validity in days
+      validityDays: 365
+      # Common name for certificate
+      commonName: "haproxy"
+      # Organization for certificate
+      organization: "Forms WAF"
+
+    # cert-manager settings (when source: "cert-manager")
+    certManager:
+      # Use existing certificate Secret
+      existingSecret: ""
+      # Or create Certificate resource
+      issuerRef:
+        name: ""          # e.g., "letsencrypt-prod" or "selfsigned-issuer"
+        kind: "ClusterIssuer"  # or "Issuer"
+      # Additional DNS names for the certificate
+      dnsNames: []
 
 # Redis configuration (using Bitnami chart)
 redis:
@@ -425,6 +464,13 @@ redisInit:
     hash_count_block: 10
     ip_rate_limit: 30
 
+  # Initial routing configuration (optional - seeds Redis for admin UI)
+  # Primary config is via openresty.env.HAPROXY_* environment variables
+  # This section seeds Redis so values are visible/editable in admin UI
+  routing:
+    # Set to false to skip seeding routing config in Redis
+    enabled: true
+
   # Initial whitelisted IPs
   whitelistedIPs:
     - "10.0.0.0/8"
@@ -551,6 +597,10 @@ backend:
     replicaCount: 1
     service:
       port: 8080
+      httpsPort: 8443
+    # TLS configuration for mock backend
+    tls:
+      enabled: false  # Enable HTTPS on mock backend
 
 # Network policies
 networkPolicy:

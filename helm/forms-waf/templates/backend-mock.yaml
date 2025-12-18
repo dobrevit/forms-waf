@@ -18,6 +18,25 @@ spec:
         {{- include "forms-waf.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: backend
     spec:
+      {{- if .Values.backend.mock.tls.enabled }}
+      initContainers:
+        - name: generate-ssl
+          image: alpine/openssl:latest
+          command:
+            - sh
+            - -c
+            - |
+              openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+                -keyout /etc/nginx/ssl/server.key \
+                -out /etc/nginx/ssl/server.crt \
+                -subj "/CN=backend/O=Forms WAF" \
+                -addext "subjectAltName=DNS:backend,DNS:localhost,IP:127.0.0.1"
+              chmod 600 /etc/nginx/ssl/server.key
+              chmod 644 /etc/nginx/ssl/server.crt
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /etc/nginx/ssl
+      {{- end }}
       containers:
         - name: backend
           image: "{{ .Values.backend.mock.image.repository }}:{{ .Values.backend.mock.image.tag }}"
@@ -26,6 +45,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            {{- if .Values.backend.mock.tls.enabled }}
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -42,10 +66,18 @@ spec:
             - name: nginx-config
               mountPath: /etc/nginx/conf.d/default.conf
               subPath: default.conf
+            {{- if .Values.backend.mock.tls.enabled }}
+            - name: ssl-certs
+              mountPath: /etc/nginx/ssl
+            {{- end }}
       volumes:
         - name: nginx-config
           configMap:
             name: {{ include "forms-waf.fullname" . }}-backend-config
+        {{- if .Values.backend.mock.tls.enabled }}
+        - name: ssl-certs
+          emptyDir: {}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -61,6 +93,12 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if .Values.backend.mock.tls.enabled }}
+    - port: {{ .Values.backend.mock.service.httpsPort }}
+      targetPort: https
+      protocol: TCP
+      name: https
+    {{- end }}
   selector:
     {{- include "forms-waf.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: backend
@@ -99,4 +137,37 @@ data:
             return 200 '{"status":"ok","endpoint":"default"}';
         }
     }
+    {{- if .Values.backend.mock.tls.enabled }}
+
+    server {
+        listen 8443 ssl;
+        server_name _;
+
+        ssl_certificate /etc/nginx/ssl/server.crt;
+        ssl_certificate_key /etc/nginx/ssl/server.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE+AESGCM:DHE+AESGCM;
+
+        location /health {
+            access_log off;
+            return 200 '{"status":"healthy","service":"backend","tls":true}';
+            add_header Content-Type application/json;
+        }
+
+        location /echo {
+            default_type application/json;
+            return 200 '{"status":"ok","message":"Echo endpoint (TLS)","waf_headers":{"form_hash":"$http_x_form_hash","spam_score":"$http_x_spam_score"}}';
+        }
+
+        location /submit {
+            default_type application/json;
+            return 200 '{"status":"success","message":"Form submitted successfully (TLS)"}';
+        }
+
+        location / {
+            default_type application/json;
+            return 200 '{"status":"ok","endpoint":"default","tls":true}';
+        }
+    }
+    {{- end }}
 {{- end }}

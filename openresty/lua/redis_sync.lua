@@ -9,6 +9,7 @@ local keyword_filter = require "keyword_filter"
 local endpoint_matcher = require "endpoint_matcher"
 local vhost_matcher = require "vhost_matcher"
 local field_learner = require "field_learner"
+local behavioral_tracker = require "behavioral_tracker"
 
 -- Lazy load captcha_handler to avoid circular dependency
 local captcha_handler = nil
@@ -27,6 +28,12 @@ local REDIS_DB = tonumber(os.getenv("REDIS_DB")) or 0
 
 -- Sync interval in seconds
 local SYNC_INTERVAL = tonumber(os.getenv("WAF_SYNC_INTERVAL")) or 30
+
+-- HAProxy routing defaults from environment
+local HAPROXY_UPSTREAM = os.getenv("HAPROXY_UPSTREAM") or "haproxy:80"
+local HAPROXY_UPSTREAM_SSL = os.getenv("HAPROXY_UPSTREAM_SSL") or "haproxy:443"
+local UPSTREAM_SSL = os.getenv("UPSTREAM_SSL") or "false"
+local HAPROXY_TIMEOUT = os.getenv("HAPROXY_TIMEOUT") or "30"
 
 -- Redis keys
 local KEYS = {
@@ -202,22 +209,35 @@ local function sync_routing(red)
         return
     end
 
+    -- Start with env variable defaults
+    local routing = {
+        haproxy_upstream = HAPROXY_UPSTREAM,
+        haproxy_upstream_ssl = HAPROXY_UPSTREAM_SSL,
+        upstream_ssl = UPSTREAM_SSL == "true",
+        haproxy_timeout = tonumber(HAPROXY_TIMEOUT) or 30,
+    }
+
+    -- Override with Redis values if present
     if type(config) == "table" and #config > 0 then
-        local routing = {}
         for i = 1, #config, 2 do
             local key = config[i]
             local value = config[i + 1]
             if key and value then
-                -- Try to convert to number if applicable
-                local num_value = tonumber(value)
-                routing[key] = num_value or value
+                -- Handle boolean conversion for upstream_ssl
+                if key == "upstream_ssl" then
+                    routing[key] = value == "true"
+                else
+                    -- Try to convert to number if applicable
+                    local num_value = tonumber(value)
+                    routing[key] = num_value or value
+                end
             end
         end
-
-        -- Store as JSON
-        config_cache:set("routing", cjson.encode(routing), 120)
-        ngx.log(ngx.DEBUG, "Synced routing config")
     end
+
+    -- Store as JSON
+    config_cache:set("routing", cjson.encode(routing), 120)
+    ngx.log(ngx.DEBUG, "Synced routing config: haproxy_upstream=", routing.haproxy_upstream)
 end
 
 -- Sync IP allowlist (separates exact IPs from CIDR ranges)
@@ -950,6 +970,78 @@ function _M.start_sync_timer()
         else
             ngx.log(ngx.WARN, "Failed to start learning flush timer: ", err)
         end
+
+        -- Start behavioral baseline calculation timer (hourly)
+        local baseline_interval = 3600  -- 1 hour
+        local function baseline_calculation_handler(premature)
+            if premature then
+                return
+            end
+
+            ngx.log(ngx.DEBUG, "Starting behavioral baseline calculations")
+
+            -- Connect to Redis
+            local red = redis:new()
+            red:set_timeouts(5000, 5000, 5000)  -- Longer timeout for calculations
+
+            local ok, err = red:connect(REDIS_HOST, REDIS_PORT)
+            if ok then
+                if REDIS_PASSWORD then
+                    red:auth(REDIS_PASSWORD)
+                end
+                if REDIS_DB > 0 then
+                    red:select(REDIS_DB)
+                end
+
+                -- Get all vhosts with behavioral tracking
+                local vhost_ids = behavioral_tracker.get_tracked_vhosts()
+                local calculated_count = 0
+
+                for _, vhost_id in ipairs(vhost_ids or {}) do
+                    -- Get vhost config for baselines settings
+                    local vhost_config_json = red:get(KEYS.vhost_config_prefix .. vhost_id)
+                    if vhost_config_json and vhost_config_json ~= ngx.null then
+                        local vhost_config = cjson.decode(vhost_config_json)
+                        if vhost_config and vhost_config.behavioral and vhost_config.behavioral.enabled then
+                            local baselines_config = vhost_config.behavioral.baselines or {}
+
+                            -- Get all flows for this vhost
+                            local flows = behavioral_tracker.get_flows(vhost_id)
+                            for _, flow_name in ipairs(flows or {}) do
+                                local ok, err = behavioral_tracker.calculate_baselines(
+                                    red, vhost_id, flow_name, baselines_config
+                                )
+                                if ok then
+                                    calculated_count = calculated_count + 1
+                                elseif err ~= "insufficient samples" then
+                                    ngx.log(ngx.WARN, "Baseline calculation failed for ",
+                                        vhost_id, ":", flow_name, " - ", err)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if calculated_count > 0 then
+                    ngx.log(ngx.INFO, "Calculated ", calculated_count, " behavioral baselines")
+                end
+
+                red:set_keepalive(10000, 100)
+            else
+                ngx.log(ngx.WARN, "Baseline calculation: failed to connect to Redis: ", err)
+            end
+
+            -- Reschedule
+            ngx.timer.at(baseline_interval, baseline_calculation_handler)
+        end
+
+        -- Start after initial delay (5 minutes) to allow data to accumulate
+        local ok, err = ngx.timer.at(300, baseline_calculation_handler)
+        if ok then
+            ngx.log(ngx.INFO, "Behavioral baseline calculation timer started with interval: ", baseline_interval, "s")
+        else
+            ngx.log(ngx.WARN, "Failed to start baseline calculation timer: ", err)
+        end
     end
 end
 
@@ -1060,6 +1152,11 @@ function _M.return_connection(red)
     close_redis(red)
 end
 
+-- Alias for release_connection (used by behavioral_tracker)
+function _M.release_connection(red)
+    close_redis(red)
+end
+
 -- Default values for seeding Redis
 local DEFAULT_THRESHOLDS = {
     spam_score_block = 80,
@@ -1072,8 +1169,10 @@ local DEFAULT_THRESHOLDS = {
 }
 
 local DEFAULT_ROUTING = {
-    haproxy_upstream = "haproxy:80",
-    haproxy_timeout = 30,
+    haproxy_upstream = HAPROXY_UPSTREAM,
+    haproxy_upstream_ssl = HAPROXY_UPSTREAM_SSL,
+    upstream_ssl = UPSTREAM_SSL == "true",
+    haproxy_timeout = tonumber(HAPROXY_TIMEOUT) or 30,
 }
 
 local DEFAULT_VHOST = {

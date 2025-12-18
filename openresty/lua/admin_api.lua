@@ -24,6 +24,7 @@ local bulk_handler = require "api_handlers.bulk"
 local captcha_handler = require "api_handlers.captcha"
 local endpoints_handler = require "api_handlers.endpoints"
 local vhosts_handler = require "api_handlers.vhosts"
+local behavioral_handler = require "api_handlers.behavioral"
 
 -- Configuration
 local REQUIRE_AUTH = os.getenv("WAF_ADMIN_AUTH") ~= "false"  -- Default: require auth
@@ -66,6 +67,7 @@ register_handlers(bulk_handler)
 register_handlers(captcha_handler)
 register_handlers(endpoints_handler)
 register_handlers(vhosts_handler)
+register_handlers(behavioral_handler)
 
 -- ==================== User Management Endpoints ====================
 -- Delegated to api_handlers/users.lua module

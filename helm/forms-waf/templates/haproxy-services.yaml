@@ -17,6 +17,12 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if .Values.haproxy.tls.enabled }}
+    - port: {{ .Values.haproxy.service.httpsPort }}
+      targetPort: https
+      protocol: TCP
+      name: https
+    {{- end }}
     - port: {{ .Values.haproxy.service.peerPort }}
       targetPort: peer
       protocol: TCP
@@ -44,6 +50,12 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if .Values.haproxy.tls.enabled }}
+    - port: {{ .Values.haproxy.service.httpsPort }}
+      targetPort: https
+      protocol: TCP
+      name: https
+    {{- end }}
     - port: {{ .Values.haproxy.service.statsPort }}
       targetPort: stats
       protocol: TCP

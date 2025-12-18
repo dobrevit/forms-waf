@@ -68,22 +68,24 @@ export interface VhostWafConfig {
 export interface VhostRouting {
   use_haproxy: boolean
   haproxy_backend?: string
-  haproxy_upstream?: string  // Override global HAProxy upstream
-  haproxy_ssl?: boolean      // Use HTTPS for HAProxy upstream (overrides global)
+  haproxy_upstream?: string      // Override global HAProxy HTTP endpoint
+  haproxy_upstream_ssl?: string  // Override global HAProxy HTTPS endpoint
+  upstream_ssl?: boolean         // Toggle: when true, use haproxy_upstream_ssl (overrides global)
+  haproxy_ssl?: boolean          // @deprecated - use upstream_ssl instead
   upstream?: {
     servers: string[]
     health_check?: string
     timeout?: number
-    ssl?: boolean            // Use HTTPS for direct upstream servers
+    ssl?: boolean                // Use HTTPS for direct upstream servers
   }
 }
 
 // Global routing configuration
 export interface GlobalRouting {
-  haproxy_upstream: string   // Default HAProxy upstream address (e.g., "haproxy:80")
-  haproxy_ssl?: boolean      // Use HTTPS for HAProxy upstream connections (default: false)
-  upstream_ssl?: boolean     // Use HTTPS for direct upstream connections (default: false)
-  haproxy_timeout?: number   // Default timeout for HAProxy connections
+  haproxy_upstream: string       // HAProxy HTTP endpoint address (e.g., "haproxy:8080")
+  haproxy_upstream_ssl?: string  // HAProxy HTTPS endpoint address (e.g., "haproxy:8443")
+  upstream_ssl?: boolean         // Toggle: when true, use haproxy_upstream_ssl instead of haproxy_upstream
+  haproxy_timeout?: number       // Default timeout for HAProxy connections
 }
 
 export interface VhostThresholds {
@@ -131,6 +133,7 @@ export interface Vhost {
   keywords?: VhostKeywords
   endpoints?: VhostEndpoints
   timing?: VhostTimingConfig  // Per-vhost timing validation configuration
+  behavioral?: VhostBehavioralConfig  // Per-vhost behavioral tracking configuration
   endpoint_count?: number  // Number of vhost-specific endpoints
 }
 
@@ -323,4 +326,85 @@ export interface EndpointCaptchaConfig {
 // Extended Endpoint with CAPTCHA (inherits security from Endpoint)
 export interface EndpointWithCaptcha extends Endpoint {
   captcha?: EndpointCaptchaConfig
+}
+
+// Behavioral tracking types
+export interface BehavioralFlow {
+  name: string
+  start_paths: string[]
+  start_methods?: string[]
+  end_paths: string[]
+  end_methods?: string[]
+  path_match_mode?: 'exact' | 'prefix' | 'regex'
+}
+
+export interface BehavioralTracking {
+  fill_duration?: boolean
+  submission_counts?: boolean
+  unique_ips?: boolean
+  avg_spam_score?: boolean
+}
+
+export interface BehavioralBaselines {
+  learning_period_days?: number
+  min_samples?: number
+}
+
+export interface BehavioralAnomalyDetection {
+  enabled?: boolean
+  std_dev_threshold?: number
+  action?: 'flag' | 'score'
+  score_addition?: number
+}
+
+export interface VhostBehavioralConfig {
+  enabled: boolean
+  flows?: BehavioralFlow[]
+  tracking?: BehavioralTracking
+  baselines?: BehavioralBaselines
+  anomaly_detection?: BehavioralAnomalyDetection
+}
+
+export interface BehavioralStats {
+  bucket_id: string
+  timestamp: number
+  submissions: number
+  allowed: number
+  blocked: number
+  monitored: number
+  avg_spam_score: number
+  duration_histogram: Record<string, number>
+  unique_ips: number
+}
+
+export interface BehavioralBaseline {
+  learning_complete: boolean
+  hourly_avg_submissions?: number
+  hourly_std_dev_submissions?: number
+  hourly_p50_submissions?: number
+  hourly_p90_submissions?: number
+  hourly_p99_submissions?: number
+  samples_used?: number
+  samples_collected?: number
+  min_samples_needed?: number
+  learning_period_days?: number
+  last_updated?: string
+}
+
+export interface BehavioralFlowSummary {
+  name: string
+  baseline_status: 'ready' | 'learning' | 'no_data'
+  samples_collected: number
+  last_hour?: {
+    submissions: number
+    blocked: number
+    allowed: number
+    unique_ips: number
+    avg_spam_score: number
+  }
+}
+
+export interface BehavioralVhostSummary {
+  vhost_id: string
+  flows: BehavioralFlowSummary[]
 }

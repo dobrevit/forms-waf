@@ -6,8 +6,68 @@ CONFIG_SOURCE="/usr/local/etc/haproxy/haproxy.cfg"
 CONFIG_FILE="/tmp/haproxy.cfg"
 CONFIG_TEMPLATE="/usr/local/etc/haproxy/haproxy.cfg.tmpl"
 
+# SSL configuration
+SSL_DIR="/etc/haproxy/ssl"
+SSL_CERT="$SSL_DIR/server.crt"
+SSL_KEY="$SSL_DIR/server.key"
+SSL_PEM="$SSL_DIR/haproxy.pem"  # Combined cert+key for HAProxy
+
 # Copy config to writable location
 cp "$CONFIG_SOURCE" "$CONFIG_FILE"
+
+#---------------------------------------------------------------------
+# SSL Certificate Generation
+#---------------------------------------------------------------------
+
+# Generate self-signed certificate if not exists
+# Users can mount their own certificates to override
+generate_self_signed_cert() {
+    # Check for cert-manager format (tls.crt and tls.key)
+    if [ -f "$SSL_DIR/tls.crt" ] && [ -f "$SSL_DIR/tls.key" ]; then
+        echo "Found cert-manager format certificates, combining..."
+        cat "$SSL_DIR/tls.crt" "$SSL_DIR/tls.key" > "$SSL_PEM"
+        chmod 600 "$SSL_PEM"
+        echo "Combined PEM created at $SSL_PEM"
+        return 0
+    fi
+
+    # Check for existing certificates
+    if [ -f "$SSL_CERT" ] && [ -f "$SSL_KEY" ]; then
+        echo "Using existing SSL certificate from $SSL_DIR"
+    else
+        echo "Generating self-signed SSL certificate..."
+
+        # Get hostname for certificate CN, default to 'haproxy'
+        SSL_CN="${SSL_COMMON_NAME:-haproxy}"
+        SSL_ORG="${SSL_ORGANIZATION:-Forms WAF}"
+        SSL_DAYS="${SSL_VALIDITY_DAYS:-365}"
+
+        # Generate certificate with SAN for Kubernetes service names
+        openssl req -x509 -nodes -days "$SSL_DAYS" -newkey rsa:2048 \
+            -keyout "$SSL_KEY" \
+            -out "$SSL_CERT" \
+            -subj "/C=US/ST=State/L=City/O=$SSL_ORG/CN=$SSL_CN" \
+            -addext "subjectAltName=DNS:$SSL_CN,DNS:*.haproxy-headless,DNS:localhost,IP:127.0.0.1"
+
+        chmod 600 "$SSL_KEY"
+        chmod 644 "$SSL_CERT"
+
+        echo "Self-signed SSL certificate generated:"
+        echo "  Certificate: $SSL_CERT"
+        echo "  Key: $SSL_KEY"
+        echo "  CN: $SSL_CN"
+        echo "  Valid for: $SSL_DAYS days"
+        echo ""
+        echo "To use your own certificate, mount files to:"
+        echo "  - $SSL_CERT"
+        echo "  - $SSL_KEY"
+    fi
+
+    # HAProxy requires combined PEM file (cert + key)
+    echo "Creating combined PEM for HAProxy..."
+    cat "$SSL_CERT" "$SSL_KEY" > "$SSL_PEM"
+    chmod 600 "$SSL_PEM"
+}
 
 # Function to get the local hostname/pod name
 get_local_peer_name() {
@@ -97,6 +157,11 @@ validate_config() {
 # Main
 echo "HAProxy Forms WAF starting..."
 echo "Local peer name: $(get_local_peer_name)"
+
+# Generate SSL certificate if enabled
+if [ "${HAPROXY_SSL_ENABLED:-false}" = "true" ]; then
+    generate_self_signed_cert
+fi
 
 # Process configuration
 process_config

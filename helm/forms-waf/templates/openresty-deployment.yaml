@@ -53,6 +53,23 @@ spec:
               value: {{ include "forms-waf.redis.port" . | quote }}
             - name: WAF_SYNC_INTERVAL
               value: {{ .Values.openresty.env.WAF_SYNC_INTERVAL | quote }}
+            {{- $haproxyFqdn := printf "%s-haproxy.%s.svc.cluster.local" (include "forms-waf.fullname" .) .Release.Namespace }}
+            {{- $haproxyUpstream := .Values.openresty.env.HAPROXY_UPSTREAM | default "" }}
+            {{- if not $haproxyUpstream }}
+            {{- $haproxyUpstream = printf "%s:%d" $haproxyFqdn (int .Values.haproxy.service.port) }}
+            {{- end }}
+            {{- $haproxyUpstreamSsl := .Values.openresty.env.HAPROXY_UPSTREAM_SSL | default "" }}
+            {{- if not $haproxyUpstreamSsl }}
+            {{- $haproxyUpstreamSsl = printf "%s:%d" $haproxyFqdn (int .Values.haproxy.service.httpsPort) }}
+            {{- end }}
+            - name: HAPROXY_UPSTREAM
+              value: {{ $haproxyUpstream | quote }}
+            - name: HAPROXY_UPSTREAM_SSL
+              value: {{ $haproxyUpstreamSsl | quote }}
+            - name: UPSTREAM_SSL
+              value: {{ .Values.openresty.env.UPSTREAM_SSL | default "false" | quote }}
+            - name: HAPROXY_TIMEOUT
+              value: {{ .Values.openresty.env.HAPROXY_TIMEOUT | default "30" | quote }}
             {{- if .Values.redis.auth.enabled }}
             - name: REDIS_PASSWORD
               valueFrom:
