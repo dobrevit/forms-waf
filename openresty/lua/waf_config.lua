@@ -8,6 +8,14 @@ local cjson = require "cjson.safe"
 -- Shared dictionary for config
 local config_cache = ngx.shared.config_cache
 
+-- Helper to parse boolean environment variables
+local function env_bool(name, default)
+    local val = os.getenv(name)
+    if val == nil then return default end
+    val = val:lower()
+    return val == "true" or val == "1" or val == "yes"
+end
+
 -- Default thresholds
 local DEFAULT_THRESHOLDS = {
     spam_score_block = 80,       -- Score at which to block immediately
@@ -20,10 +28,12 @@ local DEFAULT_THRESHOLDS = {
     expose_waf_headers = false,  -- Expose WAF debug headers to clients (X-WAF-*, X-Spam-*)
 }
 
--- Default routing settings
+-- Default routing settings (use environment variables with fallbacks)
 local DEFAULT_ROUTING = {
-    haproxy_upstream = "haproxy:80",  -- Default HAProxy upstream address
-    haproxy_timeout = 30,             -- Default timeout in seconds
+    haproxy_upstream = os.getenv("HAPROXY_UPSTREAM") or "haproxy:8080",
+    haproxy_ssl = env_bool("HAPROXY_UPSTREAM_SSL", false),
+    upstream_ssl = env_bool("UPSTREAM_SSL", false),
+    haproxy_timeout = 30,
 }
 
 -- Get thresholds (from Redis cache or defaults)

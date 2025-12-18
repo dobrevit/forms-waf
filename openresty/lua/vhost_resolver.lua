@@ -550,36 +550,55 @@ function _M.get_timing_config(context)
 end
 
 -- Get upstream URL based on routing config
--- For HAProxy routing: returns HAProxy address
--- For direct routing: returns one of the configured upstream servers
+-- For HAProxy routing: returns HAProxy address with SSL support
+-- For direct routing: returns one of the configured upstream servers with SSL support
+-- SSL configuration is hierarchical: vhost -> global -> env var -> default (false)
 function _M.get_upstream_url(context)
+    local global_routing = waf_config.get_routing()
+
     if not context or not context.vhost then
-        -- Default to HAProxy
-        local global_routing = waf_config.get_routing()
-        return "http://" .. global_routing.haproxy_upstream
+        -- Default to HAProxy with SSL from global/env
+        local scheme = global_routing.haproxy_ssl and "https" or "http"
+        return scheme .. "://" .. global_routing.haproxy_upstream
     end
 
     local routing = context.vhost.routing
     if not routing then
-        local global_routing = waf_config.get_routing()
-        return "http://" .. global_routing.haproxy_upstream
+        local scheme = global_routing.haproxy_ssl and "https" or "http"
+        return scheme .. "://" .. global_routing.haproxy_upstream
     end
 
-    if routing.use_haproxy then
-        -- Use HAProxy upstream (vhost override or global)
-        local upstream = routing.haproxy_upstream
-        if not upstream then
-            local global_routing = waf_config.get_routing()
-            upstream = global_routing.haproxy_upstream
+    if routing.use_haproxy or routing.use_haproxy == nil then
+        -- HAProxy mode (default): resolve SSL hierarchically
+        local ssl = routing.haproxy_ssl  -- vhost override
+        if ssl == nil then
+            ssl = global_routing.haproxy_ssl  -- global/env default
         end
-        -- Ensure URL format
-        if upstream and not upstream:match("^https?://") then
-            upstream = "http://" .. upstream
-        end
-        return upstream
+        local scheme = ssl and "https" or "http"
+        local upstream = routing.haproxy_upstream or global_routing.haproxy_upstream
+        return scheme .. "://" .. upstream
     else
-        -- Direct routing - select from upstream servers
-        return vhost_matcher.build_proxy_url(context.vhost.vhost_id)
+        -- Direct routing mode (use_haproxy = false)
+        local server = vhost_matcher.select_upstream_server(context.vhost.vhost_id)
+        if not server then
+            ngx.log(ngx.WARN, "Direct routing configured but no upstream servers, falling back to HAProxy")
+            local scheme = global_routing.haproxy_ssl and "https" or "http"
+            return scheme .. "://" .. global_routing.haproxy_upstream
+        end
+
+        -- Resolve SSL hierarchically for direct upstream
+        local ssl = routing.upstream and routing.upstream.ssl
+        if ssl == nil then
+            ssl = global_routing.upstream_ssl  -- global/env default
+        end
+        local scheme = ssl and "https" or "http"
+
+        -- Add port if not present
+        if not server:match(":%d+$") then
+            server = server .. (ssl and ":443" or ":80")
+        end
+
+        return scheme .. "://" .. server
     end
 end
 

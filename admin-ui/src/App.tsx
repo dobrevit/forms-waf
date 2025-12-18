@@ -10,6 +10,7 @@ import { EndpointForm } from '@/pages/endpoints/EndpointForm'
 import { BlockedKeywords } from '@/pages/keywords/BlockedKeywords'
 import { FlaggedKeywords } from '@/pages/keywords/FlaggedKeywords'
 import { Thresholds } from '@/pages/config/Thresholds'
+import { RoutingConfig } from '@/pages/config/RoutingConfig'
 import { IpAllowList } from '@/pages/config/IpAllowList'
 import { CaptchaProviders } from '@/pages/captcha/CaptchaProviders'
 import { CaptchaSettings } from '@/pages/captcha/CaptchaSettings'
@@ -60,6 +61,7 @@ export default function App() {
                 <Route path="/keywords/blocked" element={<BlockedKeywords />} />
                 <Route path="/keywords/flagged" element={<FlaggedKeywords />} />
                 <Route path="/config/thresholds" element={<Thresholds />} />
+                <Route path="/config/routing" element={<RoutingConfig />} />
                 <Route path="/config/allowlist" element={<IpAllowList />} />
                 <Route path="/captcha/providers" element={<CaptchaProviders />} />
                 <Route path="/captcha/settings" element={<CaptchaSettings />} />

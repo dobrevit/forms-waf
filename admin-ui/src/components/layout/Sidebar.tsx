@@ -9,6 +9,7 @@ import {
   Settings,
   Shield,
   Network,
+  ArrowRightLeft,
   ShieldCheck,
   Cog,
   Bell,
@@ -51,6 +52,7 @@ const navigation = [
     name: 'Configuration',
     children: [
       { name: 'Thresholds', href: '/config/thresholds', icon: Settings },
+      { name: 'Routing', href: '/config/routing', icon: ArrowRightLeft },
       { name: 'IP Allow List', href: '/config/allowlist', icon: Network },
     ],
   },
