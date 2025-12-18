@@ -408,3 +408,11 @@ export interface BehavioralVhostSummary {
   vhost_id: string
   flows: BehavioralFlowSummary[]
 }
+
+export interface BehavioralVhostItem {
+  vhost_id: string
+  vhost_name?: string
+  enabled: boolean
+  flows_count: number
+  last_activity?: string
+}

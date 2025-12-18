@@ -16,8 +16,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info, Check, Timer } from 'lucide-react'
-import type { Vhost } from '@/api/types'
+import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info, Check, Timer, Activity } from 'lucide-react'
+import type { Vhost, BehavioralFlow } from '@/api/types'
 
 const defaultVhost: Partial<Vhost> = {
   enabled: true,
@@ -56,6 +56,26 @@ const defaultVhost: Partial<Vhost> = {
     end_paths: [],
     path_match_mode: 'exact',
   },
+  behavioral: {
+    enabled: false,
+    flows: [],
+    tracking: {
+      fill_duration: true,
+      submission_counts: true,
+      unique_ips: true,
+      avg_spam_score: true,
+    },
+    baselines: {
+      learning_period_days: 7,
+      min_samples: 168,
+    },
+    anomaly_detection: {
+      enabled: true,
+      std_dev_threshold: 2.5,
+      action: 'flag',
+      score_addition: 15,
+    },
+  },
 }
 
 export function VhostForm() {
@@ -74,6 +94,11 @@ export function VhostForm() {
   const [newStartPath, setNewStartPath] = useState('')
   const [newEndPath, setNewEndPath] = useState('')
   const [shouldNavigate, setShouldNavigate] = useState(true)
+
+  // Behavioral flow state
+  const [newFlowName, setNewFlowName] = useState('')
+  const [newFlowStartPath, setNewFlowStartPath] = useState('')
+  const [newFlowEndPath, setNewFlowEndPath] = useState('')
 
   const { data, isLoading } = useQuery({
     queryKey: ['vhost', id],
@@ -125,6 +150,16 @@ export function VhostForm() {
           start_paths: Array.isArray(vhost.timing.start_paths) ? vhost.timing.start_paths : [],
           end_paths: Array.isArray(vhost.timing.end_paths) ? vhost.timing.end_paths : [],
         } : defaultVhost.timing,
+        behavioral: vhost.behavioral ? {
+          ...vhost.behavioral,
+          flows: Array.isArray(vhost.behavioral.flows) ? vhost.behavioral.flows.map((f: BehavioralFlow) => ({
+            ...f,
+            start_paths: Array.isArray(f.start_paths) ? f.start_paths : [],
+            end_paths: Array.isArray(f.end_paths) ? f.end_paths : [],
+            start_methods: Array.isArray(f.start_methods) ? f.start_methods : [],
+            end_methods: Array.isArray(f.end_methods) ? f.end_methods : [],
+          })) : [],
+        } : defaultVhost.behavioral,
       }
       setFormData(normalized)
     }
@@ -340,6 +375,10 @@ export function VhostForm() {
             <TabsTrigger value="timing" className="flex items-center gap-1">
               <Timer className="h-3 w-3" />
               Timing
+            </TabsTrigger>
+            <TabsTrigger value="behavioral" className="flex items-center gap-1">
+              <Activity className="h-3 w-3" />
+              Behavioral
             </TabsTrigger>
             {!isNew && (
               <TabsTrigger value="learned-fields" className="flex items-center gap-1">
@@ -1116,6 +1155,415 @@ export function VhostForm() {
                             the time elapsed is checked. Submissions faster than the thresholds add to the spam score.
                             The cookie is unique to this vhost: <code className="bg-yellow-100 px-1 rounded">_waf_timing_{formData.id || 'vhost_id'}</code>
                           </p>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="behavioral">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-5 w-5" />
+                  Behavioral Tracking
+                </CardTitle>
+                <CardDescription>
+                  Configure ML-based behavioral analysis to detect anomalies in submission patterns.
+                  The system learns normal traffic patterns and flags deviations.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="behavioral_enabled"
+                    checked={formData.behavioral?.enabled}
+                    onCheckedChange={(checked) =>
+                      setFormData({
+                        ...formData,
+                        behavioral: { ...formData.behavioral, enabled: checked },
+                      })
+                    }
+                  />
+                  <Label htmlFor="behavioral_enabled">Enable Behavioral Tracking</Label>
+                </div>
+
+                {formData.behavioral?.enabled && (
+                  <>
+                    {/* Flows Configuration */}
+                    <div className="space-y-4">
+                      <h4 className="font-medium text-sm">Tracking Flows</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Define user journeys to track. Each flow has start paths (page views) and end paths (form submissions).
+                      </p>
+
+                      {/* Existing flows */}
+                      {(formData.behavioral?.flows || []).map((flow, index) => (
+                        <div key={index} className="p-4 border rounded-lg space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">{flow.name}</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                const flows = [...(formData.behavioral?.flows || [])]
+                                flows.splice(index, 1)
+                                setFormData({
+                                  ...formData,
+                                  behavioral: { ...formData.behavioral, enabled: true, flows },
+                                })
+                              }}
+                              className="text-red-600 hover:text-red-700"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-2 text-sm">
+                            <div>
+                              <span className="text-muted-foreground">Start paths: </span>
+                              {flow.start_paths?.join(', ') || 'None'}
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">End paths: </span>
+                              {flow.end_paths?.join(', ') || 'None'}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Add new flow */}
+                      <div className="p-4 border border-dashed rounded-lg space-y-3">
+                        <h5 className="text-sm font-medium">Add New Flow</h5>
+                        <div className="grid gap-4 md:grid-cols-3">
+                          <div className="space-y-2">
+                            <Label htmlFor="new_flow_name">Flow Name</Label>
+                            <Input
+                              id="new_flow_name"
+                              value={newFlowName}
+                              onChange={(e) => setNewFlowName(e.target.value)}
+                              placeholder="e.g., contact_form"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="new_flow_start">Start Path</Label>
+                            <Input
+                              id="new_flow_start"
+                              value={newFlowStartPath}
+                              onChange={(e) => setNewFlowStartPath(e.target.value)}
+                              placeholder="/contact"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="new_flow_end">End Path</Label>
+                            <Input
+                              id="new_flow_end"
+                              value={newFlowEndPath}
+                              onChange={(e) => setNewFlowEndPath(e.target.value)}
+                              placeholder="/contact/submit"
+                            />
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            if (newFlowName && newFlowStartPath && newFlowEndPath) {
+                              const newFlow: BehavioralFlow = {
+                                name: newFlowName,
+                                start_paths: [newFlowStartPath],
+                                end_paths: [newFlowEndPath],
+                                path_match_mode: 'prefix',
+                              }
+                              setFormData({
+                                ...formData,
+                                behavioral: {
+                                  ...formData.behavioral,
+                                  enabled: true,
+                                  flows: [...(formData.behavioral?.flows || []), newFlow],
+                                },
+                              })
+                              setNewFlowName('')
+                              setNewFlowStartPath('')
+                              setNewFlowEndPath('')
+                            }
+                          }}
+                          disabled={!newFlowName || !newFlowStartPath || !newFlowEndPath}
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          Add Flow
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Tracking Options */}
+                    <div className="space-y-4">
+                      <h4 className="font-medium text-sm">Tracking Options</h4>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="flex items-center justify-between rounded-lg border p-3">
+                          <Label htmlFor="track_duration">Track Fill Duration</Label>
+                          <Switch
+                            id="track_duration"
+                            checked={formData.behavioral?.tracking?.fill_duration ?? true}
+                            onCheckedChange={(checked) =>
+                              setFormData({
+                                ...formData,
+                                behavioral: {
+                                  ...formData.behavioral,
+                                  enabled: true,
+                                  tracking: { ...formData.behavioral?.tracking, fill_duration: checked },
+                                },
+                              })
+                            }
+                          />
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg border p-3">
+                          <Label htmlFor="track_counts">Track Submission Counts</Label>
+                          <Switch
+                            id="track_counts"
+                            checked={formData.behavioral?.tracking?.submission_counts ?? true}
+                            onCheckedChange={(checked) =>
+                              setFormData({
+                                ...formData,
+                                behavioral: {
+                                  ...formData.behavioral,
+                                  enabled: true,
+                                  tracking: { ...formData.behavioral?.tracking, submission_counts: checked },
+                                },
+                              })
+                            }
+                          />
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg border p-3">
+                          <Label htmlFor="track_ips">Track Unique IPs</Label>
+                          <Switch
+                            id="track_ips"
+                            checked={formData.behavioral?.tracking?.unique_ips ?? true}
+                            onCheckedChange={(checked) =>
+                              setFormData({
+                                ...formData,
+                                behavioral: {
+                                  ...formData.behavioral,
+                                  enabled: true,
+                                  tracking: { ...formData.behavioral?.tracking, unique_ips: checked },
+                                },
+                              })
+                            }
+                          />
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg border p-3">
+                          <Label htmlFor="track_spam">Track Avg Spam Score</Label>
+                          <Switch
+                            id="track_spam"
+                            checked={formData.behavioral?.tracking?.avg_spam_score ?? true}
+                            onCheckedChange={(checked) =>
+                              setFormData({
+                                ...formData,
+                                behavioral: {
+                                  ...formData.behavioral,
+                                  enabled: true,
+                                  tracking: { ...formData.behavioral?.tracking, avg_spam_score: checked },
+                                },
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Baseline Settings */}
+                    <div className="space-y-4">
+                      <h4 className="font-medium text-sm">Baseline Learning</h4>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor="learning_days">Learning Period (days)</Label>
+                          <Input
+                            id="learning_days"
+                            type="number"
+                            min={1}
+                            max={90}
+                            value={formData.behavioral?.baselines?.learning_period_days ?? 7}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                behavioral: {
+                                  ...formData.behavioral,
+                                  enabled: true,
+                                  baselines: {
+                                    ...formData.behavioral?.baselines,
+                                    learning_period_days: parseInt(e.target.value) || 7,
+                                  },
+                                },
+                              })
+                            }
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            How many days of data to use for baseline calculation
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="min_samples">Minimum Samples</Label>
+                          <Input
+                            id="min_samples"
+                            type="number"
+                            min={24}
+                            max={1000}
+                            value={formData.behavioral?.baselines?.min_samples ?? 168}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                behavioral: {
+                                  ...formData.behavioral,
+                                  enabled: true,
+                                  baselines: {
+                                    ...formData.behavioral?.baselines,
+                                    min_samples: parseInt(e.target.value) || 168,
+                                  },
+                                },
+                              })
+                            }
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Minimum hourly buckets needed before baseline is ready
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Anomaly Detection */}
+                    <div className="space-y-4">
+                      <h4 className="font-medium text-sm">Anomaly Detection</h4>
+                      <div className="flex items-center space-x-2 mb-4">
+                        <Switch
+                          id="anomaly_enabled"
+                          checked={formData.behavioral?.anomaly_detection?.enabled ?? true}
+                          onCheckedChange={(checked) =>
+                            setFormData({
+                              ...formData,
+                              behavioral: {
+                                ...formData.behavioral,
+                                enabled: true,
+                                anomaly_detection: { ...formData.behavioral?.anomaly_detection, enabled: checked },
+                              },
+                            })
+                          }
+                        />
+                        <Label htmlFor="anomaly_enabled">Enable Anomaly Detection</Label>
+                      </div>
+
+                      {formData.behavioral?.anomaly_detection?.enabled && (
+                        <div className="grid gap-4 md:grid-cols-3">
+                          <div className="space-y-2">
+                            <Label htmlFor="std_dev_threshold">Z-Score Threshold</Label>
+                            <Input
+                              id="std_dev_threshold"
+                              type="number"
+                              step="0.1"
+                              min={1}
+                              max={5}
+                              value={formData.behavioral?.anomaly_detection?.std_dev_threshold ?? 2.5}
+                              onChange={(e) =>
+                                setFormData({
+                                  ...formData,
+                                  behavioral: {
+                                    ...formData.behavioral,
+                                    enabled: true,
+                                    anomaly_detection: {
+                                      ...formData.behavioral?.anomaly_detection,
+                                      enabled: true,
+                                      std_dev_threshold: parseFloat(e.target.value) || 2.5,
+                                    },
+                                  },
+                                })
+                              }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Standard deviations from baseline to trigger
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="anomaly_action">Action</Label>
+                            <Select
+                              value={formData.behavioral?.anomaly_detection?.action || 'flag'}
+                              onValueChange={(value) =>
+                                setFormData({
+                                  ...formData,
+                                  behavioral: {
+                                    ...formData.behavioral,
+                                    enabled: true,
+                                    anomaly_detection: {
+                                      ...formData.behavioral?.anomaly_detection,
+                                      enabled: true,
+                                      action: value as 'flag' | 'score',
+                                    },
+                                  },
+                                })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="flag">Flag (add to spam score)</SelectItem>
+                                <SelectItem value="score">Score Only (log)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="score_addition">Score Addition</Label>
+                            <Input
+                              id="score_addition"
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={formData.behavioral?.anomaly_detection?.score_addition ?? 15}
+                              onChange={(e) =>
+                                setFormData({
+                                  ...formData,
+                                  behavioral: {
+                                    ...formData.behavioral,
+                                    enabled: true,
+                                    anomaly_detection: {
+                                      ...formData.behavioral?.anomaly_detection,
+                                      enabled: true,
+                                      score_addition: parseInt(e.target.value) || 15,
+                                    },
+                                  },
+                                })
+                              }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Points to add when anomaly detected
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Info note */}
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <Info className="h-5 w-5 text-blue-600 mt-0.5" />
+                        <div>
+                          <p className="font-medium text-blue-800">How Behavioral Tracking Works</p>
+                          <p className="text-sm text-blue-700 mt-1">
+                            The system collects hourly statistics for each flow (submissions, unique IPs, spam scores).
+                            After the learning period, it calculates statistical baselines. When current activity
+                            significantly deviates from the baseline (measured in standard deviations), it triggers
+                            an anomaly alert which can add to the spam score.
+                          </p>
+                          {!isNew && (
+                            <p className="text-sm text-blue-700 mt-2">
+                              View detailed analytics in the{' '}
+                              <a href="/analytics/behavioral" className="underline font-medium">
+                                Behavioral Analytics
+                              </a>{' '}
+                              dashboard.
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>

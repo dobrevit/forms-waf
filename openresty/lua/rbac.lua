@@ -118,6 +118,7 @@ local ENDPOINT_PERMISSIONS = {
     -- IP Whitelist
     ["GET:/whitelist/ips"] = {resource = "whitelist", action = "read"},
     ["POST:/whitelist/ips"] = {resource = "whitelist", action = "create"},
+    ["DELETE:/whitelist/ips"] = {resource = "whitelist", action = "delete"},
 
     -- Sync
     ["POST:/sync"] = {resource = "sync", action = "execute"},
@@ -191,6 +192,14 @@ local ENDPOINT_PERMISSIONS = {
     ["GET:/timing/status"] = {resource = "timing", action = "read"},
     ["GET:/timing/config"] = {resource = "timing", action = "read"},
     ["PUT:/timing/config"] = {resource = "timing", action = "update"},
+
+    -- Behavioral tracking
+    ["GET:/behavioral/summary"] = {resource = "metrics", action = "read"},
+    ["GET:/behavioral/stats"] = {resource = "metrics", action = "read"},
+    ["GET:/behavioral/baseline"] = {resource = "metrics", action = "read"},
+    ["GET:/behavioral/flows"] = {resource = "metrics", action = "read"},
+    ["GET:/behavioral/vhosts"] = {resource = "metrics", action = "read"},
+    ["POST:/behavioral/recalculate"] = {resource = "metrics", action = "reset"},
 
     -- User management (admin only - will be added later)
     ["GET:/users"] = {resource = "users", action = "read"},
