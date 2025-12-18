@@ -750,6 +750,11 @@ function _M.process_request()
             allowed_set[f:lower()] = true
         end
 
+        -- Honeypot fields are expected (they're intentionally added to catch bots)
+        for _, f in ipairs(honeypot_fields) do
+            allowed_set[f:lower()] = true
+        end
+
         local unexpected_fields = {}
         for field_name, _ in pairs(form_data) do
             if type(field_name) == "string" then
