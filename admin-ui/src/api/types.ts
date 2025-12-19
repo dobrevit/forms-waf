@@ -63,6 +63,7 @@ export interface ChangePasswordRequest {
 export interface VhostWafConfig {
   enabled: boolean
   mode: 'monitoring' | 'blocking' | 'passthrough' | 'strict'
+  debug_headers?: boolean  // Per-vhost debug header override (nil = inherit from global)
 }
 
 export interface VhostRouting {

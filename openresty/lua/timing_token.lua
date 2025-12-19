@@ -262,7 +262,13 @@ end
 -- Now uses vhost context for vhost-scoped cookie
 function _M.set_token(context)
     local timing_config = get_vhost_timing_config(context)
+    local global_config = get_config()  -- cookie_name is always from global config
     local vhost_id = context and context.vhost and context.vhost.vhost_id
+
+    -- Skip if timing is disabled for this vhost
+    if not timing_config or not timing_config.enabled then
+        return
+    end
 
     local token_data = {
         ts = ngx.now(),
@@ -277,8 +283,8 @@ function _M.set_token(context)
         return
     end
 
-    -- Get vhost-scoped cookie name
-    local cookie_name = get_cookie_name(vhost_id, timing_config.cookie_name or DEFAULT_CONFIG.cookie_name)
+    -- Get vhost-scoped cookie name (base name from global config)
+    local cookie_name = get_cookie_name(vhost_id, global_config.cookie_name or DEFAULT_CONFIG.cookie_name)
     local cookie_ttl = timing_config.cookie_ttl or DEFAULT_CONFIG.cookie_ttl
 
     -- Set cookie with appropriate flags
@@ -302,6 +308,7 @@ end
 -- Returns: { score = number, reason = string, elapsed = number or nil }
 function _M.validate_token(context)
     local timing_config = get_vhost_timing_config(context)
+    local global_config = get_config()  -- cookie_name is always from global config
     local vhost_id = context and context.vhost and context.vhost.vhost_id
 
     -- Feature disabled
@@ -338,8 +345,8 @@ function _M.validate_token(context)
         return { score = 0, reason = "path_exempt" }
     end
 
-    -- Get vhost-scoped cookie name
-    local cookie_name = get_cookie_name(vhost_id, timing_config.cookie_name or DEFAULT_CONFIG.cookie_name)
+    -- Get vhost-scoped cookie name (base name from global config)
+    local cookie_name = get_cookie_name(vhost_id, global_config.cookie_name or DEFAULT_CONFIG.cookie_name)
 
     -- Get cookie
     local cookie_header = ngx.var.http_cookie
@@ -420,16 +427,22 @@ end
 -- Strip timing cookie from request before forwarding to backend
 -- Now uses vhost context for vhost-scoped cookie
 function _M.strip_cookie(context)
-    local timing_config = get_vhost_timing_config(context)
+    local timing_config = get_vhost_timing_config(context)  -- vhost config for enabled check
+    local global_config = get_config()  -- cookie_name is always from global config
     local vhost_id = context and context.vhost and context.vhost.vhost_id
+
+    -- Skip if timing is disabled for this vhost
+    if not timing_config or not timing_config.enabled then
+        return
+    end
 
     local cookie_header = ngx.var.http_cookie
     if not cookie_header then
         return
     end
 
-    -- Get vhost-scoped cookie name
-    local cookie_name = get_cookie_name(vhost_id, timing_config and timing_config.cookie_name or DEFAULT_CONFIG.cookie_name)
+    -- Get vhost-scoped cookie name (base name from global config)
+    local cookie_name = get_cookie_name(vhost_id, global_config.cookie_name or DEFAULT_CONFIG.cookie_name)
 
     -- Escape special characters in cookie name for pattern matching
     local escaped_name = cookie_name:gsub("([%-])", "%%%1")

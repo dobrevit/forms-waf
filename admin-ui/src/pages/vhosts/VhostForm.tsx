@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { vhostsApi, configApi, learningApi, LearnedField, VhostTimingConfig } from '@/api/client'
+import { vhostsApi, configApi, learningApi, timingApi, LearnedField, VhostTimingConfig } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -112,6 +112,13 @@ export function VhostForm() {
     queryFn: configApi.getRouting,
   })
   const globalRouting = globalRoutingData?.routing || globalRoutingData?.defaults || { haproxy_upstream: 'haproxy:80' }
+
+  // Fetch global timing config to get the cookie_name setting
+  const { data: globalTimingData } = useQuery({
+    queryKey: ['timing', 'config'],
+    queryFn: timingApi.getConfig,
+  })
+  const globalTimingCookieName = globalTimingData?.cookie_name || '_waf_timing'
 
   // Fetch learned fields for existing vhosts
   const { data: learnedFieldsData, isLoading: learnedFieldsLoading, refetch: refetchLearnedFields } = useQuery({
@@ -724,6 +731,30 @@ export function VhostForm() {
                   </Select>
                 </div>
 
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="debug_headers">Debug Headers</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Expose WAF debug response headers for this vhost. Requires global debug to be enabled in Thresholds.
+                    </p>
+                  </div>
+                  <Switch
+                    id="debug_headers"
+                    checked={formData.waf?.debug_headers ?? true}
+                    onCheckedChange={(checked) =>
+                      setFormData({
+                        ...formData,
+                        waf: {
+                          ...formData.waf,
+                          enabled: formData.waf?.enabled ?? true,
+                          mode: formData.waf?.mode || 'monitoring',
+                          debug_headers: checked,
+                        },
+                      })
+                    }
+                  />
+                </div>
+
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="spam_score_block">Block Threshold</Label>
@@ -1153,7 +1184,7 @@ export function VhostForm() {
                           <p className="text-sm text-yellow-700 mt-1">
                             When a user visits a start path (GET), a timing cookie is set. When they submit to an end path (POST),
                             the time elapsed is checked. Submissions faster than the thresholds add to the spam score.
-                            The cookie is unique to this vhost: <code className="bg-yellow-100 px-1 rounded">_waf_timing_{formData.id || 'vhost_id'}</code>
+                            The cookie is unique to this vhost: <code className="bg-yellow-100 px-1 rounded">{globalTimingCookieName}_{formData.id || 'vhost_id'}</code>
                           </p>
                         </div>
                       </div>

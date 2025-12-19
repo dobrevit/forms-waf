@@ -575,6 +575,16 @@ _M.resource_handlers["GET:timing"] = function(vhost_id)
         return utils.error_response("Redis error: " .. (err or "unknown"), 500)
     end
 
+    -- Get global timing config to read the cookie_name setting
+    local global_config_json = red:get("waf:config:timing_token")
+    local global_cookie_name = "_waf_timing"  -- Default
+    if global_config_json and global_config_json ~= ngx.null then
+        local global_config = cjson.decode(global_config_json)
+        if global_config and global_config.cookie_name then
+            global_cookie_name = global_config.cookie_name
+        end
+    end
+
     local config_json = red:get(VHOST_KEYS.config_prefix .. vhost_id)
     utils.close_redis(red)
 
@@ -590,11 +600,11 @@ _M.resource_handlers["GET:timing"] = function(vhost_id)
     -- Get resolved timing config
     local resolved = vhost_resolver.resolve(vhost_id)
 
-    -- Determine cookie name for this vhost
-    local cookie_name = "_waf_timing"
+    -- Determine cookie name for this vhost using global cookie_name as base
+    local cookie_name = global_cookie_name
     if vhost_id and vhost_id ~= "_default" then
         local safe_id = vhost_id:gsub("[^%w_-]", "")
-        cookie_name = cookie_name .. "_" .. safe_id
+        cookie_name = global_cookie_name .. "_" .. safe_id
     end
 
     return utils.json_response({

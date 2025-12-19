@@ -173,7 +173,8 @@ end
 local function resolve_waf_settings(vhost_config)
     local result = {
         enabled = true,
-        mode = "blocking"
+        mode = "blocking",
+        debug_headers = nil  -- nil = inherit from global, true/false = explicit override
     }
 
     if not vhost_config or not vhost_config.waf then
@@ -195,6 +196,11 @@ local function resolve_waf_settings(vhost_config)
 
     -- Set default_mode as alias pointing to the same value
     result.default_mode = result.mode
+
+    -- Per-vhost debug header override (nil = inherit from global)
+    if vhost_config.waf.debug_headers ~= nil then
+        result.debug_headers = vhost_config.waf.debug_headers
+    end
 
     return result
 end
