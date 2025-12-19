@@ -442,6 +442,18 @@ export const syncApi = {
 }
 
 // Metrics API
+export interface GlobalMetrics {
+  total_requests: number
+  blocked_requests: number
+  monitored_requests: number
+  allowed_requests: number
+  skipped_requests: number
+  form_submissions: number
+  validation_errors: number
+  instance_count: number
+  last_updated?: string  // Optional: may be undefined if timestamp key doesn't exist
+}
+
 export interface MetricsSummary {
   total_requests: number
   blocked_requests: number
@@ -452,6 +464,8 @@ export interface MetricsSummary {
   validation_errors: number
   by_vhost: Record<string, { total: number; blocked: number; monitored: number; allowed: number }>
   by_endpoint: Record<string, { total: number; blocked: number; monitored: number; allowed: number }>
+  // Global cluster-wide metrics (optional, only available in multi-instance deployments)
+  global?: GlobalMetrics
 }
 
 export const metricsApi = {
