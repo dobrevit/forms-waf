@@ -406,10 +406,9 @@ local function check_instance_health()
         red:hdel(KEYS.instances, instance_id)
         local heartbeat_key = KEYS.heartbeat_prefix .. instance_id .. KEYS.heartbeat_suffix
         red:del(heartbeat_key)
-
-        -- Also cleanup metrics for this instance
-        local metrics = require "metrics"
-        metrics.cleanup_instance_metrics(red, instance_id)
+        -- Note: Don't cleanup metrics here - let TTL handle expiration
+        -- This allows metrics to persist across instance restarts and be
+        -- included in global aggregation until they naturally expire
     end
 
     close_redis(red)

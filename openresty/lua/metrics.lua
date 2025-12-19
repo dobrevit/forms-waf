@@ -520,28 +520,48 @@ function _M.cleanup_instance_metrics(red, instance_id)
     return true
 end
 
---- Aggregate metrics from all active instances (leader only).
--- Uses Redis pipelining to batch all HMGET commands for efficiency.
--- The instance_count reflects all active instances, regardless of whether
--- their metrics were successfully retrieved.
+--- Aggregate metrics from all instances with metrics in Redis (leader only).
+-- Scans Redis for all waf:metrics:instance:* keys to include metrics from
+-- instances that may have recently restarted or been removed but whose
+-- metrics haven't expired yet. Uses Redis pipelining for efficiency.
 --
 -- @param red table An established resty.redis connection object
--- @param active_instances table Array of instance objects with instance_id field,
---                               or array of instance_id strings
+-- @param active_instances table Array of active instance objects (used for instance_count display)
 -- @return boolean True on success, false on failure
--- @return number|string On success: count of instances aggregated; on failure: error message
+-- @return number|string On success: count of metrics sources aggregated; on failure: error message
 function _M.aggregate_global_metrics(red, active_instances)
     if not red then
         return false, "no redis connection"
     end
 
-    local instances = active_instances or {}
+    -- Scan Redis for all instance metrics keys
+    -- This ensures we include metrics from instances that:
+    -- 1. Recently restarted (old metrics still have TTL)
+    -- 2. Were removed from cluster but metrics haven't expired
+    local metrics_keys = {}
+    local cursor = "0"
+    local scan_pattern = METRICS_KEYS.instance_prefix .. "*"
 
-    -- Count all active instances (regardless of metrics retrieval success)
-    local instance_count = #instances
+    repeat
+        local res, err = red:scan(cursor, "MATCH", scan_pattern, "COUNT", 100)
+        if not res then
+            ngx.log(ngx.WARN, "metrics: scan failed: ", err)
+            return false, err
+        end
+        cursor = res[1]
+        local keys = res[2]
+        for _, key in ipairs(keys) do
+            -- Skip the :updated timestamp keys, only get the metrics hashes
+            if not key:match(":updated$") then
+                table.insert(metrics_keys, key)
+            end
+        end
+    until cursor == "0"
 
-    if instance_count == 0 then
-        -- No instances to aggregate - write zeros
+    local metrics_count = #metrics_keys
+
+    if metrics_count == 0 then
+        -- No metrics to aggregate - write zeros
         local args = {}
         for _, field in ipairs(SYNC_FIELDS) do
             table.insert(args, field)
@@ -561,13 +581,9 @@ function _M.aggregate_global_metrics(red, active_instances)
     -- Initialize pipeline for batched HMGET commands
     red:init_pipeline()
 
-    -- Queue all HMGET commands in the pipeline
-    for _, instance in ipairs(instances) do
-        local instance_id = instance.instance_id or instance
-        if instance_id then
-            local metrics_key = METRICS_KEYS.instance_prefix .. instance_id
-            red:hmget(metrics_key, unpack(SYNC_FIELDS))
-        end
+    -- Queue HMGET for all found metrics keys
+    for _, metrics_key in ipairs(metrics_keys) do
+        red:hmget(metrics_key, unpack(SYNC_FIELDS))
     end
 
     -- Execute pipeline and get all results at once
@@ -584,15 +600,28 @@ function _M.aggregate_global_metrics(red, active_instances)
     end
 
     -- Sum metrics from all pipeline results
+    local sources_with_data = 0
     for _, values in ipairs(results) do
         if values and type(values) == "table" then
+            local has_data = false
             for i, field in ipairs(SYNC_FIELDS) do
                 local val = values[i]
                 if val and val ~= ngx.null then
                     totals[field] = totals[field] + (tonumber(val) or 0)
+                    has_data = true
                 end
             end
+            if has_data then
+                sources_with_data = sources_with_data + 1
+            end
         end
+    end
+
+    -- Use active_instances count for display (reflects healthy cluster state)
+    -- but sources_with_data reflects actual metrics aggregated
+    local display_count = #(active_instances or {})
+    if display_count == 0 then
+        display_count = sources_with_data
     end
 
     -- Write global metrics
@@ -602,7 +631,7 @@ function _M.aggregate_global_metrics(red, active_instances)
         table.insert(args, tostring(totals[field]))
     end
     table.insert(args, "instance_count")
-    table.insert(args, tostring(instance_count))
+    table.insert(args, tostring(display_count))
 
     local ok, err = red:hmset(METRICS_KEYS.global, unpack(args))
     if not ok then
@@ -618,8 +647,9 @@ function _M.aggregate_global_metrics(red, active_instances)
         -- Don't return error here as the main metrics were written successfully
     end
 
-    ngx.log(ngx.DEBUG, "metrics: aggregated global metrics from ", instance_count, " instances")
-    return true, instance_count
+    ngx.log(ngx.DEBUG, "metrics: aggregated global metrics from ", sources_with_data,
+            " sources (", metrics_count, " keys scanned)")
+    return true, sources_with_data
 end
 
 --- Get global metrics from Redis.
