@@ -47,6 +47,10 @@ spec:
               containerPort: 8082
               protocol: TCP
           env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: REDIS_HOST
               value: {{ include "forms-waf.redis.host" . | quote }}
             - name: REDIS_PORT

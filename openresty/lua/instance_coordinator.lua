@@ -513,8 +513,9 @@ function _M.get_all_instances()
     local instances = red:hgetall(KEYS.instances)
     close_redis(red)
 
-    if not instances or instances == ngx.null then
-        return {}
+    if not instances or instances == ngx.null or #instances == 0 then
+        -- Return empty array (not object) for proper JSON serialization
+        return setmetatable({}, cjson.array_mt), nil, nil
     end
 
     local results = {}
@@ -536,6 +537,11 @@ function _M.get_all_instances()
                 worker_count = metadata.worker_count
             })
         end
+    end
+
+    -- Ensure array serialization even if results is empty after filtering
+    if #results == 0 then
+        return setmetatable({}, cjson.array_mt), nil, current_leader
     end
 
     -- Return both instances and current_leader to avoid redundant Redis calls
