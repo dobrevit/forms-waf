@@ -207,63 +207,117 @@ export function Dashboard() {
           <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
             <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
               <FileText className="h-5 w-5 text-blue-500 mb-1" />
-              <span className="text-2xl font-bold">{metrics?.total_requests || 0}</span>
-              {metrics?.global && (
-                <span className="text-xs text-muted-foreground">
-                  Global: {(metrics.global.total_requests ?? 0).toLocaleString()}
-                </span>
+              {metrics?.global ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold">{metrics?.total_requests || 0}</span>
+                    <span className="text-[10px] text-muted-foreground">local</span>
+                  </div>
+                  <div className="h-8 w-px bg-border" />
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold">{(metrics.global.total_requests ?? 0).toLocaleString()}</span>
+                    <span className="text-[10px] text-muted-foreground">global</span>
+                  </div>
+                </div>
+              ) : (
+                <span className="text-2xl font-bold">{metrics?.total_requests || 0}</span>
               )}
-              <span className="text-xs text-muted-foreground">Total Requests</span>
+              <span className="text-xs text-muted-foreground mt-1">Total Requests</span>
             </div>
             <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
               <ShieldAlert className="h-5 w-5 text-red-500 mb-1" />
-              <span className="text-2xl font-bold text-red-600">{metrics?.blocked_requests || 0}</span>
-              {metrics?.global && (
-                <span className="text-xs text-red-400">
-                  Global: {(metrics.global.blocked_requests ?? 0).toLocaleString()}
-                </span>
+              {metrics?.global ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold text-red-600">{metrics?.blocked_requests || 0}</span>
+                    <span className="text-[10px] text-muted-foreground">local</span>
+                  </div>
+                  <div className="h-8 w-px bg-border" />
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold text-red-600">{(metrics.global.blocked_requests ?? 0).toLocaleString()}</span>
+                    <span className="text-[10px] text-muted-foreground">global</span>
+                  </div>
+                </div>
+              ) : (
+                <span className="text-2xl font-bold text-red-600">{metrics?.blocked_requests || 0}</span>
               )}
-              <span className="text-xs text-muted-foreground">Blocked</span>
+              <span className="text-xs text-muted-foreground mt-1">Blocked</span>
             </div>
             <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
               <Eye className="h-5 w-5 text-yellow-500 mb-1" />
-              <span className="text-2xl font-bold text-yellow-600">{metrics?.monitored_requests || 0}</span>
-              {metrics?.global && (
-                <span className="text-xs text-yellow-600">
-                  Global: {(metrics.global.monitored_requests ?? 0).toLocaleString()}
-                </span>
+              {metrics?.global ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold text-yellow-600">{metrics?.monitored_requests || 0}</span>
+                    <span className="text-[10px] text-muted-foreground">local</span>
+                  </div>
+                  <div className="h-8 w-px bg-border" />
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold text-yellow-600">{(metrics.global.monitored_requests ?? 0).toLocaleString()}</span>
+                    <span className="text-[10px] text-muted-foreground">global</span>
+                  </div>
+                </div>
+              ) : (
+                <span className="text-2xl font-bold text-yellow-600">{metrics?.monitored_requests || 0}</span>
               )}
-              <span className="text-xs text-muted-foreground">Monitored</span>
+              <span className="text-xs text-muted-foreground mt-1">Monitored</span>
             </div>
             <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
               <ShieldCheck className="h-5 w-5 text-green-500 mb-1" />
-              <span className="text-2xl font-bold text-green-600">{metrics?.allowed_requests || 0}</span>
-              {metrics?.global && (
-                <span className="text-xs text-green-600">
-                  Global: {(metrics.global.allowed_requests ?? 0).toLocaleString()}
-                </span>
+              {metrics?.global ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold text-green-600">{metrics?.allowed_requests || 0}</span>
+                    <span className="text-[10px] text-muted-foreground">local</span>
+                  </div>
+                  <div className="h-8 w-px bg-border" />
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold text-green-600">{(metrics.global.allowed_requests ?? 0).toLocaleString()}</span>
+                    <span className="text-[10px] text-muted-foreground">global</span>
+                  </div>
+                </div>
+              ) : (
+                <span className="text-2xl font-bold text-green-600">{metrics?.allowed_requests || 0}</span>
               )}
-              <span className="text-xs text-muted-foreground">Allowed</span>
+              <span className="text-xs text-muted-foreground mt-1">Allowed</span>
             </div>
             <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
               <FileText className="h-5 w-5 text-purple-500 mb-1" />
-              <span className="text-2xl font-bold">{metrics?.form_submissions || 0}</span>
-              {metrics?.global && (
-                <span className="text-xs text-purple-400">
-                  Global: {(metrics.global.form_submissions ?? 0).toLocaleString()}
-                </span>
+              {metrics?.global ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold">{metrics?.form_submissions || 0}</span>
+                    <span className="text-[10px] text-muted-foreground">local</span>
+                  </div>
+                  <div className="h-8 w-px bg-border" />
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold">{(metrics.global.form_submissions ?? 0).toLocaleString()}</span>
+                    <span className="text-[10px] text-muted-foreground">global</span>
+                  </div>
+                </div>
+              ) : (
+                <span className="text-2xl font-bold">{metrics?.form_submissions || 0}</span>
               )}
-              <span className="text-xs text-muted-foreground">Form Submissions</span>
+              <span className="text-xs text-muted-foreground mt-1">Form Submissions</span>
             </div>
             <div className="flex flex-col items-center p-3 rounded-lg bg-muted/50">
               <AlertTriangle className="h-5 w-5 text-orange-500 mb-1" />
-              <span className="text-2xl font-bold text-orange-600">{metrics?.validation_errors || 0}</span>
-              {metrics?.global && (
-                <span className="text-xs text-orange-400">
-                  Global: {(metrics.global.validation_errors ?? 0).toLocaleString()}
-                </span>
+              {metrics?.global ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold text-orange-600">{metrics?.validation_errors || 0}</span>
+                    <span className="text-[10px] text-muted-foreground">local</span>
+                  </div>
+                  <div className="h-8 w-px bg-border" />
+                  <div className="flex flex-col items-center">
+                    <span className="text-2xl font-bold text-orange-600">{(metrics.global.validation_errors ?? 0).toLocaleString()}</span>
+                    <span className="text-[10px] text-muted-foreground">global</span>
+                  </div>
+                </div>
+              ) : (
+                <span className="text-2xl font-bold text-orange-600">{metrics?.validation_errors || 0}</span>
               )}
-              <span className="text-xs text-muted-foreground">Validation Errors</span>
+              <span className="text-xs text-muted-foreground mt-1">Validation Errors</span>
             </div>
           </div>
 
