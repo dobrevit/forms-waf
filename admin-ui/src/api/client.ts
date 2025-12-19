@@ -920,3 +920,77 @@ export const behavioralApi = {
     }>(`/behavioral/summary${params}`)
   },
 }
+
+// Cluster types
+export interface ClusterInstance {
+  instance_id: string
+  started_at: number
+  last_heartbeat: number
+  status: 'active' | 'drifted' | 'down' | 'unknown'
+  worker_count: number
+}
+
+export interface ClusterStatus {
+  cluster_healthy: boolean
+  instance_count: number
+  active_instances: number
+  drifted_instances: number
+  leader: {
+    instance_id: string
+    since: number
+  } | null
+}
+
+export interface ClusterConfig {
+  instance_id: string
+  heartbeat_interval: number
+  heartbeat_ttl: number
+  leader_ttl: number
+  drift_threshold: number
+  stale_threshold: number
+}
+
+export interface ClusterThisInstance {
+  instance_id: string
+  is_leader: boolean
+  worker_id: number
+  worker_count: number
+  config: {
+    heartbeat_interval: number
+    leader_ttl: number
+    drift_threshold: number
+    stale_threshold: number
+  }
+}
+
+export const clusterApi = {
+  // Get cluster health status
+  getStatus: () =>
+    request<ClusterStatus>('/cluster/status'),
+
+  // List all registered instances
+  getInstances: () =>
+    request<{
+      instances: ClusterInstance[]
+      total: number
+      current_leader: string | null
+    }>('/cluster/instances'),
+
+  // Get current leader info
+  getLeader: () =>
+    request<{
+      leader: string | null
+      this_instance: {
+        id: string
+        is_leader: boolean
+      }
+    }>('/cluster/leader'),
+
+  // Get coordinator configuration
+  getConfig: () =>
+    request<ClusterConfig>('/cluster/config'),
+
+  // Get info about this instance
+  getThis: () =>
+    request<ClusterThisInstance>('/cluster/this'),
+}

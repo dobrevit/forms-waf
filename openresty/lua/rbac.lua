@@ -42,6 +42,7 @@ local DEFAULT_ROLES = {
             reputation = {"read", "update"},
             timing = {"read", "update"},
             behavioral = {"read", "update"},
+            cluster = {"read"},
             sync = {"execute"},
             status = {"read"},
             hashes = {"read", "create"},
@@ -67,6 +68,7 @@ local DEFAULT_ROLES = {
             reputation = {"read"},
             timing = {"read"},
             behavioral = {"read"},
+            cluster = {"read"},
             status = {"read"},
             hashes = {"read", "create"},
             whitelist = {"read"}
@@ -90,6 +92,7 @@ local DEFAULT_ROLES = {
             reputation = {"read"},
             timing = {"read"},
             behavioral = {"read"},
+            cluster = {"read"},
             status = {"read"},
             hashes = {"read"},
             whitelist = {"read"}
@@ -219,6 +222,13 @@ local ENDPOINT_PERMISSIONS = {
     ["POST:/auth/providers/config"] = {resource = "providers", action = "create"},
     ["PUT:/auth/providers/config/{id}"] = {resource = "providers", action = "update"},
     ["DELETE:/auth/providers/config/{id}"] = {resource = "providers", action = "delete"},
+
+    -- Cluster status
+    ["GET:/cluster/status"] = {resource = "cluster", action = "read"},
+    ["GET:/cluster/instances"] = {resource = "cluster", action = "read"},
+    ["GET:/cluster/leader"] = {resource = "cluster", action = "read"},
+    ["GET:/cluster/config"] = {resource = "cluster", action = "read"},
+    ["GET:/cluster/this"] = {resource = "cluster", action = "read"},
 }
 
 -- Parametric endpoint permissions (for /endpoints/{id}, /vhosts/{id}, etc.)

@@ -70,6 +70,10 @@ spec:
               value: {{ .Values.openresty.env.UPSTREAM_SSL | default "false" | quote }}
             - name: HAPROXY_TIMEOUT
               value: {{ .Values.openresty.env.HAPROXY_TIMEOUT | default "30" | quote }}
+            {{- /* Enable leader election when running multiple replicas or autoscaling */}}
+            {{- $useLeaderElection := or .Values.openresty.autoscaling.enabled (gt (int .Values.openresty.replicaCount) 1) }}
+            - name: WAF_USE_LEADER_ELECTION
+              value: {{ $useLeaderElection | quote }}
             {{- if .Values.redis.auth.enabled }}
             - name: REDIS_PASSWORD
               valueFrom:
