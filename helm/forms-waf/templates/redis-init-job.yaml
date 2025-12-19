@@ -110,7 +110,6 @@ spec:
               {{- end }}
               {{- end }}
               {{- end }}
-              {{- end }}
 
               echo "Loading virtual hosts..."
               {{- range $vhost := .Values.redisInit.vhosts }}
