@@ -16,6 +16,11 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Create temp cookie jars for timing cookies and admin session
+COOKIE_JAR=$(mktemp)
+ADMIN_COOKIE_JAR=$(mktemp)
+trap "rm -f '$COOKIE_JAR' '$ADMIN_COOKIE_JAR'" EXIT
+
 log_pass() {
     echo -e "${GREEN}[PASS]${NC} $1"
     PASS=$((PASS+1))
@@ -43,12 +48,41 @@ test_request() {
     local status
 
     if [ "$method" = "GET" ]; then
-        response=$(curl -s -w "\n%{http_code}" "$BASE_URL$endpoint")
+        response=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -w "\n%{http_code}" "$BASE_URL$endpoint")
     else
-        # Pass remaining arguments properly to curl
-        response=$(curl -s -w "\n%{http_code}" -X "$method" "$BASE_URL$endpoint" "$@")
+        # Pass remaining arguments properly to curl, use cookie jar for timing cookies
+        response=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -w "\n%{http_code}" -X "$method" "$BASE_URL$endpoint" "$@")
     fi
 
+    status=$(echo "$response" | tail -1)
+    body=$(echo "$response" | sed '$d')
+
+    if [ "$status" = "$expected_status" ]; then
+        log_pass "$name (status: $status)"
+    else
+        log_fail "$name (expected: $expected_status, got: $status)"
+        echo "  Response: $body"
+    fi
+}
+
+# Test a form submission with proper timing flow (GET to set cookie, then POST)
+test_form_request() {
+    local name="$1"
+    local expected_status="$2"
+    local endpoint="$3"
+    shift 3
+
+    # First, do a GET request to set the timing cookie
+    curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE_URL$endpoint" > /dev/null 2>&1
+
+    # Brief pause to avoid timing:too_fast (human would take at least a few seconds)
+    sleep 0.5
+
+    # Now do the POST with timing cookie
+    local response
+    response=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" -w "\n%{http_code}" -X POST "$BASE_URL$endpoint" "$@")
+
+    local status
     status=$(echo "$response" | tail -1)
     body=$(echo "$response" | sed '$d')
 
@@ -198,7 +232,7 @@ if [ -n "$WAF_ADMIN_USER" ] && [ -n "$WAF_ADMIN_PASS" ]; then
     log_info "Testing authenticated Admin API..."
 
     # Login and get session cookie
-    LOGIN_RESPONSE=$(curl -s -c /tmp/waf_cookies.txt -w "\n%{http_code}" \
+    LOGIN_RESPONSE=$(curl -s -c "$ADMIN_COOKIE_JAR" -w "\n%{http_code}" \
         -X POST "$ADMIN_URL/api/auth/login" \
         -H "Content-Type: application/json" \
         -d "{\"username\":\"$WAF_ADMIN_USER\",\"password\":\"$WAF_ADMIN_PASS\"}")
@@ -221,9 +255,9 @@ if [ -n "$WAF_ADMIN_USER" ] && [ -n "$WAF_ADMIN_PASS" ]; then
             local status
 
             if [ "$method" = "GET" ]; then
-                response=$(curl -s -b /tmp/waf_cookies.txt -w "\n%{http_code}" "$ADMIN_URL$endpoint")
+                response=$(curl -s -b "$ADMIN_COOKIE_JAR" -w "\n%{http_code}" "$ADMIN_URL$endpoint")
             else
-                response=$(curl -s -b /tmp/waf_cookies.txt -w "\n%{http_code}" -X "$method" "$ADMIN_URL$endpoint" "$@")
+                response=$(curl -s -b "$ADMIN_COOKIE_JAR" -w "\n%{http_code}" -X "$method" "$ADMIN_URL$endpoint" "$@")
             fi
 
             status=$(echo "$response" | tail -1)
@@ -248,7 +282,7 @@ if [ -n "$WAF_ADMIN_USER" ] && [ -n "$WAF_ADMIN_PASS" ]; then
         test_auth_admin "Get whitelisted IPs (auth)" "200" "GET" "/api/whitelist/ips"
 
         # Test logout
-        LOGOUT_RESPONSE=$(curl -s -b /tmp/waf_cookies.txt -c /tmp/waf_cookies.txt -w "\n%{http_code}" \
+        LOGOUT_RESPONSE=$(curl -s -b "$ADMIN_COOKIE_JAR" -c "$ADMIN_COOKIE_JAR" -w "\n%{http_code}" \
             -X POST "$ADMIN_URL/api/auth/logout")
         LOGOUT_STATUS=$(echo "$LOGOUT_RESPONSE" | tail -1)
 
@@ -260,9 +294,6 @@ if [ -n "$WAF_ADMIN_USER" ] && [ -n "$WAF_ADMIN_PASS" ]; then
 
         # Verify session is invalidated
         test_admin_request "Admin status (after logout)" "401" "GET" "/api/status"
-
-        # Cleanup
-        rm -f /tmp/waf_cookies.txt
     else
         log_fail "Admin login failed (status: $LOGIN_STATUS)"
         echo "  Response: $LOGIN_BODY"

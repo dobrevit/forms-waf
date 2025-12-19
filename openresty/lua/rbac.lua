@@ -18,7 +18,7 @@ local USER_KEY_PREFIX = "waf:admin:users:"
 local VHOST_KEY_PREFIX = "waf:vhosts:config:"
 local ENDPOINT_KEY_PREFIX = "waf:endpoints:config:"
 
--- Default role definitions (used if not found in Redis)
+-- Default role definitions (authoritative source - seeded to Redis on startup)
 local DEFAULT_ROLES = {
     admin = {
         id = "admin",
@@ -39,10 +39,11 @@ local DEFAULT_ROLES = {
             geoip = {"read", "update", "reload"},
             reputation = {"read", "update"},
             timing = {"read", "update"},
+            behavioral = {"read", "update"},
             sync = {"execute"},
             status = {"read"},
             hashes = {"read", "create"},
-            whitelist = {"read", "create"}
+            whitelist = {"read", "create", "delete"}
         },
         scope = "global"  -- Can access all vhosts
     },
@@ -63,6 +64,7 @@ local DEFAULT_ROLES = {
             geoip = {"read"},
             reputation = {"read"},
             timing = {"read"},
+            behavioral = {"read"},
             status = {"read"},
             hashes = {"read", "create"},
             whitelist = {"read"}
@@ -85,6 +87,7 @@ local DEFAULT_ROLES = {
             geoip = {"read"},
             reputation = {"read"},
             timing = {"read"},
+            behavioral = {"read"},
             status = {"read"},
             hashes = {"read"},
             whitelist = {"read"}
@@ -594,6 +597,53 @@ function _M.filter_endpoints_by_scope(endpoints, session)
     end
 
     return filtered
+end
+
+-- Seed RBAC roles to Redis
+-- This ensures roles are always up-to-date with the Lua definitions
+-- Called on startup via init_worker_by_lua
+function _M.seed_roles()
+    local red, err = get_redis()
+    if not red then
+        ngx.log(ngx.WARN, "RBAC: Failed to connect to Redis for seeding: ", err)
+        return false, err
+    end
+
+    local seeded = 0
+    for role_id, role_def in pairs(DEFAULT_ROLES) do
+        local role_json = cjson.encode(role_def)
+        if role_json then
+            local ok, err = red:set(ROLE_KEY_PREFIX .. role_id, role_json)
+            if ok then
+                seeded = seeded + 1
+            else
+                ngx.log(ngx.WARN, "RBAC: Failed to seed role ", role_id, ": ", err)
+            end
+        end
+    end
+
+    -- Update role index
+    local role_ids = {}
+    for role_id, _ in pairs(DEFAULT_ROLES) do
+        table.insert(role_ids, role_id)
+    end
+    red:del("waf:auth:roles:index")
+    if #role_ids > 0 then
+        red:sadd("waf:auth:roles:index", unpack(role_ids))
+    end
+
+    close_redis(red)
+    ngx.log(ngx.INFO, "RBAC: Seeded ", seeded, " roles to Redis")
+    return true
+end
+
+-- Get all defined roles (for admin API)
+function _M.get_all_roles()
+    local roles = {}
+    for role_id, role_def in pairs(DEFAULT_ROLES) do
+        roles[role_id] = role_def
+    end
+    return roles
 end
 
 return _M
