@@ -4,6 +4,8 @@
 
 local cjson = require "cjson.safe"
 local redis = require "resty.redis"
+local resty_sha256 = require "resty.sha256"
+local resty_string = require "resty.string"
 
 local _M = {}
 
@@ -635,6 +637,72 @@ function _M.seed_roles()
     close_redis(red)
     ngx.log(ngx.INFO, "RBAC: Seeded ", seeded, " roles to Redis")
     return true
+end
+
+-- Helper: Hash password with salt (same algorithm as admin_auth.lua)
+local function hash_password(password, salt)
+    local sha256 = resty_sha256:new()
+    sha256:update(salt .. password .. salt)
+    local digest = sha256:final()
+    return resty_string.to_hex(digest)
+end
+
+-- Seed default admin user if not exists
+-- Uses environment variables for salt and password
+-- Called on startup via init_worker_by_lua
+function _M.seed_default_admin()
+    local admin_salt = os.getenv("WAF_ADMIN_SALT")
+    local admin_password = os.getenv("WAF_ADMIN_PASSWORD") or "changeme"
+
+    -- Salt is required for security - fail if not provided
+    if not admin_salt or admin_salt == "" then
+        ngx.log(ngx.WARN, "RBAC: WAF_ADMIN_SALT not set, skipping default admin seeding")
+        ngx.log(ngx.WARN, "RBAC: Set WAF_ADMIN_SALT environment variable to enable default admin user")
+        return false, "WAF_ADMIN_SALT not set"
+    end
+
+    local red, err = get_redis()
+    if not red then
+        ngx.log(ngx.WARN, "RBAC: Failed to connect to Redis for admin seeding: ", err)
+        return false, err
+    end
+
+    -- Check if admin user already exists
+    local existing = red:get(USER_KEY_PREFIX .. "admin")
+    if existing and existing ~= ngx.null then
+        close_redis(red)
+        ngx.log(ngx.INFO, "RBAC: Admin user already exists, skipping seed")
+        return true, "exists"
+    end
+
+    -- Create default admin user
+    local password_hash = hash_password(admin_password, admin_salt)
+    local admin_user = {
+        username = "admin",
+        password_hash = password_hash,
+        salt = admin_salt,
+        role = "admin",
+        vhost_scope = {"*"},
+        auth_provider = "local",
+        must_change_password = (admin_password == "changeme"),
+        created_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    }
+
+    local admin_json = cjson.encode(admin_user)
+    local ok, err = red:set(USER_KEY_PREFIX .. "admin", admin_json)
+    close_redis(red)
+
+    if not ok then
+        ngx.log(ngx.ERR, "RBAC: Failed to create default admin user: ", err)
+        return false, err
+    end
+
+    ngx.log(ngx.INFO, "RBAC: Default admin user created (username: admin)")
+    if admin_password == "changeme" then
+        ngx.log(ngx.WARN, "RBAC: Using default password 'changeme' - change it immediately!")
+    end
+
+    return true, "created"
 end
 
 -- Get all defined roles (for admin API)
