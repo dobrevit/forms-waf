@@ -22,6 +22,8 @@ data:
     env UPSTREAM_SSL;
     env WAF_ADMIN_SALT;
     env WAF_ADMIN_PASSWORD;
+    env HOSTNAME;
+    env WAF_USE_LEADER_ELECTION;
 
     worker_processes auto;
     error_log /var/log/nginx/error.log warn;
@@ -89,11 +91,14 @@ data:
         lua_shared_dict learning_cache 5m;
         lua_shared_dict waf_metrics 10m;
         lua_shared_dict waf_timing 1m;
+        lua_shared_dict coordinator_cache 1m;
 
         # Initialize modules on worker start
         init_worker_by_lua_block {
             local redis_sync = require "redis_sync"
             local rbac = require "rbac"
+            local instance_coordinator = require "instance_coordinator"
+
             -- Initialize Redis with defaults if keys are missing (only on worker 0)
             -- Use timer to defer Redis connection (not allowed directly in init_worker)
             if ngx.worker.id() == 0 then
@@ -105,7 +110,22 @@ data:
                     rbac.seed_default_admin()
                 end)
             end
+
+            -- Start Redis sync timer (all workers)
             redis_sync.start_sync_timer()
+
+            -- Start instance coordinator (handles heartbeat and leader election)
+            -- Only worker 0 participates, but call is safe from any worker
+            instance_coordinator.start_coordinator_timer()
+        }
+
+        # Graceful shutdown: deregister instance from cluster
+        exit_worker_by_lua_block {
+            -- Only worker 0 handles instance registration/deregistration
+            if ngx.worker.id() == 0 then
+                local instance_coordinator = require "instance_coordinator"
+                instance_coordinator.deregister_instance()
+            end
         }
 
         # Health check and metrics endpoint
