@@ -20,6 +20,7 @@ import TimingConfig from '@/pages/security/TimingConfig'
 import GeoIPConfig from '@/pages/security/GeoIPConfig'
 import ReputationConfig from '@/pages/security/ReputationConfig'
 import BehavioralAnalytics from '@/pages/analytics/BehavioralAnalytics'
+import ClusterStatus from '@/pages/cluster/ClusterStatus'
 import { About } from '@/pages/About'
 import { Users } from '@/pages/admin/Users'
 import { AuthProviders } from '@/pages/admin/AuthProviders'
@@ -72,6 +73,7 @@ export default function App() {
                 <Route path="/security/geoip" element={<GeoIPConfig />} />
                 <Route path="/security/reputation" element={<ReputationConfig />} />
                 <Route path="/analytics/behavioral" element={<BehavioralAnalytics />} />
+                <Route path="/cluster" element={<ClusterStatus />} />
                 <Route path="/about" element={<About />} />
                 <Route path="/admin/users" element={<Users />} />
                 <Route path="/admin/providers" element={<AuthProviders />} />

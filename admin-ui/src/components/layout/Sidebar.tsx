@@ -21,6 +21,7 @@ import {
   Users,
   KeyRound,
   Activity,
+  Server,
 } from 'lucide-react'
 
 const navigation = [
@@ -75,6 +76,7 @@ const navigation = [
     children: [
       { name: 'User Management', href: '/admin/users', icon: Users },
       { name: 'Auth Providers', href: '/admin/providers', icon: KeyRound },
+      { name: 'Cluster Status', href: '/cluster', icon: Server },
     ],
   },
   { name: 'About', href: '/about', icon: Info },

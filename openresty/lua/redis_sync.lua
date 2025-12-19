@@ -11,6 +11,15 @@ local vhost_matcher = require "vhost_matcher"
 local field_learner = require "field_learner"
 local behavioral_tracker = require "behavioral_tracker"
 
+-- Lazy load instance_coordinator to avoid circular dependency
+local instance_coordinator = nil
+local function get_instance_coordinator()
+    if not instance_coordinator then
+        instance_coordinator = require "instance_coordinator"
+    end
+    return instance_coordinator
+end
+
 -- Lazy load captcha_handler to avoid circular dependency
 local captcha_handler = nil
 local function get_captcha_handler()
@@ -972,12 +981,13 @@ function _M.start_sync_timer()
         end
 
         -- Start behavioral baseline calculation timer (hourly)
+        -- This can optionally use leader election to avoid race conditions in multi-pod deployments
+        local USE_LEADER_ELECTION = os.getenv("WAF_USE_LEADER_ELECTION") == "true"
         local baseline_interval = 3600  -- 1 hour
-        local function baseline_calculation_handler(premature)
-            if premature then
-                return
-            end
+        local baseline_initial_delay = 300  -- 5 minutes
 
+        -- Baseline calculation logic (reusable for both timer and leader task)
+        local function do_baseline_calculation()
             ngx.log(ngx.DEBUG, "Starting behavioral baseline calculations")
 
             -- Connect to Redis
@@ -1008,14 +1018,14 @@ function _M.start_sync_timer()
                             -- Get all flows for this vhost
                             local flows = behavioral_tracker.get_flows(vhost_id)
                             for _, flow_name in ipairs(flows or {}) do
-                                local ok, err = behavioral_tracker.calculate_baselines(
+                                local calc_ok, calc_err = behavioral_tracker.calculate_baselines(
                                     red, vhost_id, flow_name, baselines_config
                                 )
-                                if ok then
+                                if calc_ok then
                                     calculated_count = calculated_count + 1
-                                elseif err ~= "insufficient samples" then
+                                elseif calc_err ~= "insufficient samples" then
                                     ngx.log(ngx.WARN, "Baseline calculation failed for ",
-                                        vhost_id, ":", flow_name, " - ", err)
+                                        vhost_id, ":", flow_name, " - ", calc_err)
                                 end
                             end
                         end
@@ -1030,17 +1040,39 @@ function _M.start_sync_timer()
             else
                 ngx.log(ngx.WARN, "Baseline calculation: failed to connect to Redis: ", err)
             end
-
-            -- Reschedule
-            ngx.timer.at(baseline_interval, baseline_calculation_handler)
         end
 
-        -- Start after initial delay (5 minutes) to allow data to accumulate
-        local ok, err = ngx.timer.at(300, baseline_calculation_handler)
-        if ok then
-            ngx.log(ngx.INFO, "Behavioral baseline calculation timer started with interval: ", baseline_interval, "s")
+        if USE_LEADER_ELECTION then
+            -- Use leader election: only the elected leader runs baseline calculations
+            -- This is useful for multi-pod deployments to avoid race conditions
+            ngx.log(ngx.INFO, "Using leader election for baseline calculations")
+            local coordinator = get_instance_coordinator()
+            coordinator.register_for_leader_task(
+                "baseline_calculation",
+                do_baseline_calculation,
+                baseline_interval,
+                baseline_initial_delay
+            )
         else
-            ngx.log(ngx.WARN, "Failed to start baseline calculation timer: ", err)
+            -- Fallback to worker-0 pattern (traditional approach for single-pod deployments)
+            local function baseline_calculation_handler(premature)
+                if premature then
+                    return
+                end
+
+                do_baseline_calculation()
+
+                -- Reschedule
+                ngx.timer.at(baseline_interval, baseline_calculation_handler)
+            end
+
+            -- Start after initial delay (5 minutes) to allow data to accumulate
+            local ok, err = ngx.timer.at(baseline_initial_delay, baseline_calculation_handler)
+            if ok then
+                ngx.log(ngx.INFO, "Behavioral baseline calculation timer started with interval: ", baseline_interval, "s (worker-0 mode)")
+            else
+                ngx.log(ngx.WARN, "Failed to start baseline calculation timer: ", err)
+            end
         end
     end
 end
