@@ -421,4 +421,267 @@ function _M.reset()
     end
 end
 
+-- ============================================================================
+-- Cluster Metrics (Redis-based distributed metrics)
+-- ============================================================================
+
+-- Redis keys for cluster metrics
+local METRICS_KEYS = {
+    instance_prefix = "waf:metrics:instance:",
+    instance_updated_suffix = ":updated",
+    global = "waf:metrics:global",
+    global_updated = "waf:metrics:global:updated",
+}
+
+-- TTL for instance metrics (should be > STALE_THRESHOLD to allow for cleanup)
+local METRICS_TTL = 300  -- 5 minutes
+
+-- Metric fields to sync
+local SYNC_FIELDS = {
+    "total_requests",
+    "blocked_requests",
+    "monitored_requests",
+    "allowed_requests",
+    "skipped_requests",
+    "form_submissions",
+    "validation_errors"
+}
+
+--- Push local metrics to Redis atomically using a transaction.
+-- Called by the instance coordinator heartbeat timer every 30 seconds.
+-- Uses MULTI/EXEC to ensure atomic write of metrics hash and TTL.
+--
+-- @param instance_id string The unique identifier for this instance (e.g., pod name)
+-- @param red table An established resty.redis connection object
+-- @return boolean True on success, false on failure
+-- @return string|nil Error message on failure, nil on success
+function _M.push_to_redis(instance_id, red)
+    if not red or not instance_id then
+        return false, "invalid arguments: instance_id and redis connection required"
+    end
+
+    local summary = _M.get_summary()
+    local metrics_key = METRICS_KEYS.instance_prefix .. instance_id
+    local updated_key = metrics_key .. METRICS_KEYS.instance_updated_suffix
+    local now = ngx.time()
+
+    -- Build HMSET arguments
+    local args = {}
+    for _, field in ipairs(SYNC_FIELDS) do
+        table.insert(args, field)
+        table.insert(args, tostring(summary[field] or 0))
+    end
+
+    -- Use MULTI/EXEC transaction to ensure atomicity
+    -- This prevents orphaned keys if the process crashes mid-operation
+    local ok, err = red:multi()
+    if not ok then
+        ngx.log(ngx.WARN, "metrics: failed to start transaction: ", err)
+        return false, err
+    end
+
+    -- Queue all commands in the transaction
+    red:hmset(metrics_key, unpack(args))
+    red:expire(metrics_key, METRICS_TTL)
+    red:setex(updated_key, METRICS_TTL, tostring(now))
+
+    -- Execute transaction
+    local results, err = red:exec()
+    if not results then
+        ngx.log(ngx.WARN, "metrics: transaction failed: ", err)
+        red:discard()  -- Clean up on error
+        return false, err
+    end
+
+    ngx.log(ngx.DEBUG, "metrics: pushed metrics for instance '", instance_id, "'")
+    return true
+end
+
+--- Cleanup metrics for a removed instance.
+-- Called by the instance coordinator when removing stale instances.
+--
+-- @param red table An established resty.redis connection object
+-- @param instance_id string The unique identifier of the instance to clean up
+-- @return boolean True on success, false on failure
+-- @return string|nil Error message on failure, nil on success
+function _M.cleanup_instance_metrics(red, instance_id)
+    if not red or not instance_id then
+        return false, "invalid arguments: redis connection and instance_id required"
+    end
+
+    local metrics_key = METRICS_KEYS.instance_prefix .. instance_id
+    local updated_key = metrics_key .. METRICS_KEYS.instance_updated_suffix
+
+    -- Delete metrics hash and updated key
+    red:del(metrics_key)
+    red:del(updated_key)
+
+    ngx.log(ngx.INFO, "metrics: cleaned up metrics for instance '", instance_id, "'")
+    return true
+end
+
+--- Aggregate metrics from all active instances (leader only).
+-- Uses Redis pipelining to batch all HMGET commands for efficiency.
+-- The instance_count reflects all active instances, regardless of whether
+-- their metrics were successfully retrieved.
+--
+-- @param red table An established resty.redis connection object
+-- @param active_instances table Array of instance objects with instance_id field,
+--                               or array of instance_id strings
+-- @return boolean True on success, false on failure
+-- @return number|string On success: count of instances aggregated; on failure: error message
+function _M.aggregate_global_metrics(red, active_instances)
+    if not red then
+        return false, "no redis connection"
+    end
+
+    local instances = active_instances or {}
+
+    -- Count all active instances (regardless of metrics retrieval success)
+    local instance_count = #instances
+
+    if instance_count == 0 then
+        -- No instances to aggregate - write zeros
+        local args = {}
+        for _, field in ipairs(SYNC_FIELDS) do
+            table.insert(args, field)
+            table.insert(args, "0")
+        end
+        table.insert(args, "instance_count")
+        table.insert(args, "0")
+
+        local ok, err = red:hmset(METRICS_KEYS.global, unpack(args))
+        if not ok then
+            ngx.log(ngx.WARN, "metrics: failed to write empty global metrics: ", err)
+            return false, err
+        end
+        return true, 0
+    end
+
+    -- Initialize pipeline for batched HMGET commands
+    red:init_pipeline()
+
+    -- Queue all HMGET commands in the pipeline
+    for _, instance in ipairs(instances) do
+        local instance_id = instance.instance_id or instance
+        if instance_id then
+            local metrics_key = METRICS_KEYS.instance_prefix .. instance_id
+            red:hmget(metrics_key, unpack(SYNC_FIELDS))
+        end
+    end
+
+    -- Execute pipeline and get all results at once
+    local results, err = red:commit_pipeline()
+    if not results then
+        ngx.log(ngx.WARN, "metrics: pipeline failed: ", err)
+        return false, err
+    end
+
+    -- Initialize totals
+    local totals = {}
+    for _, field in ipairs(SYNC_FIELDS) do
+        totals[field] = 0
+    end
+
+    -- Sum metrics from all pipeline results
+    for _, values in ipairs(results) do
+        if values and type(values) == "table" then
+            for i, field in ipairs(SYNC_FIELDS) do
+                local val = values[i]
+                if val and val ~= ngx.null then
+                    totals[field] = totals[field] + (tonumber(val) or 0)
+                end
+            end
+        end
+    end
+
+    -- Write global metrics
+    local args = {}
+    for _, field in ipairs(SYNC_FIELDS) do
+        table.insert(args, field)
+        table.insert(args, tostring(totals[field]))
+    end
+    table.insert(args, "instance_count")
+    table.insert(args, tostring(instance_count))
+
+    local ok, err = red:hmset(METRICS_KEYS.global, unpack(args))
+    if not ok then
+        ngx.log(ngx.WARN, "metrics: failed to write global metrics: ", err)
+        return false, err
+    end
+
+    -- Update timestamp with error checking
+    local now = ngx.time()
+    ok, err = red:set(METRICS_KEYS.global_updated, tostring(now))
+    if not ok then
+        ngx.log(ngx.WARN, "metrics: failed to update global_updated timestamp: ", err)
+        -- Don't return error here as the main metrics were written successfully
+    end
+
+    ngx.log(ngx.DEBUG, "metrics: aggregated global metrics from ", instance_count, " instances")
+    return true, instance_count
+end
+
+--- Get global metrics from Redis.
+-- Returns aggregated metrics from all cluster instances.
+--
+-- @param red table An established resty.redis connection object
+-- @return table|nil On success: table with metric fields and optional last_updated;
+--                   on failure: nil
+-- @return string|nil Error message on failure (distinguishes between errors and no data)
+function _M.get_global_summary(red)
+    if not red then
+        return nil, "no redis connection"
+    end
+
+    -- Get all fields including instance_count
+    local fields = {}
+    for _, field in ipairs(SYNC_FIELDS) do
+        table.insert(fields, field)
+    end
+    table.insert(fields, "instance_count")
+
+    local values, err = red:hmget(METRICS_KEYS.global, unpack(fields))
+    if not values then
+        return nil, "redis error: " .. (err or "unknown")
+    end
+
+    if values == ngx.null then
+        return nil, "no global metrics available"
+    end
+
+    -- Check if there's any data
+    local has_data = false
+    for _, v in ipairs(values) do
+        if v and v ~= ngx.null then
+            has_data = true
+            break
+        end
+    end
+
+    if not has_data then
+        return nil, "no global metrics available"
+    end
+
+    -- Build result
+    local result = {}
+    for i, field in ipairs(fields) do
+        local val = values[i]
+        if val and val ~= ngx.null then
+            result[field] = tonumber(val) or 0
+        else
+            result[field] = 0
+        end
+    end
+
+    -- Get last updated timestamp (optional field)
+    local updated, updated_err = red:get(METRICS_KEYS.global_updated)
+    if updated and updated ~= ngx.null then
+        result.last_updated = tonumber(updated)
+    end
+    -- Note: last_updated may be nil if timestamp key doesn't exist
+
+    return result
+end
+
 return _M

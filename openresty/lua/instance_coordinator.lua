@@ -40,6 +40,7 @@ local LEADER_TTL = 30              -- Leader key TTL
 local LEADER_RENEW_INTERVAL = 10   -- How often leader renews TTL
 local DRIFT_THRESHOLD = 60         -- Mark as down after 1 minute without heartbeat
 local STALE_THRESHOLD = 300        -- Remove after 5 minutes without heartbeat
+local METRICS_PUSH_INTERVAL = 30   -- How often to push metrics to Redis
 
 -- Redis keys
 local KEYS = {
@@ -57,6 +58,7 @@ local is_initialized = false
 local cached_leader = nil
 local cached_leader_time = 0
 local LEADER_CACHE_TTL = 5     -- Cache leader status for 5 seconds
+local last_metrics_push = 0    -- Track when metrics were last pushed
 
 -- ============================================================================
 -- Redis Connection Helpers (following redis_sync.lua patterns)
@@ -195,6 +197,25 @@ local function heartbeat_timer_handler(premature)
     local ok, err = send_heartbeat()
     if not ok then
         ngx.log(ngx.WARN, "instance_coordinator: heartbeat failed: ", err)
+    end
+
+    -- Push metrics to Redis periodically (every METRICS_PUSH_INTERVAL seconds)
+    local now = ngx.now()
+    if now - last_metrics_push >= METRICS_PUSH_INTERVAL then
+        -- Get Redis connection for metrics push
+        local red, redis_err = get_redis_connection()
+        if red then
+            local metrics = require "metrics"
+            local push_ok, push_err = metrics.push_to_redis(INSTANCE_ID, red)
+            if push_ok then
+                last_metrics_push = now
+            else
+                ngx.log(ngx.WARN, "instance_coordinator: metrics push failed: ", push_err)
+            end
+            close_redis(red)
+        else
+            ngx.log(ngx.WARN, "instance_coordinator: failed to connect to Redis for metrics: ", redis_err)
+        end
     end
 
     -- Always reschedule
@@ -385,6 +406,10 @@ local function check_instance_health()
         red:hdel(KEYS.instances, instance_id)
         local heartbeat_key = KEYS.heartbeat_prefix .. instance_id .. KEYS.heartbeat_suffix
         red:del(heartbeat_key)
+
+        -- Also cleanup metrics for this instance
+        local metrics = require "metrics"
+        metrics.cleanup_instance_metrics(red, instance_id)
     end
 
     close_redis(red)
@@ -475,9 +500,12 @@ local function leader_maintenance_handler(premature)
         if instances then
             local active = 0
             local drifted = 0
+            local active_instances = {}
+
             for _, inst in ipairs(instances) do
                 if inst.status == "active" then
                     active = active + 1
+                    table.insert(active_instances, inst)
                 elseif inst.status == "drifted" then
                     drifted = drifted + 1
                 end
@@ -486,6 +514,17 @@ local function leader_maintenance_handler(premature)
             if drifted > 0 then
                 ngx.log(ngx.WARN, "instance_coordinator: cluster status - ",
                         active, " active, ", drifted, " drifted instances")
+            end
+
+            -- Aggregate metrics from all active instances
+            local red, redis_err = get_redis_connection()
+            if red then
+                local metrics = require "metrics"
+                local agg_ok, agg_err = metrics.aggregate_global_metrics(red, active_instances)
+                if not agg_ok then
+                    ngx.log(ngx.WARN, "instance_coordinator: metrics aggregation failed: ", agg_err)
+                end
+                close_redis(red)
             end
         end
 

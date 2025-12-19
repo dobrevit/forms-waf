@@ -19,9 +19,28 @@ _M.handlers["GET:/status"] = function()
     return utils.json_response(status)
 end
 
--- GET /metrics - Get WAF metrics summary
+-- GET /metrics - Get WAF metrics summary (local and global)
 _M.handlers["GET:/metrics"] = function()
     local summary = metrics.get_summary()
+
+    -- Try to get global metrics from Redis
+    local red, redis_err = utils.get_redis()
+    if red then
+        local global, global_err = metrics.get_global_summary(red)
+        utils.close_redis(red)
+
+        if global then
+            -- Convert last_updated timestamp to ISO format (if present)
+            if global.last_updated then
+                global.last_updated = os.date("!%Y-%m-%dT%H:%M:%SZ", global.last_updated)
+            end
+            summary.global = global
+        elseif global_err and not global_err:find("no global metrics") then
+            -- Log actual errors (not just "no data available")
+            ngx.log(ngx.WARN, "metrics: failed to get global summary: ", global_err)
+        end
+    end
+
     return utils.json_response(summary)
 end
 
