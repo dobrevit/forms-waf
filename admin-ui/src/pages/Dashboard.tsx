@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { statusApi, vhostsApi, endpointsApi, keywordsApi, metricsApi } from '@/api/client'
+import { statusApi, vhostsApi, endpointsApi, keywordsApi, metricsApi, configApi } from '@/api/client'
 import type { MetricsSummary } from '@/api/client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import {
   Globe,
   Route,
@@ -16,7 +17,8 @@ import {
   ShieldCheck,
   Eye,
   FileText,
-  AlertTriangle
+  AlertTriangle,
+  Bug
 } from 'lucide-react'
 
 interface StatCardProps {
@@ -77,7 +79,14 @@ export function Dashboard() {
     refetchInterval: 10000, // Refresh every 10 seconds
   })
 
+  const { data: thresholdsData } = useQuery({
+    queryKey: ['config', 'thresholds'],
+    queryFn: configApi.getThresholds,
+  })
+
   const status = statusData as Record<string, unknown> | undefined
+  const thresholds = (thresholdsData as { thresholds: Record<string, unknown> } | undefined)?.thresholds
+  const debugEnabled = thresholds?.expose_waf_headers === true
   const rawVhosts = (vhostsData as { vhosts: unknown[] } | undefined)?.vhosts
   const rawEndpoints = (endpointsData as { endpoints: unknown[] } | undefined)?.endpoints
   const rawBlockedKeywords = (blockedKeywordsData as { keywords: string[] } | undefined)?.keywords
@@ -135,6 +144,20 @@ export function Dashboard() {
           </Badge>
         </CardContent>
       </Card>
+
+      {/* Debug Mode Warning */}
+      {debugEnabled && (
+        <Alert variant="warning">
+          <Bug className="h-5 w-5" />
+          <AlertTitle>Debug Mode Enabled</AlertTitle>
+          <AlertDescription>
+            WAF debug headers are globally exposed to clients. This reveals internal WAF information and should only be enabled for debugging.{' '}
+            <a href="/config/thresholds" className="underline font-medium hover:text-amber-900">
+              Disable in Thresholds settings
+            </a>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

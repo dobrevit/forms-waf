@@ -276,7 +276,21 @@ function _M.process_request()
     local summary = vhost_resolver.get_context_summary(context)
 
     -- Check if WAF debug headers should be exposed to clients
-    local expose_headers = waf_config.expose_waf_headers()
+    -- Global toggle has precedence: when OFF, no debug anywhere
+    -- When global is ON, per-vhost settings can enable/disable for specific vhosts
+    local global_expose_headers = waf_config.expose_waf_headers()
+    local vhost_debug_override = nil
+
+    -- Check for per-vhost debug header override
+    if context and context.waf then
+        vhost_debug_override = context.waf.debug_headers
+    end
+
+    -- Final debug decision: global must be ON first, then check vhost override
+    local expose_headers = global_expose_headers
+    if global_expose_headers and vhost_debug_override ~= nil then
+        expose_headers = vhost_debug_override
+    end
 
     -- Always set X-WAF-Debug header for HAProxy (even for non-form requests)
     ngx.req.set_header("X-WAF-Debug", expose_headers and "on" or "off")

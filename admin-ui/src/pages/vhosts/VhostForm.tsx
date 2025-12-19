@@ -724,6 +724,30 @@ export function VhostForm() {
                   </Select>
                 </div>
 
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="debug_headers">Debug Headers</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Expose WAF debug response headers for this vhost. Requires global debug to be enabled in Thresholds.
+                    </p>
+                  </div>
+                  <Switch
+                    id="debug_headers"
+                    checked={formData.waf?.debug_headers ?? true}
+                    onCheckedChange={(checked) =>
+                      setFormData({
+                        ...formData,
+                        waf: {
+                          ...formData.waf,
+                          enabled: formData.waf?.enabled ?? true,
+                          mode: formData.waf?.mode || 'monitoring',
+                          debug_headers: checked,
+                        },
+                      })
+                    }
+                  />
+                </div>
+
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="spam_score_block">Block Threshold</Label>

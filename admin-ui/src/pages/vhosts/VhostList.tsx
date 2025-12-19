@@ -28,7 +28,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Search, Pencil, Trash2, Globe, TestTube, Route, Copy } from 'lucide-react'
+import { Plus, Search, Pencil, Trash2, Globe, TestTube, Route, Copy, Bug } from 'lucide-react'
 import type { Vhost } from '@/api/types'
 
 export function VhostList() {
@@ -254,6 +254,7 @@ export function VhostList() {
               <TableHead>Hostnames</TableHead>
               <TableHead>Endpoints</TableHead>
               <TableHead>Mode</TableHead>
+              <TableHead>Debug</TableHead>
               <TableHead>Routing</TableHead>
               <TableHead>Enabled</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -262,13 +263,13 @@ export function VhostList() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center">
+                <TableCell colSpan={8} className="text-center">
                   Loading...
                 </TableCell>
               </TableRow>
             ) : filteredVhosts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center">
+                <TableCell colSpan={8} className="text-center">
                   No virtual hosts found
                 </TableCell>
               </TableRow>
@@ -320,6 +321,16 @@ export function VhostList() {
                     <Badge variant={getModeColor(vhost.waf?.mode || 'monitoring')}>
                       {vhost.waf?.mode || 'monitoring'}
                     </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {vhost.waf?.debug_headers !== false ? (
+                      <Badge variant="outline" className="text-amber-600 border-amber-300 bg-amber-50">
+                        <Bug className="h-3 w-3 mr-1" />
+                        On
+                      </Badge>
+                    ) : (
+                      <span className="text-muted-foreground text-sm">Off</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant="secondary">
