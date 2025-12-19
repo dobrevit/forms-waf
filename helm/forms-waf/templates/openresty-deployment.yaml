@@ -77,6 +77,18 @@ spec:
                   name: {{ .Release.Name }}-redis
                   key: redis-password
             {{- end }}
+            {{- if .Values.openresty.adminSeed.enabled }}
+            - name: WAF_ADMIN_SALT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.openresty.adminSeed.existingSecret | default (printf "%s-admin-auth" (include "forms-waf.fullname" .)) }}
+                  key: salt
+            - name: WAF_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.openresty.adminSeed.existingSecret | default (printf "%s-admin-auth" (include "forms-waf.fullname" .)) }}
+                  key: password
+            {{- end }}
             {{- if .Values.openresty.proxy.httpProxy }}
             - name: HTTP_PROXY
               value: {{ .Values.openresty.proxy.httpProxy | quote }}

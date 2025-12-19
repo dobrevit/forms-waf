@@ -65,6 +65,17 @@ openresty:
     # HAProxy connection timeout in seconds
     HAPROXY_TIMEOUT: "30"
 
+  # Admin user seeding configuration
+  # Seeds a default admin user on startup if it doesn't exist in Redis
+  adminSeed:
+    enabled: true
+    # Use existing secret for salt (recommended for production)
+    # Secret must have key 'salt' containing 32+ character random string
+    existingSecret: ""
+    # If no existingSecret, a random salt will be auto-generated
+    # Default password for seeded admin user (change immediately after deployment!)
+    defaultPassword: "changeme"
+
   # Extra environment variables from secrets/configmaps
   envFrom: []
 

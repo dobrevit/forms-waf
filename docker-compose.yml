@@ -51,6 +51,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - WAF_SYNC_INTERVAL=10
+      - WAF_ADMIN_SALT=${WAF_ADMIN_SALT:-waf_default_salt_change_me}
+      - WAF_ADMIN_PASSWORD=${WAF_ADMIN_PASSWORD:-changeme}
     ports:
       - "8080:8080"
       - "8081:8081"
