@@ -68,6 +68,16 @@ _M.handlers["GET:/timing/vhosts"] = function()
         return utils.error_response("Redis connection failed: " .. err)
     end
 
+    -- Get global timing config to read the cookie_name setting
+    local global_config_json = red:get("waf:config:timing_token")
+    local global_cookie_name = "_waf_timing"  -- Default
+    if global_config_json and global_config_json ~= ngx.null then
+        local global_config = cjson.decode(global_config_json)
+        if global_config and global_config.cookie_name then
+            global_cookie_name = global_config.cookie_name
+        end
+    end
+
     -- Get all vhost IDs from index
     local vhost_ids = red:zrange("waf:vhosts:index", 0, -1)
     local timing_vhosts = {}
@@ -78,11 +88,11 @@ _M.handlers["GET:/timing/vhosts"] = function()
             if config_json and config_json ~= ngx.null then
                 local config = cjson.decode(config_json)
                 if config and config.timing and config.timing.enabled then
-                    -- Determine cookie name for this vhost
-                    local cookie_name = "_waf_timing"
+                    -- Determine cookie name for this vhost using global cookie_name as base
+                    local cookie_name = global_cookie_name
                     if vhost_id and vhost_id ~= "_default" then
                         local safe_id = vhost_id:gsub("[^%w_-]", "")
-                        cookie_name = cookie_name .. "_" .. safe_id
+                        cookie_name = global_cookie_name .. "_" .. safe_id
                     end
 
                     table.insert(timing_vhosts, {
