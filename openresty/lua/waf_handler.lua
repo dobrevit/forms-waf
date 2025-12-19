@@ -331,6 +331,17 @@ function _M.process_request()
             "WAF SKIPPED: host=%s path=%s vhost=%s endpoint=%s reason=%s",
             host, path, summary.vhost_id, summary.endpoint_id or "none", context.reason or "unknown"
         ))
+        -- Even in passthrough mode, set timing cookie on GET requests
+        -- This ensures timing validation works when form is submitted
+        if method == "GET" then
+            local timing_config = vhost_resolver.get_timing_config(context)
+            if timing_config and timing_config.enabled then
+                local current_path = ngx.var.uri
+                if timing_token.should_set_token_for_path(current_path, timing_config) then
+                    timing_token.set_token(context)
+                end
+            end
+        end
         metrics.record_request(summary.vhost_id, summary.endpoint_id, "skipped", 0)
         return
     end
