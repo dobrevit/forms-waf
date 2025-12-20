@@ -156,6 +156,39 @@ Request with Context
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Header Flow Between OpenResty and HAProxy
+
+```
+OpenResty → HAProxy Request Headers:
+─────────────────────────────────────────────────────────────────
+X-Form-Hash                  Content hash for duplicate detection
+X-Spam-Score                 Calculated spam score (integer)
+X-Spam-Flags                 Comma-separated detection flags
+X-Client-IP                  Resolved client IP address
+X-Submission-Fingerprint     Client fingerprint (16 chars)
+X-WAF-Mode                   blocking/monitoring/passthrough/strict
+X-WAF-Debug                  on/off (expose debug headers)
+X-Blocked                    true/false (already blocked by OpenResty)
+
+Rate Limiting Headers:
+X-WAF-Rate-Limit             on/off (enable HAProxy rate limiting)
+X-WAF-Rate-Limit-Value       Dynamic IP rate limit (requests/min)
+
+Dynamic Threshold Headers:
+X-WAF-Spam-Threshold         Spam score block threshold (default: 80)
+X-WAF-Hash-Rate-Threshold    Hash flood rate threshold (default: 10)
+X-WAF-IP-Spam-Threshold      Cumulative IP spam score limit (default: 500)
+X-WAF-Fingerprint-Threshold  Fingerprint rate limit (default: 20)
+
+HAProxy → Backend Headers (debug mode only):
+─────────────────────────────────────────────────────────────────
+X-WAF-Hash-Count             Form hash submission count
+X-WAF-Hash-Rate              Form hash rate per minute
+X-WAF-IP-Rate                Client IP request rate
+X-WAF-Fingerprint-Rate       Fingerprint rate per minute
+X-WAF-Block-Rule-*           Which HAProxy rule blocked (if any)
+```
+
 ## Stick-Table Design
 
 ### form_hashes table

@@ -335,6 +335,13 @@ function _M.process_request()
     -- In monitoring/passthrough mode, HAProxy should track but not block
     ngx.req.set_header("X-WAF-Mode", summary.mode)
 
+    -- Send dynamic thresholds to HAProxy for per-vhost/endpoint enforcement
+    local haproxy_thresholds = vhost_resolver.get_thresholds(context)
+    ngx.req.set_header("X-WAF-Spam-Threshold", tostring(haproxy_thresholds.spam_score_block or 80))
+    ngx.req.set_header("X-WAF-Hash-Rate-Threshold", tostring(haproxy_thresholds.hash_count_block or 10))
+    ngx.req.set_header("X-WAF-IP-Spam-Threshold", tostring(haproxy_thresholds.ip_spam_score_threshold or 500))
+    ngx.req.set_header("X-WAF-Fingerprint-Threshold", tostring(haproxy_thresholds.fingerprint_rate_limit or 20))
+
     -- Check if WAF should be skipped
     if vhost_resolver.should_skip_waf(context) then
         if expose_headers then
