@@ -7,16 +7,23 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
-import { Save, Info, Clock, Hash, AlertTriangle, Shield } from 'lucide-react'
+import { Save, Info, Clock, Hash, AlertTriangle, Shield, TrendingUp, Fingerprint } from 'lucide-react'
 
 interface ThresholdConfig {
+  // Per-request spam score thresholds
   spam_score_block: number
   spam_score_flag: number
-  hash_count_block: number
+  // Rate limiting (request counts)
   ip_rate_limit: number
   ip_daily_limit?: number
-  hash_unique_ips_block?: number
+  fingerprint_rate_limit?: number
   rate_limiting_enabled?: boolean
+  // Score-based blocking (cumulative)
+  ip_spam_score_threshold?: number
+  // Content hash detection
+  hash_count_block: number
+  hash_unique_ips_block?: number
+  // Debug settings
   expose_waf_headers?: boolean
 }
 
@@ -27,11 +34,13 @@ export function Thresholds() {
   const [values, setValues] = useState<ThresholdConfig>({
     spam_score_block: 80,
     spam_score_flag: 50,
-    hash_count_block: 10,
     ip_rate_limit: 30,
     ip_daily_limit: 500,
-    hash_unique_ips_block: 5,
+    fingerprint_rate_limit: 20,
     rate_limiting_enabled: true,
+    ip_spam_score_threshold: 500,
+    hash_count_block: 10,
+    hash_unique_ips_block: 5,
     expose_waf_headers: false,
   })
 
@@ -46,11 +55,13 @@ export function Thresholds() {
       setValues({
         spam_score_block: (thresholds.spam_score_block as number) || 80,
         spam_score_flag: (thresholds.spam_score_flag as number) || 50,
-        hash_count_block: (thresholds.hash_count_block as number) || 10,
         ip_rate_limit: (thresholds.ip_rate_limit as number) || 30,
         ip_daily_limit: (thresholds.ip_daily_limit as number) || 500,
-        hash_unique_ips_block: (thresholds.hash_unique_ips_block as number) || 5,
+        fingerprint_rate_limit: (thresholds.fingerprint_rate_limit as number) || 20,
         rate_limiting_enabled: thresholds.rate_limiting_enabled !== false,
+        ip_spam_score_threshold: (thresholds.ip_spam_score_threshold as number) || 500,
+        hash_count_block: (thresholds.hash_count_block as number) || 10,
+        hash_unique_ips_block: (thresholds.hash_unique_ips_block as number) || 5,
         expose_waf_headers: thresholds.expose_waf_headers === true,
       })
     }
@@ -106,19 +117,20 @@ export function Thresholds() {
       </Card>
 
       <div className="grid gap-6 md:grid-cols-2">
+        {/* Per-Request Spam Score Card */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
               <AlertTriangle className="h-5 w-5" />
-              Spam Score Thresholds
+              Per-Request Spam Score
             </CardTitle>
             <CardDescription>
-              Configure when to flag or block based on spam score
+              Block or flag individual requests based on their calculated spam score
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="spam_score_block">Block Threshold</Label>
+              <Label htmlFor="spam_score_block">Block Threshold (points)</Label>
               <Input
                 id="spam_score_block"
                 type="number"
@@ -128,11 +140,11 @@ export function Thresholds() {
                 }
               />
               <p className="text-xs text-muted-foreground">
-                Submissions with score &gt;= this value are blocked
+                Block request immediately if spam score &gt;= this value
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="spam_score_flag">Flag Threshold</Label>
+              <Label htmlFor="spam_score_flag">Flag Threshold (points)</Label>
               <Input
                 id="spam_score_flag"
                 type="number"
@@ -142,20 +154,58 @@ export function Thresholds() {
                 }
               />
               <p className="text-xs text-muted-foreground">
-                Submissions with score &gt;= this value are flagged for review
+                Flag request for tracking if spam score &gt;= this value
               </p>
             </div>
           </CardContent>
         </Card>
 
+        {/* Cumulative Score-Based Blocking Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <TrendingUp className="h-5 w-5" />
+              Cumulative Score Blocking
+            </CardTitle>
+            <CardDescription>
+              Block IPs that accumulate high spam scores over time (24-hour window)
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="ip_spam_score_threshold">IP Spam Score Threshold (points)</Label>
+              <Input
+                id="ip_spam_score_threshold"
+                type="number"
+                value={values.ip_spam_score_threshold}
+                onChange={(e) =>
+                  setValues({ ...values, ip_spam_score_threshold: parseInt(e.target.value) || 0 })
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Block IP when total spam score over 24 hours exceeds this value.
+                Each flagged request adds its score to this total.
+              </p>
+            </div>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm text-amber-700">
+                <strong>Example:</strong> An IP sending 10 requests with score 60 each accumulates 600 points.
+                With threshold 500, the IP gets blocked on the 9th request even though individual requests
+                are under the 80-point block threshold.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Rate Limiting (Request Counts) Card */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
               <Clock className="h-5 w-5" />
-              Rate Limiting
+              Rate Limiting (Request Counts)
             </CardTitle>
             <CardDescription>
-              Configure IP-based rate limiting
+              Limit the NUMBER of requests per IP or fingerprint
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -163,7 +213,7 @@ export function Thresholds() {
               <div className="space-y-0.5">
                 <Label htmlFor="rate_limiting_enabled">Enable Rate Limiting</Label>
                 <p className="text-xs text-muted-foreground">
-                  Global on/off for rate limiting (can be overridden per endpoint)
+                  Global on/off (can be overridden per endpoint)
                 </p>
               </div>
               <Switch
@@ -175,7 +225,7 @@ export function Thresholds() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="ip_rate_limit">Requests per Minute</Label>
+              <Label htmlFor="ip_rate_limit">IP Rate Limit (requests/minute)</Label>
               <Input
                 id="ip_rate_limit"
                 type="number"
@@ -190,7 +240,7 @@ export function Thresholds() {
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="ip_daily_limit">Daily Limit</Label>
+              <Label htmlFor="ip_daily_limit">IP Daily Limit (requests/day)</Label>
               <Input
                 id="ip_daily_limit"
                 type="number"
@@ -204,22 +254,42 @@ export function Thresholds() {
                 Maximum form submissions per IP per day
               </p>
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="fingerprint_rate_limit" className="flex items-center gap-2">
+                <Fingerprint className="h-4 w-4" />
+                Fingerprint Rate Limit (requests/minute)
+              </Label>
+              <Input
+                id="fingerprint_rate_limit"
+                type="number"
+                value={values.fingerprint_rate_limit}
+                onChange={(e) =>
+                  setValues({ ...values, fingerprint_rate_limit: parseInt(e.target.value) || 0 })
+                }
+                disabled={!values.rate_limiting_enabled}
+              />
+              <p className="text-xs text-muted-foreground">
+                Maximum submissions per client fingerprint per minute.
+                Detects bot networks with same browser signature.
+              </p>
+            </div>
           </CardContent>
         </Card>
 
+        {/* Content Hash Detection Card */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
               <Hash className="h-5 w-5" />
-              Content Hash Thresholds
+              Content Flood Detection
             </CardTitle>
             <CardDescription>
-              Configure duplicate content detection
+              Detect and block duplicate/spam content submissions
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="hash_count_block">Hash Count Block</Label>
+              <Label htmlFor="hash_count_block">Hash Rate Threshold (per minute)</Label>
               <Input
                 id="hash_count_block"
                 type="number"
@@ -229,11 +299,11 @@ export function Thresholds() {
                 }
               />
               <p className="text-xs text-muted-foreground">
-                Block if same content hash seen this many times
+                Block if same content hash seen this many times per minute
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="hash_unique_ips_block">Unique IPs Block</Label>
+              <Label htmlFor="hash_unique_ips_block">Unique IPs Threshold</Label>
               <Input
                 id="hash_unique_ips_block"
                 type="number"
@@ -243,7 +313,7 @@ export function Thresholds() {
                 }
               />
               <p className="text-xs text-muted-foreground">
-                Block if same hash from fewer than this many unique IPs
+                Block hash if seen from fewer than this many unique IPs (indicates bot campaign)
               </p>
             </div>
           </CardContent>

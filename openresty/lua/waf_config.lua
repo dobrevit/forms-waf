@@ -18,13 +18,24 @@ end
 
 -- Default thresholds
 local DEFAULT_THRESHOLDS = {
+    -- Per-request spam score thresholds
     spam_score_block = 80,       -- Score at which to block immediately
     spam_score_flag = 50,        -- Score at which to flag for HAProxy
-    hash_count_block = 10,       -- Block if same hash seen this many times
+
+    -- Content hash flood detection
+    hash_count_block = 10,       -- Block if same hash seen this many times per minute
     hash_unique_ips_block = 5,   -- Block hash if seen from this many unique IPs
+
+    -- Rate limiting (request counts)
     ip_rate_limit = 30,          -- Max form submissions per minute per IP
     ip_daily_limit = 500,        -- Max form submissions per day per IP
+    fingerprint_rate_limit = 20, -- Max submissions per minute per fingerprint
     rate_limiting_enabled = true, -- Global rate limiting toggle
+
+    -- Score-based blocking (cumulative)
+    ip_spam_score_threshold = 500, -- Block IP when cumulative spam score over 24h exceeds this
+
+    -- Debug settings
     expose_waf_headers = false,  -- Expose WAF debug headers to clients (X-WAF-*, X-Spam-*)
 }
 

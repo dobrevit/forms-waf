@@ -1197,6 +1197,8 @@ local DEFAULT_THRESHOLDS = {
     hash_unique_ips_block = 5,
     ip_rate_limit = 30,
     ip_daily_limit = 500,
+    fingerprint_rate_limit = 20,     -- Max submissions per minute per fingerprint
+    ip_spam_score_threshold = 500,   -- Cumulative spam score limit per IP (24h)
     expose_waf_headers = false,
 }
 

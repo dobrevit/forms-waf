@@ -67,17 +67,11 @@ data:
         # In monitoring/passthrough mode, HAProxy should track but not block
         acl waf_should_block req.hdr(X-WAF-Mode) -m str blocking strict
 
-        # High spam score (blocked at HAProxy level)
-        acl spam_score_high req.hdr(X-Spam-Score) -m int ge 80
+        # Debug mode ACL - used to include headers in error responses
+        acl waf_debug_on req.hdr(X-WAF-Debug) -m str on
 
         # Already blocked by OpenResty
         acl blocked_by_openresty req.hdr(X-Blocked) -m str true
-
-        # Deny already blocked requests (only in blocking mode)
-        http-request deny deny_status 403 if blocked_by_openresty waf_should_block
-
-        # Deny high spam scores (only in blocking mode)
-        http-request deny deny_status 403 if spam_score_high waf_should_block
 
         #-----------------------------------------------------------------
         # Rate limiting ACL (must be defined before tracking)
@@ -88,6 +82,7 @@ data:
 
         #-----------------------------------------------------------------
         # Stick-table tracking (Stage 1: hash, IP rate, IP spam)
+        # MUST happen before blocking rules so counters are available for debug
         #-----------------------------------------------------------------
 
         # Track form hash submissions globally (always, for duplicate detection)
@@ -100,31 +95,72 @@ data:
         http-request track-sc2 req.hdr(X-Client-IP) table st_spam_scores if has_client_ip
 
         #-----------------------------------------------------------------
-        # Stick-table based blocking rules (Stage 1)
+        # Store debug values BEFORE blocking rules
+        # This ensures values are captured even for blocked requests
+        #-----------------------------------------------------------------
+        http-request set-var(txn.waf_debug) req.hdr(X-WAF-Debug)
+        http-request set-var(txn.hash_count) sc0_get_gpc0(st_form_hashes) if has_form_hash
+        http-request set-var(txn.ip_rate) sc1_http_req_rate(st_client_ips) if has_client_ip
+        http-request set-var(txn.ip_spam_total) sc2_get_gpc0(st_spam_scores) if has_client_ip
+        http-request set-var(txn.hash_unique_ips) sc0_get_gpc1(st_form_hashes) if has_form_hash
+        http-request set-var(txn.hash_rate) sc0_gpc0_rate(st_form_hashes) if has_form_hash
+        http-request set-var(txn.ip_conn_cnt) sc1_conn_cnt(st_client_ips) if has_client_ip
+
+        #-----------------------------------------------------------------
+        # Stick-table based blocking ACLs (Stage 1)
         #-----------------------------------------------------------------
 
         # Get rate limit value from header (default to 30 if not set)
         http-request set-var(txn.rate_limit) req.hdr(X-WAF-Rate-Limit-Value),regsub(^$,30)
 
-        # Block if form hash seen too many times (global duplicate detection)
-        # Only block in blocking/strict mode
-        acl hash_flood sc0_gpc0_rate(st_form_hashes) gt 10
+        # Dynamic thresholds from OpenResty (with defaults)
+        http-request set-var(txn.spam_threshold) req.hdr(X-WAF-Spam-Threshold),regsub(^$,80)
+        http-request set-var(txn.hash_rate_threshold) req.hdr(X-WAF-Hash-Rate-Threshold),regsub(^$,10)
+        http-request set-var(txn.ip_spam_threshold) req.hdr(X-WAF-IP-Spam-Threshold),regsub(^$,500)
+
+        # High spam score (blocked at HAProxy level) - uses dynamic threshold
+        acl spam_score_high req.hdr(X-Spam-Score),sub(txn.spam_threshold) ge 0
+
+        # Form hash seen too many times (global duplicate detection) - uses dynamic threshold
+        acl hash_flood sc0_gpc0_rate(st_form_hashes),sub(txn.hash_rate_threshold) ge 0
+
+        # Form hash has been manually flagged
+        acl hash_flagged sc0_get_gpc1(st_form_hashes) gt 0
+
+        # Client IP submission rate too high (respects per-request rate limit)
+        acl ip_rate_exceeded sc1_http_req_rate(st_client_ips),sub(txn.rate_limit) ge 0
+
+        # Client IP has accumulated too many spam submissions - uses dynamic threshold
+        acl ip_spam_score sc2_get_gpc0(st_spam_scores),sub(txn.ip_spam_threshold) ge 0
+
+        #-----------------------------------------------------------------
+        # Blocking rules with debug headers (http-request return)
+        # When debug is ON, use return to include headers in error response
+        # When debug is OFF, use deny for simpler response
+        #-----------------------------------------------------------------
+
+        # Blocked by OpenResty - with debug headers
+        http-request return status 403 content-type "text/plain" string "Blocked by WAF" hdr X-WAF-Block-Rule-Stage1 "blocked_by_openresty" if blocked_by_openresty waf_should_block waf_debug_on
+        http-request deny deny_status 403 if blocked_by_openresty waf_should_block
+
+        # High spam score - with debug headers
+        http-request return status 403 content-type "text/plain" string "Blocked by WAF" hdr X-WAF-Block-Rule-Stage1 "spam_score_high" hdr X-WAF-Spam-Score %[req.hdr(X-Spam-Score)] if spam_score_high waf_should_block waf_debug_on
+        http-request deny deny_status 403 if spam_score_high waf_should_block
+
+        # Hash flood - with debug headers
+        http-request return status 429 content-type "text/plain" string "Rate limited" hdr X-WAF-Block-Rule-Stage1 "hash_flood" hdr X-WAF-Hash-Rate %[var(txn.hash_rate)] hdr X-WAF-Hash-Count %[var(txn.hash_count)] if hash_flood rate_limit_enabled waf_should_block waf_debug_on
         http-request deny deny_status 429 if hash_flood rate_limit_enabled waf_should_block
 
-        # Block if form hash has been manually flagged
-        # Only block in blocking/strict mode
-        acl hash_flagged sc0_get_gpc1(st_form_hashes) gt 0
+        # Hash flagged - with debug headers
+        http-request return status 403 content-type "text/plain" string "Blocked by WAF" hdr X-WAF-Block-Rule-Stage1 "hash_flagged" hdr X-WAF-Hash-Count %[var(txn.hash_count)] if hash_flagged waf_should_block waf_debug_on
         http-request deny deny_status 403 if hash_flagged waf_should_block
 
-        # Block if client IP submission rate too high (respects per-request rate limit)
-        # Uses dynamic comparison with header value
-        # Only block in blocking/strict mode
-        acl ip_rate_exceeded sc1_http_req_rate(st_client_ips),sub(txn.rate_limit) gt 0
+        # IP rate exceeded - with debug headers
+        http-request return status 429 content-type "text/plain" string "Rate limited" hdr X-WAF-Block-Rule-Stage1 "ip_rate_exceeded" hdr X-WAF-IP-Rate %[var(txn.ip_rate)] hdr X-WAF-IP-Conn-Count %[var(txn.ip_conn_cnt)] if ip_rate_exceeded rate_limit_enabled waf_should_block waf_debug_on
         http-request deny deny_status 429 if ip_rate_exceeded rate_limit_enabled waf_should_block
 
-        # Block if client IP has accumulated too many spam submissions
-        # Only block in blocking/strict mode
-        acl ip_spam_score sc2_get_gpc0(st_spam_scores) gt 500
+        # IP spam score - with debug headers
+        http-request return status 403 content-type "text/plain" string "Blocked by WAF" hdr X-WAF-Block-Rule-Stage1 "ip_spam_score" hdr X-WAF-IP-Spam-Total %[var(txn.ip_spam_total)] if ip_spam_score rate_limit_enabled waf_should_block waf_debug_on
         http-request deny deny_status 403 if ip_spam_score rate_limit_enabled waf_should_block
 
         #-----------------------------------------------------------------
@@ -139,11 +175,32 @@ data:
         # Note: GPC increment is by 1, for weighted scoring we'd use a map
 
         #-----------------------------------------------------------------
-        # Store debug values from stage 1 for response headers
+        # Track blocking decision for stage 1 (for non-blocked requests)
         #-----------------------------------------------------------------
-        http-request set-var(txn.waf_debug) req.hdr(X-WAF-Debug)
-        http-request set-var(txn.hash_count) sc0_get_gpc0(st_form_hashes) if has_form_hash
-        http-request set-var(txn.ip_rate) sc1_http_req_rate(st_client_ips) if has_client_ip
+        http-request set-var(txn.block_rule) str(none)
+        http-request set-var(txn.block_rule) str(blocked_by_openresty) if blocked_by_openresty
+        http-request set-var(txn.block_rule) str(spam_score_high) if spam_score_high
+        http-request set-var(txn.block_rule) str(hash_flood) if hash_flood
+        http-request set-var(txn.block_rule) str(hash_flagged) if hash_flagged
+        http-request set-var(txn.block_rule) str(ip_rate_exceeded) if ip_rate_exceeded
+        http-request set-var(txn.block_rule) str(ip_spam_score) if ip_spam_score
+
+        #-----------------------------------------------------------------
+        # Add response headers for stage 1 debug (only when X-WAF-Debug: on)
+        # NOTE: These only apply for non-blocked requests (return handles blocked)
+        #-----------------------------------------------------------------
+        http-response set-header X-WAF-Hash-Count %[var(txn.hash_count)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-IP-Rate %[var(txn.ip_rate)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-IP-Spam-Total %[var(txn.ip_spam_total)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Hash-Rate %[var(txn.hash_rate)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Hash-Unique-IPs %[var(txn.hash_unique_ips)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-IP-Conn-Count %[var(txn.ip_conn_cnt)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Block-Rule-Stage1 %[var(txn.block_rule)] if { var(txn.waf_debug) -m str "on" }
+        # Dynamic threshold debug headers
+        http-response set-header X-WAF-Threshold-Spam %[var(txn.spam_threshold)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Threshold-Hash-Rate %[var(txn.hash_rate_threshold)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Threshold-IP-Spam %[var(txn.ip_spam_threshold)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Threshold-Rate-Limit %[var(txn.rate_limit)] if { var(txn.waf_debug) -m str "on" }
 
         # Forward to fingerprint check stage
         default_backend bk_fingerprint_check
@@ -165,6 +222,9 @@ data:
         acl has_fingerprint req.hdr(X-Submission-Fingerprint) -m found
         acl waf_should_block req.hdr(X-WAF-Mode) -m str blocking strict
 
+        # Debug mode ACL - used to include headers in error responses
+        acl waf_debug_on req.hdr(X-WAF-Debug) -m str on
+
         #-----------------------------------------------------------------
         # Stick-table tracking (Stage 2: fingerprint only)
         #-----------------------------------------------------------------
@@ -173,20 +233,47 @@ data:
         http-request track-sc0 req.hdr(X-Submission-Fingerprint) table st_fingerprints if has_fingerprint
 
         #-----------------------------------------------------------------
+        # Store debug values BEFORE blocking rules
+        # NOTE: Must re-read X-WAF-Debug header (new transaction scope)
+        #-----------------------------------------------------------------
+        http-request set-var(txn.waf_debug) req.hdr(X-WAF-Debug)
+        http-request set-var(txn.fingerprint_rate) sc0_http_req_rate(st_fingerprints) if has_fingerprint
+        http-request set-var(txn.fingerprint_cnt) sc0_http_req_cnt(st_fingerprints) if has_fingerprint
+
+        # Dynamic fingerprint threshold from OpenResty (with default)
+        http-request set-var(txn.fingerprint_threshold) req.hdr(X-WAF-Fingerprint-Threshold),regsub(^$,20)
+
+        #-----------------------------------------------------------------
         # Fingerprint-based blocking
         #-----------------------------------------------------------------
 
         # Block if submission fingerprint seen too many times (coordinated attack)
-        # High rate from same fingerprint = bot network or scripted attack
-        acl fingerprint_flood sc0_http_req_rate(st_fingerprints) gt 20
+        # High rate from same fingerprint = bot network or scripted attack - uses dynamic threshold
+        acl fingerprint_flood sc0_http_req_rate(st_fingerprints),sub(txn.fingerprint_threshold) ge 0
+
+        # Fingerprint flood - with debug headers
+        http-request return status 429 content-type "text/plain" string "Rate limited" hdr X-WAF-Block-Rule-Stage2 "fingerprint_flood" hdr X-WAF-Fingerprint-Rate %[var(txn.fingerprint_rate)] hdr X-WAF-Fingerprint-Count %[var(txn.fingerprint_cnt)] if fingerprint_flood has_fingerprint waf_should_block waf_debug_on
         http-request deny deny_status 429 if fingerprint_flood has_fingerprint waf_should_block
 
         #-----------------------------------------------------------------
-        # Add response headers for debugging (only when X-WAF-Debug: on)
+        # Track blocking decision for stage 2 (for non-blocked requests)
         #-----------------------------------------------------------------
-        http-response set-header X-WAF-Hash-Count %[var(txn.hash_count)] if { var(txn.waf_debug) -m str "on" }
-        http-response set-header X-WAF-IP-Rate %[var(txn.ip_rate)] if { var(txn.waf_debug) -m str "on" }
-        http-response set-header X-WAF-Fingerprint-Rate %[sc0_http_req_rate(st_fingerprints)] if { var(txn.waf_debug) -m str "on" }
+        http-request set-var(txn.block_rule) str(none)
+        http-request set-var(txn.block_rule) str(fingerprint_flood) if fingerprint_flood
+
+        #-----------------------------------------------------------------
+        # Add response headers for stage 2 debug (only when X-WAF-Debug: on)
+        # NOTE: These only apply for non-blocked requests (return handles blocked)
+        #-----------------------------------------------------------------
+        http-response set-header X-WAF-Fingerprint-Rate %[var(txn.fingerprint_rate)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Fingerprint-Count %[var(txn.fingerprint_cnt)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Block-Rule-Stage2 %[var(txn.block_rule)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Threshold-Fingerprint %[var(txn.fingerprint_threshold)] if { var(txn.waf_debug) -m str "on" }
+
+        # Timing info from backend
+        http-response set-header X-WAF-Queue-Time %Tw if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Backend-Time %Tr if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Total-Time %Ta if { var(txn.waf_debug) -m str "on" }
 
         default_backend bk_application
 

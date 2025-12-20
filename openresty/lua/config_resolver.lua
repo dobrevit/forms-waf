@@ -311,7 +311,9 @@ local function apply_mode_adjustments(thresholds, mode)
             spam_score_block = math.floor((thresholds.spam_score_block or 80) * 0.75),
             spam_score_flag = math.floor((thresholds.spam_score_flag or 50) * 0.75),
             hash_count_block = math.floor((thresholds.hash_count_block or 10) * 0.75),
-            ip_rate_limit = math.floor((thresholds.ip_rate_limit or 30) * 0.75)
+            ip_rate_limit = math.floor((thresholds.ip_rate_limit or 30) * 0.75),
+            ip_spam_score_threshold = math.floor((thresholds.ip_spam_score_threshold or 500) * 0.75),
+            fingerprint_rate_limit = math.floor((thresholds.fingerprint_rate_limit or 20) * 0.75)
         }
     elseif mode == "monitoring" then
         -- Monitoring mode: keep thresholds but they won't block
