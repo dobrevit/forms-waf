@@ -21,6 +21,7 @@ local geoip = require "geoip"
 local ip_reputation = require "ip_reputation"
 local ip_utils = require "ip_utils"
 local behavioral_tracker = require "behavioral_tracker"
+local fingerprint_profiles = require "fingerprint_profiles"
 local cjson = require "cjson.safe"
 
 -- Structured audit logging for security events
@@ -966,9 +967,32 @@ function _M.process_request()
         end
     end
 
-    -- Step 3d: Generate submission fingerprint
-    -- Fingerprint is based on form structure (not content) for detecting coordinated campaigns
-    local submission_fingerprint = generate_submission_fingerprint(form_data, ngx.var)
+    -- Step 3d: Generate submission fingerprint using profile matching
+    -- Fingerprint profiles detect client types (browser, bot, script) and select headers for fingerprinting
+    -- The profile-based approach allows matching on header presence/absence patterns
+    local fp_config = vhost_resolver.get_fingerprint_profiles(context)
+    local fp_result = fingerprint_profiles.process_request(form_data, ngx.var, fp_config)
+
+    -- Add fingerprint profile score to spam score
+    if fp_result.score and fp_result.score > 0 then
+        spam_score = spam_score + fp_result.score
+    end
+
+    -- Add fingerprint profile flags
+    if fp_result.flags then
+        for _, flag in ipairs(fp_result.flags) do
+            table.insert(spam_flags, flag)
+        end
+    end
+
+    -- Handle profile-based blocking
+    if fp_result.blocked then
+        blocked = true
+        block_reason = "fingerprint_profile_block"
+    end
+
+    local submission_fingerprint = fp_result.fingerprint
+    local fingerprint_profile_id = fp_result.profile_id
 
     -- Step 4: Check spam score threshold
     local block_threshold = vhost_resolver.get_block_threshold(context)
@@ -988,6 +1012,13 @@ function _M.process_request()
     if submission_fingerprint then
         ngx.req.set_header("X-Submission-Fingerprint", submission_fingerprint)
     end
+    if fingerprint_profile_id then
+        ngx.req.set_header("X-Fingerprint-Profile", fingerprint_profile_id)
+    end
+    -- Override fingerprint rate limit if profile specifies one
+    if fp_result.fingerprint_rate_limit then
+        ngx.req.set_header("X-WAF-Fingerprint-Threshold", tostring(fp_result.fingerprint_rate_limit))
+    end
 
     -- Determine if we should actually block
     local should_block = blocked and vhost_resolver.should_block(context)
@@ -1003,6 +1034,9 @@ function _M.process_request()
         if submission_fingerprint then
             ngx.header["X-Submission-Fingerprint"] = submission_fingerprint
         end
+        if fingerprint_profile_id then
+            ngx.header["X-Fingerprint-Profile"] = fingerprint_profile_id
+        end
 
         -- Always show blocked state and reason when debug headers enabled
         if blocked then
@@ -1015,9 +1049,10 @@ function _M.process_request()
     -- In monitoring mode, log but don't block
     if blocked and not should_block then
         ngx.log(ngx.WARN, string.format(
-            "MONITORING (would block): ip=%s host=%s path=%s vhost=%s endpoint=%s reason=%s score=%d hash=%s flags=%s",
+            "MONITORING (would block): ip=%s host=%s path=%s vhost=%s endpoint=%s reason=%s score=%d hash=%s fp=%s fp_profile=%s flags=%s",
             client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
-            block_reason, spam_score, form_hash, table.concat(spam_flags, ",")
+            block_reason, spam_score, form_hash or "none", submission_fingerprint or "none",
+            fingerprint_profile_id or "default", table.concat(spam_flags, ",")
         ))
         metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", spam_score)
 
@@ -1074,9 +1109,10 @@ function _M.process_request()
 
             -- Log the block
             ngx.log(ngx.WARN, string.format(
-                "BLOCKED: ip=%s host=%s path=%s vhost=%s endpoint=%s reason=%s score=%d hash=%s flags=%s",
+                "BLOCKED: ip=%s host=%s path=%s vhost=%s endpoint=%s reason=%s score=%d hash=%s fp=%s fp_profile=%s flags=%s",
                 client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
-                block_reason, spam_score, form_hash, table.concat(spam_flags, ",")
+                block_reason, spam_score, form_hash or "none", submission_fingerprint or "none",
+                fingerprint_profile_id or "default", table.concat(spam_flags, ",")
             ))
 
             -- Structured audit log
@@ -1088,6 +1124,7 @@ function _M.process_request()
                 form_hash = form_hash,
                 spam_flags = spam_flags,
                 fingerprint = submission_fingerprint,
+                fingerprint_profile = fingerprint_profile_id,
             })
 
             -- Record blocked request in metrics
@@ -1125,9 +1162,10 @@ function _M.process_request()
 
     -- Log processing info
     ngx.log(ngx.INFO, string.format(
-        "PROCESSED: ip=%s host=%s path=%s vhost=%s endpoint=%s mode=%s score=%d hash=%s flags=%s",
+        "PROCESSED: ip=%s host=%s path=%s vhost=%s endpoint=%s mode=%s score=%d hash=%s fp=%s fp_profile=%s flags=%s",
         client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
-        summary.mode, spam_score, form_hash, table.concat(spam_flags, ",")
+        summary.mode, spam_score, form_hash or "none", submission_fingerprint or "none",
+        fingerprint_profile_id or "default", table.concat(spam_flags, ",")
     ))
 
     -- Record allowed request in metrics

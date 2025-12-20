@@ -22,6 +22,7 @@ import {
   KeyRound,
   Activity,
   Server,
+  Fingerprint,
 } from 'lucide-react'
 
 const navigation = [
@@ -46,6 +47,7 @@ const navigation = [
     name: 'Security',
     children: [
       { name: 'Form Timing', href: '/security/timing', icon: Clock },
+      { name: 'Fingerprint Profiles', href: '/security/fingerprint-profiles', icon: Fingerprint },
       { name: 'GeoIP', href: '/security/geoip', icon: MapPin },
       { name: 'IP Reputation', href: '/security/reputation', icon: ShieldAlert },
     ],

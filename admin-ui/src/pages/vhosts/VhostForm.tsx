@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { vhostsApi, configApi, learningApi, timingApi, LearnedField, VhostTimingConfig } from '@/api/client'
+import { vhostsApi, configApi, learningApi, timingApi, fingerprintProfilesApi, LearnedField } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,8 +16,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info, Check, Timer, Activity } from 'lucide-react'
-import type { Vhost, BehavioralFlow } from '@/api/types'
+import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info, Check, Timer, Activity, Fingerprint } from 'lucide-react'
+import type { Vhost, BehavioralFlow, FingerprintProfile, FingerprintProfileAttachment } from '@/api/types'
+import { Badge } from '@/components/ui/badge'
 
 const defaultVhost: Partial<Vhost> = {
   enabled: true,
@@ -76,6 +77,12 @@ const defaultVhost: Partial<Vhost> = {
       score_addition: 15,
     },
   },
+  fingerprint_profiles: {
+    enabled: true,
+    profiles: undefined,
+    no_match_action: 'use_default',
+    no_match_score: 15,
+  },
 }
 
 export function VhostForm() {
@@ -126,6 +133,13 @@ export function VhostForm() {
     queryFn: () => learningApi.getVhostFields(id!),
     enabled: !!id,
   })
+
+  // Fetch fingerprint profiles
+  const { data: fingerprintProfilesData } = useQuery({
+    queryKey: ['fingerprint-profiles'],
+    queryFn: fingerprintProfilesApi.list,
+  })
+  const availableProfiles = fingerprintProfilesData?.profiles || []
 
   // Extract learned fields from response (ensure array - Lua cjson may encode empty arrays as objects)
   const learnedFields: LearnedField[] = Array.isArray(learnedFieldsData?.fields) ? learnedFieldsData.fields : []
@@ -386,6 +400,10 @@ export function VhostForm() {
             <TabsTrigger value="behavioral" className="flex items-center gap-1">
               <Activity className="h-3 w-3" />
               Behavioral
+            </TabsTrigger>
+            <TabsTrigger value="fingerprinting" className="flex items-center gap-1">
+              <Fingerprint className="h-3 w-3" />
+              Fingerprinting
             </TabsTrigger>
             {!isNew && (
               <TabsTrigger value="learned-fields" className="flex items-center gap-1">
@@ -1595,6 +1613,234 @@ export function VhostForm() {
                               dashboard.
                             </p>
                           )}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="fingerprinting">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Fingerprint className="h-5 w-5" />
+                  Fingerprint Profiles
+                </CardTitle>
+                <CardDescription>
+                  Configure which fingerprint profiles to use for client detection and fingerprint generation.
+                  Profiles are matched in priority order, and the first match determines the fingerprint headers.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="fp_enabled"
+                    checked={formData.fingerprint_profiles?.enabled !== false}
+                    onCheckedChange={(checked) =>
+                      setFormData({
+                        ...formData,
+                        fingerprint_profiles: { ...formData.fingerprint_profiles, enabled: checked },
+                      })
+                    }
+                  />
+                  <Label htmlFor="fp_enabled">Enable Fingerprint Profiles</Label>
+                </div>
+
+                {formData.fingerprint_profiles?.enabled !== false && (
+                  <>
+                    {/* Profile Selection */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-medium text-sm">Profile Selection</h4>
+                        <div className="text-sm text-muted-foreground">
+                          {formData.fingerprint_profiles?.profiles?.length || 0} selected
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center space-x-2 mb-4">
+                          <Switch
+                            id="fp_use_all"
+                            checked={!formData.fingerprint_profiles?.profiles || formData.fingerprint_profiles.profiles.length === 0}
+                            onCheckedChange={(checked) =>
+                              setFormData({
+                                ...formData,
+                                fingerprint_profiles: {
+                                  ...formData.fingerprint_profiles,
+                                  enabled: true,
+                                  profiles: checked ? undefined : [],
+                                },
+                              })
+                            }
+                          />
+                          <Label htmlFor="fp_use_all">Use all global profiles</Label>
+                        </div>
+
+                        {formData.fingerprint_profiles?.profiles && formData.fingerprint_profiles.profiles.length >= 0 && (
+                          <div className="space-y-2">
+                            <Label>Selected Profiles (in priority order)</Label>
+                            <div className="flex flex-wrap gap-2 min-h-[40px] p-2 border rounded-md bg-muted/30">
+                              {(formData.fingerprint_profiles?.profiles || []).map((profileId) => {
+                                const profile = availableProfiles.find((p) => p.id === profileId)
+                                return (
+                                  <Badge
+                                    key={profileId}
+                                    variant="secondary"
+                                    className="flex items-center gap-1 cursor-pointer hover:bg-secondary/80"
+                                  >
+                                    {profile?.name || profileId}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setFormData({
+                                          ...formData,
+                                          fingerprint_profiles: {
+                                            ...formData.fingerprint_profiles,
+                                            enabled: true,
+                                            profiles: (formData.fingerprint_profiles?.profiles || []).filter(
+                                              (id) => id !== profileId
+                                            ),
+                                          },
+                                        })
+                                      }}
+                                      className="ml-1 hover:text-destructive"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </Badge>
+                                )
+                              })}
+                              {(formData.fingerprint_profiles?.profiles || []).length === 0 && (
+                                <span className="text-sm text-muted-foreground">
+                                  No profiles selected - click profiles below to add
+                                </span>
+                              )}
+                            </div>
+
+                            <Label className="mt-4">Available Profiles</Label>
+                            <div className="grid gap-2 md:grid-cols-2">
+                              {availableProfiles
+                                .filter((p) => !(formData.fingerprint_profiles?.profiles || []).includes(p.id))
+                                .map((profile) => (
+                                  <div
+                                    key={profile.id}
+                                    className="flex items-center justify-between p-3 border rounded-lg cursor-pointer hover:bg-muted/50"
+                                    onClick={() => {
+                                      setFormData({
+                                        ...formData,
+                                        fingerprint_profiles: {
+                                          ...formData.fingerprint_profiles,
+                                          enabled: true,
+                                          profiles: [
+                                            ...(formData.fingerprint_profiles?.profiles || []),
+                                            profile.id,
+                                          ],
+                                        },
+                                      })
+                                    }}
+                                  >
+                                    <div>
+                                      <div className="font-medium text-sm">
+                                        {profile.name}
+                                        {profile.builtin && (
+                                          <Badge variant="outline" className="ml-2 text-xs">
+                                            Built-in
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      <div className="text-xs text-muted-foreground">
+                                        Priority: {profile.priority} | Action: {profile.action}
+                                        {profile.action === 'flag' && profile.score ? ` (+${profile.score})` : ''}
+                                      </div>
+                                    </div>
+                                    <Plus className="h-4 w-4 text-muted-foreground" />
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* No Match Behavior */}
+                    <div className="space-y-4">
+                      <h4 className="font-medium text-sm">No Match Behavior</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Configure what happens when no profile matches the request
+                      </p>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor="no_match_action">Action</Label>
+                          <Select
+                            value={formData.fingerprint_profiles?.no_match_action || 'use_default'}
+                            onValueChange={(value) =>
+                              setFormData({
+                                ...formData,
+                                fingerprint_profiles: {
+                                  ...formData.fingerprint_profiles,
+                                  enabled: true,
+                                  no_match_action: value as 'use_default' | 'flag' | 'allow',
+                                },
+                              })
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="use_default">Use Default (legacy fingerprint)</SelectItem>
+                              <SelectItem value="flag">Flag as Suspicious</SelectItem>
+                              <SelectItem value="allow">Allow (no action)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {formData.fingerprint_profiles?.no_match_action === 'flag' && (
+                          <div className="space-y-2">
+                            <Label htmlFor="no_match_score">Score to Add</Label>
+                            <Input
+                              id="no_match_score"
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={formData.fingerprint_profiles?.no_match_score ?? 15}
+                              onChange={(e) =>
+                                setFormData({
+                                  ...formData,
+                                  fingerprint_profiles: {
+                                    ...formData.fingerprint_profiles,
+                                    enabled: true,
+                                    no_match_score: parseInt(e.target.value) || 15,
+                                  },
+                                })
+                              }
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Info note */}
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                      <div className="flex items-start gap-3">
+                        <Info className="h-5 w-5 text-blue-600 mt-0.5" />
+                        <div>
+                          <p className="font-medium text-blue-800">How Fingerprint Profiles Work</p>
+                          <p className="text-sm text-blue-700 mt-1">
+                            Fingerprint profiles detect client types (browsers, bots, scripts) based on HTTP headers.
+                            The first matching profile determines which headers are used for fingerprint generation.
+                            Actions from all matching profiles are aggregated (scores add up).
+                          </p>
+                          <p className="text-sm text-blue-700 mt-2">
+                            Manage profiles in{' '}
+                            <a href="/security/fingerprint-profiles" className="underline font-medium">
+                              Security &gt; Fingerprint Profiles
+                            </a>
+                          </p>
                         </div>
                       </div>
                     </div>

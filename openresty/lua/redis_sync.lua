@@ -29,6 +29,15 @@ local function get_captcha_handler()
     return captcha_handler
 end
 
+-- Lazy load fingerprint_profiles to avoid circular dependency
+local fingerprint_profiles = nil
+local function get_fingerprint_profiles()
+    if not fingerprint_profiles then
+        fingerprint_profiles = require "fingerprint_profiles"
+    end
+    return fingerprint_profiles
+end
+
 -- Configuration
 local REDIS_HOST = os.getenv("REDIS_HOST") or "redis"
 local REDIS_PORT = tonumber(os.getenv("REDIS_PORT")) or 6379
@@ -67,6 +76,10 @@ local KEYS = {
     captcha_providers_index = "waf:captcha:providers:index",
     captcha_providers_config_prefix = "waf:captcha:providers:config:",
     captcha_config = "waf:captcha:config",
+    -- Fingerprint profile keys
+    fingerprint_profiles_index = "waf:fingerprint:profiles:index",
+    fingerprint_profiles_config_prefix = "waf:fingerprint:profiles:config:",
+    fingerprint_profiles_builtin = "waf:fingerprint:profiles:builtin",
 }
 
 -- Shared dictionaries
@@ -859,6 +872,43 @@ local function sync_captcha(red)
     sync_captcha_providers(red)
 end
 
+-- ============================================================================
+-- Fingerprint Profile Sync Functions
+-- ============================================================================
+
+-- Sync all fingerprint profiles from Redis
+local function sync_fingerprint_profiles(red)
+    -- Get all profile IDs from sorted set (ordered by priority)
+    local profile_ids, err = red:zrange(KEYS.fingerprint_profiles_index, 0, -1)
+    if not profile_ids then
+        ngx.log(ngx.DEBUG, "Failed to get fingerprint profiles index: ", err)
+        return
+    end
+
+    local profiles = {}
+    local synced_count = 0
+
+    if type(profile_ids) == "table" then
+        for _, profile_id in ipairs(profile_ids) do
+            local config_key = KEYS.fingerprint_profiles_config_prefix .. profile_id
+            local config_json, get_err = red:get(config_key)
+
+            if config_json and config_json ~= ngx.null then
+                local config = cjson.decode(config_json)
+                if config then
+                    table.insert(profiles, config)
+                    synced_count = synced_count + 1
+                end
+            end
+        end
+    end
+
+    -- Cache all profiles via fingerprint_profiles module
+    get_fingerprint_profiles().cache_all_profiles(profiles, 120)
+
+    ngx.log(ngx.DEBUG, "Synced ", synced_count, " fingerprint profiles")
+end
+
 -- Sync webhook configuration
 local function sync_webhooks(red)
     local config_str = red:get("waf:webhooks:config")
@@ -899,6 +949,9 @@ local function do_sync()
 
     -- Sync CAPTCHA configuration
     sync_captcha(red)
+
+    -- Sync fingerprint profiles
+    sync_fingerprint_profiles(red)
 
     -- Sync webhook configuration
     sync_webhooks(red)
@@ -1267,6 +1320,20 @@ function _M.initialize_defaults()
             red:hset(KEYS.vhost_hosts_exact, hostname, DEFAULT_VHOST.id)
         end
         table.insert(initialized, "default_vhost")
+    end
+
+    -- Initialize built-in fingerprint profiles if none exist
+    local profile_count = red:zcard(KEYS.fingerprint_profiles_index)
+    if not profile_count or profile_count == 0 then
+        ngx.log(ngx.INFO, "Initializing built-in fingerprint profiles in Redis")
+        local fp_module = get_fingerprint_profiles()
+        for _, profile in ipairs(fp_module.BUILTIN_PROFILES) do
+            local profile_json = cjson.encode(profile)
+            red:set(KEYS.fingerprint_profiles_config_prefix .. profile.id, profile_json)
+            red:zadd(KEYS.fingerprint_profiles_index, profile.priority, profile.id)
+            red:sadd(KEYS.fingerprint_profiles_builtin, profile.id)
+        end
+        table.insert(initialized, "fingerprint_profiles")
     end
 
     close_redis(red)

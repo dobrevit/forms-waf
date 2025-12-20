@@ -242,6 +242,8 @@ data:
 
         # Dynamic fingerprint threshold from OpenResty (with default)
         http-request set-var(txn.fingerprint_threshold) req.hdr(X-WAF-Fingerprint-Threshold),regsub(^$,20)
+        # Store fingerprint profile for debug response headers
+        http-request set-var(txn.fingerprint_profile) req.hdr(X-Fingerprint-Profile)
 
         #-----------------------------------------------------------------
         # Fingerprint-based blocking
@@ -269,6 +271,7 @@ data:
         http-response set-header X-WAF-Fingerprint-Count %[var(txn.fingerprint_cnt)] if { var(txn.waf_debug) -m str "on" }
         http-response set-header X-WAF-Block-Rule-Stage2 %[var(txn.block_rule)] if { var(txn.waf_debug) -m str "on" }
         http-response set-header X-WAF-Threshold-Fingerprint %[var(txn.fingerprint_threshold)] if { var(txn.waf_debug) -m str "on" }
+        http-response set-header X-WAF-Fingerprint-Profile %[var(txn.fingerprint_profile)] if { var(txn.waf_debug) -m str "on" }
 
         # Timing info from backend
         http-response set-header X-WAF-Queue-Time %Tw if { var(txn.waf_debug) -m str "on" }

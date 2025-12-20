@@ -135,6 +135,7 @@ export interface Vhost {
   endpoints?: VhostEndpoints
   timing?: VhostTimingConfig  // Per-vhost timing validation configuration
   behavioral?: VhostBehavioralConfig  // Per-vhost behavioral tracking configuration
+  fingerprint_profiles?: FingerprintProfileAttachment  // Fingerprint profile configuration
   endpoint_count?: number  // Number of vhost-specific endpoints
 }
 
@@ -227,6 +228,7 @@ export interface Endpoint {
   rate_limiting?: EndpointRateLimiting
   patterns?: EndpointPatterns
   actions?: EndpointActions
+  fingerprint_profiles?: FingerprintProfileAttachment  // Fingerprint profile configuration
 }
 
 // Config types
@@ -417,3 +419,87 @@ export interface BehavioralVhostItem {
   flows_count: number
   last_activity?: string
 }
+
+// Fingerprint Profile types
+export type FingerprintProfileAction = 'allow' | 'block' | 'flag' | 'ignore'
+export type FingerprintConditionType = 'present' | 'absent' | 'matches' | 'not_matches'
+export type FingerprintMatchMode = 'all' | 'any'
+export type FingerprintNoMatchAction = 'use_default' | 'flag' | 'allow'
+
+export interface FingerprintHeaderCondition {
+  header: string
+  condition: FingerprintConditionType
+  pattern?: string  // Required for 'matches' and 'not_matches'
+}
+
+export interface FingerprintMatching {
+  conditions: FingerprintHeaderCondition[]
+  match_mode: FingerprintMatchMode
+}
+
+export interface FingerprintHeaders {
+  headers: string[]
+  normalize?: boolean
+  max_length?: number
+  include_field_names?: boolean
+}
+
+export interface FingerprintRateLimiting {
+  enabled?: boolean
+  fingerprint_rate_limit?: number
+}
+
+export interface FingerprintProfile {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  builtin: boolean
+  priority: number
+  matching: FingerprintMatching
+  fingerprint_headers: FingerprintHeaders
+  action: FingerprintProfileAction
+  score?: number
+  rate_limiting?: FingerprintRateLimiting
+}
+
+export interface FingerprintProfileAttachment {
+  enabled: boolean
+  profiles?: string[]  // Profile IDs, null = use all global profiles
+  no_match_action?: FingerprintNoMatchAction
+  no_match_score?: number
+}
+
+export interface FingerprintProfileTestRequest {
+  headers: Record<string, string>
+  profiles?: string[]  // Profile IDs to test against, null = all
+  form_fields?: Record<string, string>
+  no_match_config?: {
+    no_match_action?: FingerprintNoMatchAction
+    no_match_score?: number
+  }
+}
+
+export interface FingerprintProfileTestResult {
+  matched_profiles: {
+    id: string
+    name: string
+    priority: number
+    action: FingerprintProfileAction
+    score?: number
+  }[]
+  result: {
+    blocked: boolean
+    ignored: boolean
+    total_score: number
+    flags: string[]
+    fingerprint_profile_id?: string
+    fingerprint_rate_limit?: number
+    fingerprint?: string
+  }
+}
+
+// Extend Vhost and Endpoint to include fingerprint profile attachment
+export interface VhostFingerprintConfig extends FingerprintProfileAttachment {}
+
+export interface EndpointFingerprintConfig extends FingerprintProfileAttachment {}
