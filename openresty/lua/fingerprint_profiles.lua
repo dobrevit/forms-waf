@@ -26,6 +26,31 @@ local CACHE_KEY_PROFILE_PREFIX = "fingerprint_profiles:config:"
 -- These are initialized in Redis if no profiles exist
 -- Priority: lower number = higher priority (evaluated first)
 local BUILTIN_PROFILES = {
+    -- Priority 45: Monitoring and uptime bots - ignore WAF checks
+    {
+        id = "monitoring-bot",
+        name = "Monitoring Bot",
+        description = "Uptime monitoring services (Pingdom, UptimeRobot, etc.)",
+        enabled = true,
+        builtin = true,
+        priority = 45,
+        matching = {
+            conditions = {
+                { header = "User-Agent", condition = "matches", pattern = "(?i)(pingdom|uptimerobot|statuscake|newrelic|datadog|site24x7|freshping|nodeping|statuspage|pagerduty|opsgenie|deadmanssnitch|healthchecks\\.io|better.uptime|checkly)" },
+            },
+            match_mode = "any"
+        },
+        fingerprint_headers = {
+            headers = {"User-Agent"},
+            normalize = true,
+            max_length = 100
+        },
+        action = "ignore",
+        score = 0,
+        rate_limiting = {
+            enabled = false
+        }
+    },
     -- Priority 50: Known good bots (search engines) - ignore WAF checks
     {
         id = "known-bot",
@@ -43,13 +68,123 @@ local BUILTIN_PROFILES = {
         fingerprint_headers = {
             headers = {"User-Agent"},
             normalize = true,
-            max_length = 100,
-            include_field_names = true
+            max_length = 100
         },
         action = "ignore",
         score = 0,
         rate_limiting = {
             enabled = false
+        }
+    },
+    -- Priority 80: Modern browser navigation (Sec-Fetch headers present)
+    {
+        id = "browser-navigation",
+        name = "Browser Navigation",
+        description = "User-initiated browser navigation with Sec-Fetch-* headers",
+        enabled = true,
+        builtin = true,
+        priority = 80,
+        matching = {
+            conditions = {
+                { header = "Sec-Fetch-Mode", condition = "matches", pattern = "^navigate$" },
+                { header = "Sec-Fetch-Dest", condition = "matches", pattern = "^(document|iframe)$" },
+                { header = "Sec-Fetch-User", condition = "present" },
+            },
+            match_mode = "all"
+        },
+        fingerprint_headers = {
+            headers = {"User-Agent", "Accept-Language", "Accept-Encoding", "Sec-Fetch-Site"},
+            normalize = true,
+            max_length = 100
+        },
+        action = "allow",
+        score = 0,
+        rate_limiting = {
+            enabled = true
+        }
+    },
+    -- Priority 85: Browser API/XHR fetch (Sec-Fetch with cors/no-cors)
+    {
+        id = "api-fetch",
+        name = "API Fetch",
+        description = "JavaScript fetch/XHR requests from browsers",
+        enabled = true,
+        builtin = true,
+        priority = 85,
+        matching = {
+            conditions = {
+                { header = "Sec-Fetch-Mode", condition = "matches", pattern = "^(cors|no-cors)$" },
+                { header = "Sec-Fetch-Dest", condition = "matches", pattern = "^empty$" },
+            },
+            match_mode = "all"
+        },
+        fingerprint_headers = {
+            headers = {"User-Agent", "Accept-Language", "Sec-Fetch-Site", "Origin"},
+            normalize = true,
+            max_length = 100
+        },
+        action = "allow",
+        score = 0,
+        rate_limiting = {
+            enabled = true
+        }
+    },
+    -- Priority 90: Mobile app native clients
+    {
+        id = "mobile-app",
+        name = "Mobile App",
+        description = "Native iOS/Android mobile application clients",
+        enabled = true,
+        builtin = true,
+        priority = 90,
+        matching = {
+            conditions = {
+                { header = "User-Agent", condition = "matches", pattern = "(?i)(alamofire|cfnetwork|darwin|okhttp|retrofit|dalvik|android|" ..
+                    -- iOS patterns
+                    "ios|iphone|ipad|watchos|tvos|" ..
+                    -- Mobile SDKs
+                    "react.native|flutter|expo|cordova|ionic|capacitor|" ..
+                    -- Native app patterns (app name followed by version)
+                    "[a-z]+app\\/[0-9])" },
+            },
+            match_mode = "any"
+        },
+        fingerprint_headers = {
+            headers = {"User-Agent", "Accept-Language"},
+            normalize = true,
+            max_length = 100
+        },
+        action = "allow",
+        score = 0,
+        rate_limiting = {
+            enabled = true
+        }
+    },
+    -- Priority 95: Cross-site form submission (suspicious)
+    {
+        id = "cross-site-form",
+        name = "Cross-Site Form",
+        description = "Form submission originating from a different site (potential CSRF)",
+        enabled = true,
+        builtin = true,
+        priority = 95,
+        matching = {
+            conditions = {
+                { header = "Sec-Fetch-Site", condition = "matches", pattern = "^cross-site$" },
+                { header = "Sec-Fetch-Mode", condition = "matches", pattern = "^navigate$" },
+            },
+            match_mode = "all"
+        },
+        fingerprint_headers = {
+            headers = {"User-Agent", "Origin", "Referer", "Sec-Fetch-Site"},
+            normalize = true,
+            max_length = 100
+        },
+        action = "flag",
+        score = 20,
+        rate_limiting = {
+            enabled = true,
+            fingerprint_rate_limit = 10
         }
     },
     -- Priority 100: Modern browsers with full headers
@@ -71,13 +206,40 @@ local BUILTIN_PROFILES = {
         fingerprint_headers = {
             headers = {"User-Agent", "Accept-Language", "Accept-Encoding"},
             normalize = true,
-            max_length = 100,
-            include_field_names = true
+            max_length = 100
         },
         action = "allow",
         score = 0,
         rate_limiting = {
             enabled = true
+        }
+    },
+    -- Priority 105: Fake modern browser (claims Chrome 80+ but no Sec-Fetch headers)
+    {
+        id = "fake-modern-browser",
+        name = "Fake Modern Browser",
+        description = "Claims to be Chrome 80+ but missing Sec-Fetch headers (bot spoofing)",
+        enabled = true,
+        builtin = true,
+        priority = 105,
+        matching = {
+            conditions = {
+                -- Chrome 80+ should have Sec-Fetch headers (introduced in Chrome 76)
+                { header = "User-Agent", condition = "matches", pattern = "Chrome/([89][0-9]|1[0-2][0-9])" },
+                { header = "Sec-Fetch-Mode", condition = "absent" },
+            },
+            match_mode = "all"
+        },
+        fingerprint_headers = {
+            headers = {"User-Agent"},
+            normalize = true,
+            max_length = 100
+        },
+        action = "flag",
+        score = 35,
+        rate_limiting = {
+            enabled = true,
+            fingerprint_rate_limit = 8
         }
     },
     -- Priority 120: Headless browsers / automation tools
@@ -97,8 +259,7 @@ local BUILTIN_PROFILES = {
         fingerprint_headers = {
             headers = {"User-Agent", "Accept-Language"},
             normalize = true,
-            max_length = 100,
-            include_field_names = true
+            max_length = 100
         },
         action = "flag",
         score = 25,
@@ -107,31 +268,77 @@ local BUILTIN_PROFILES = {
             fingerprint_rate_limit = 10
         }
     },
-    -- Priority 150: Suspicious bots (curl, wget, scripts)
+    -- Priority 150: Suspicious bots (curl, wget, scripts, libraries)
     {
         id = "suspicious-bot",
         name = "Suspicious Bot",
-        description = "Command-line tools and scripting libraries (curl, wget, python-requests, etc.)",
+        description = "Command-line tools, scripting libraries, and automated clients",
         enabled = true,
         builtin = true,
         priority = 150,
         matching = {
             conditions = {
-                { header = "User-Agent", condition = "matches", pattern = "(?i)(curl|wget|python-requests|python-urllib|java|httpclient|okhttp|axios|node-fetch|go-http-client|ruby|perl|libwww)" },
+                { header = "User-Agent", condition = "matches", pattern = "(?i)(curl|wget|" ..
+                    -- Python libraries
+                    "python-requests|python-urllib|aiohttp|httpx|urllib3|requests-html|scrapy|beautifulsoup|" ..
+                    -- JavaScript/Node libraries
+                    "axios|node-fetch|superagent|got|undici|cheerio|" ..
+                    -- Java libraries
+                    "java|httpclient|okhttp|apache-httpclient|spring-resttemplate|restassured|" ..
+                    -- PHP libraries
+                    "guzzle|guzzlehttp|symfony.*http|" ..
+                    -- Go libraries
+                    "go-http-client|fasthttp|go-resty|" ..
+                    -- Rust libraries
+                    "reqwest|hyper-client|" ..
+                    -- Ruby/Perl
+                    "ruby|perl|libwww|mechanize|httparty|" ..
+                    -- Load testing tools
+                    "jmeter|apache-jmeter|wrk|ab\\/|apachebench|bombardier|k6|locust|artillery|vegeta|" ..
+                    -- API testing tools
+                    "postman|insomnia|httpie|paw\\/|" ..
+                    -- Generic patterns
+                    "http-client|httpclient)" },
             },
             match_mode = "any"
         },
         fingerprint_headers = {
             headers = {"User-Agent"},
             normalize = true,
-            max_length = 100,
-            include_field_names = true
+            max_length = 100
         },
         action = "flag",
         score = 30,
         rate_limiting = {
             enabled = true,
             fingerprint_rate_limit = 5
+        }
+    },
+    -- Priority 160: Generic API clients (no browser headers)
+    {
+        id = "api-client",
+        name = "API Client",
+        description = "Generic API clients requesting JSON without browser headers",
+        enabled = true,
+        builtin = true,
+        priority = 160,
+        matching = {
+            conditions = {
+                { header = "Accept", condition = "matches", pattern = "application/json" },
+                { header = "Accept-Language", condition = "absent" },
+            },
+            match_mode = "all"
+        },
+        fingerprint_headers = {
+            headers = {"User-Agent", "Accept"},
+            normalize = true,
+            max_length = 100
+        },
+        action = "flag",
+        score = 15,
+        rate_limiting = {
+            enabled = true,
+            fingerprint_rate_limit = 15
         }
     },
     -- Priority 200: Legacy browsers with minimal headers
@@ -152,8 +359,7 @@ local BUILTIN_PROFILES = {
         fingerprint_headers = {
             headers = {"User-Agent"},
             normalize = true,
-            max_length = 100,
-            include_field_names = true
+            max_length = 100
         },
         action = "allow",
         score = 5,
@@ -177,8 +383,7 @@ local BUILTIN_PROFILES = {
         },
         fingerprint_headers = {
             headers = {},
-            normalize = true,
-            include_field_names = true
+            normalize = true
         },
         action = "flag",
         score = 40,
@@ -446,8 +651,7 @@ function _M.generate_fingerprint(form_data, ngx_vars, profile)
     local config = {
         headers = {"User-Agent", "Accept-Language", "Accept-Encoding"},
         normalize = true,
-        max_length = 100,
-        include_field_names = true
+        max_length = 100
     }
 
     -- Override with profile configuration if provided
@@ -461,9 +665,6 @@ function _M.generate_fingerprint(form_data, ngx_vars, profile)
         end
         if fp_config.max_length then
             config.max_length = fp_config.max_length
-        end
-        if fp_config.include_field_names ~= nil then
-            config.include_field_names = fp_config.include_field_names
         end
     end
 
@@ -479,18 +680,6 @@ function _M.generate_fingerprint(form_data, ngx_vars, profile)
 
         value = value:sub(1, config.max_length)
         table.insert(components, value)
-    end
-
-    -- Add form field names if configured
-    if config.include_field_names and form_data then
-        local fields = {}
-        for field_name, _ in pairs(form_data) do
-            if type(field_name) == "string" then
-                table.insert(fields, field_name)
-            end
-        end
-        table.sort(fields)
-        table.insert(components, table.concat(fields, ","))
     end
 
     -- Generate hash
@@ -548,6 +737,114 @@ function _M.process_request(form_data, ngx_vars, fp_config)
         ignored = action_result.ignored,
         fingerprint_rate_limit = action_result.fingerprint_rate_limit
     }
+end
+
+-- Classify request context based on headers
+-- Helps detect mismatches between expected and actual request types
+-- Returns: "navigation" | "api" | "asset" | "preflight" | "unknown"
+function _M.classify_request_context(ngx_vars, content_type, method)
+    -- Get Sec-Fetch headers (modern browsers)
+    local sec_fetch_dest = get_header_value(ngx_vars, "Sec-Fetch-Dest")
+    local sec_fetch_mode = get_header_value(ngx_vars, "Sec-Fetch-Mode")
+    local accept = get_header_value(ngx_vars, "Accept") or ""
+
+    -- CORS preflight check
+    if method == "OPTIONS" then
+        local origin = get_header_value(ngx_vars, "Origin")
+        local access_control_request = get_header_value(ngx_vars, "Access-Control-Request-Method")
+        if origin and access_control_request then
+            return "preflight"
+        end
+    end
+
+    -- If Sec-Fetch-Dest is present, use it (most reliable)
+    if sec_fetch_dest then
+        if sec_fetch_dest == "document" or sec_fetch_dest == "iframe" then
+            return "navigation"
+        elseif sec_fetch_dest == "empty" then
+            -- Usually XHR/fetch API calls
+            return "api"
+        elseif sec_fetch_dest == "image" or sec_fetch_dest == "style" or
+               sec_fetch_dest == "script" or sec_fetch_dest == "font" or
+               sec_fetch_dest == "video" or sec_fetch_dest == "audio" then
+            return "asset"
+        end
+    end
+
+    -- If Sec-Fetch-Mode is present, use it
+    if sec_fetch_mode then
+        if sec_fetch_mode == "navigate" then
+            return "navigation"
+        elseif sec_fetch_mode == "cors" or sec_fetch_mode == "no-cors" then
+            return "api"
+        end
+    end
+
+    -- Fall back to Accept header analysis
+    if accept:match("application/json") or accept:match("text/json") then
+        return "api"
+    elseif accept:match("text/html") then
+        return "navigation"
+    elseif accept:match("image/") or accept:match("text/css") or
+           accept:match("application/javascript") or accept:match("font/") then
+        return "asset"
+    end
+
+    -- Check Content-Type for request body type hints
+    if content_type then
+        if content_type:match("application/json") then
+            return "api"
+        elseif content_type:match("multipart/form%-data") or
+               content_type:match("application/x%-www%-form%-urlencoded") then
+            -- Form submissions are usually from navigation
+            return "navigation"
+        end
+    end
+
+    return "unknown"
+end
+
+-- Check for context mismatch (e.g., API headers on form submission endpoint)
+-- Returns: { mismatch = bool, expected = string, actual = string, score = number }
+function _M.check_context_mismatch(ngx_vars, endpoint_type, content_type, method)
+    local actual = _M.classify_request_context(ngx_vars, content_type, method)
+
+    -- Map endpoint types to expected request contexts
+    local expected_map = {
+        form = "navigation",
+        api = "api",
+        page = "navigation",
+        asset = "asset",
+    }
+
+    local expected = expected_map[endpoint_type]
+    if not expected then
+        -- Unknown endpoint type, no mismatch check
+        return { mismatch = false, expected = nil, actual = actual, score = 0 }
+    end
+
+    -- Check for mismatch
+    if actual ~= "unknown" and actual ~= expected then
+        -- Score based on severity
+        local score = 10
+        if endpoint_type == "form" and actual == "api" then
+            -- API request to form endpoint is suspicious
+            score = 15
+        elseif endpoint_type == "api" and actual == "navigation" then
+            -- Navigation request to API endpoint is unusual but less suspicious
+            score = 5
+        end
+
+        return {
+            mismatch = true,
+            expected = expected,
+            actual = actual,
+            score = score,
+            flag = "ctx_mismatch:" .. expected .. "/" .. actual
+        }
+    end
+
+    return { mismatch = false, expected = expected, actual = actual, score = 0 }
 end
 
 return _M

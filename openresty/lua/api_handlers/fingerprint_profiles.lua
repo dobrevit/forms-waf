@@ -195,8 +195,7 @@ _M.handlers["POST:/fingerprint-profiles"] = function()
         data.fingerprint_headers = {
             headers = {"User-Agent", "Accept-Language", "Accept-Encoding"},
             normalize = true,
-            max_length = 100,
-            include_field_names = true
+            max_length = 100
         }
     end
 

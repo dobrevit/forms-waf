@@ -441,7 +441,6 @@ export interface FingerprintHeaders {
   headers: string[]
   normalize?: boolean
   max_length?: number
-  include_field_names?: boolean
 }
 
 export interface FingerprintRateLimiting {
