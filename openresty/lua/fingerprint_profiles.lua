@@ -24,7 +24,35 @@ local CACHE_KEY_PROFILE_PREFIX = "fingerprint_profiles:config:"
 
 -- Built-in profiles definitions
 -- These are initialized in Redis if no profiles exist
+-- Priority: lower number = higher priority (evaluated first)
 local BUILTIN_PROFILES = {
+    -- Priority 50: Known good bots (search engines) - ignore WAF checks
+    {
+        id = "known-bot",
+        name = "Known Bot",
+        description = "Known search engine and service crawlers (Googlebot, Bingbot, etc.)",
+        enabled = true,
+        builtin = true,
+        priority = 50,
+        matching = {
+            conditions = {
+                { header = "User-Agent", condition = "matches", pattern = "(?i)(googlebot|bingbot|slurp|duckduckbot|baiduspider|yandexbot|facebookexternalhit|twitterbot|linkedinbot|applebot)" },
+            },
+            match_mode = "any"
+        },
+        fingerprint_headers = {
+            headers = {"User-Agent"},
+            normalize = true,
+            max_length = 100,
+            include_field_names = true
+        },
+        action = "ignore",
+        score = 0,
+        rate_limiting = {
+            enabled = false
+        }
+    },
+    -- Priority 100: Modern browsers with full headers
     {
         id = "modern-browser",
         name = "Modern Browser",
@@ -36,14 +64,12 @@ local BUILTIN_PROFILES = {
             conditions = {
                 { header = "User-Agent", condition = "present" },
                 { header = "Accept-Language", condition = "present" },
-                { header = "Accept-Encoding", condition = "present" },
-                { header = "Accept", condition = "present" },
-                { header = "Sec-Fetch-Site", condition = "present" },
+                { header = "Accept-Encoding", condition = "matches", pattern = "gzip" },
             },
             match_mode = "all"
         },
         fingerprint_headers = {
-            headers = {"User-Agent", "Accept-Language", "Accept-Encoding", "Accept"},
+            headers = {"User-Agent", "Accept-Language", "Accept-Encoding"},
             normalize = true,
             max_length = 100,
             include_field_names = true
@@ -54,19 +80,19 @@ local BUILTIN_PROFILES = {
             enabled = true
         }
     },
+    -- Priority 120: Headless browsers / automation tools
     {
-        id = "mobile-browser",
-        name = "Mobile Browser",
-        description = "Mobile device browser (Android, iOS)",
+        id = "headless-browser",
+        name = "Headless Browser",
+        description = "Headless Chrome, Puppeteer, Playwright, PhantomJS automation",
         enabled = true,
         builtin = true,
-        priority = 110,
+        priority = 120,
         matching = {
             conditions = {
-                { header = "User-Agent", condition = "matches", pattern = "(?i)(android|iphone|ipad|mobile|webos)" },
-                { header = "Accept-Language", condition = "present" },
+                { header = "User-Agent", condition = "matches", pattern = "(?i)(headlesschrome|phantomjs|puppeteer|playwright|selenium|webdriver)" },
             },
-            match_mode = "all"
+            match_mode = "any"
         },
         fingerprint_headers = {
             headers = {"User-Agent", "Accept-Language"},
@@ -74,51 +100,26 @@ local BUILTIN_PROFILES = {
             max_length = 100,
             include_field_names = true
         },
-        action = "allow",
-        score = 0,
-        rate_limiting = {
-            enabled = true
-        }
-    },
-    {
-        id = "minimal-script",
-        name = "Minimal Script/Bot",
-        description = "Requests with minimal headers (likely automated)",
-        enabled = true,
-        builtin = true,
-        priority = 200,
-        matching = {
-            conditions = {
-                { header = "Accept-Language", condition = "absent" },
-                { header = "Accept-Encoding", condition = "absent" },
-            },
-            match_mode = "any"
-        },
-        fingerprint_headers = {
-            headers = {"User-Agent"},
-            normalize = true,
-            max_length = 100,
-            include_field_names = true
-        },
         action = "flag",
-        score = 20,
+        score = 25,
         rate_limiting = {
             enabled = true,
             fingerprint_rate_limit = 10
         }
     },
+    -- Priority 150: Suspicious bots (curl, wget, scripts)
     {
-        id = "curl-like",
-        name = "Curl-like Client",
-        description = "curl or similar command-line HTTP client",
+        id = "suspicious-bot",
+        name = "Suspicious Bot",
+        description = "Command-line tools and scripting libraries (curl, wget, python-requests, etc.)",
         enabled = true,
         builtin = true,
-        priority = 210,
+        priority = 150,
         matching = {
             conditions = {
-                { header = "User-Agent", condition = "matches", pattern = "^curl/" },
+                { header = "User-Agent", condition = "matches", pattern = "(?i)(curl|wget|python-requests|python-urllib|java|httpclient|okhttp|axios|node-fetch|go-http-client|ruby|perl|libwww)" },
             },
-            match_mode = "all"
+            match_mode = "any"
         },
         fingerprint_headers = {
             headers = {"User-Agent"},
@@ -133,6 +134,34 @@ local BUILTIN_PROFILES = {
             fingerprint_rate_limit = 5
         }
     },
+    -- Priority 200: Legacy browsers with minimal headers
+    {
+        id = "legacy-browser",
+        name = "Legacy Browser",
+        description = "Older browsers or browsers with reduced header set",
+        enabled = true,
+        builtin = true,
+        priority = 200,
+        matching = {
+            conditions = {
+                { header = "User-Agent", condition = "present" },
+                { header = "Accept-Language", condition = "absent" },
+            },
+            match_mode = "all"
+        },
+        fingerprint_headers = {
+            headers = {"User-Agent"},
+            normalize = true,
+            max_length = 100,
+            include_field_names = true
+        },
+        action = "allow",
+        score = 5,
+        rate_limiting = {
+            enabled = true
+        }
+    },
+    -- Priority 300: No User-Agent at all (highly suspicious)
     {
         id = "no-user-agent",
         name = "No User-Agent",
