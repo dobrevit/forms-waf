@@ -1008,3 +1008,53 @@ export const clusterApi = {
   getThis: () =>
     request<ClusterThisInstance>('/cluster/this'),
 }
+
+// Fingerprint Profiles API
+import type {
+  FingerprintProfile,
+  FingerprintProfileTestRequest,
+  FingerprintProfileTestResult,
+} from './types'
+
+export const fingerprintProfilesApi = {
+  // List all profiles
+  list: () =>
+    request<{ profiles: FingerprintProfile[] }>('/fingerprint-profiles'),
+
+  // Get a single profile
+  get: (id: string) =>
+    request<{ profile: FingerprintProfile }>(`/fingerprint-profiles/${encodeURIComponent(id)}`),
+
+  // Create a custom profile
+  create: (data: Omit<FingerprintProfile, 'builtin'>) =>
+    request<{ created: boolean; profile: FingerprintProfile }>('/fingerprint-profiles', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Update a profile
+  update: (id: string, data: Partial<FingerprintProfile>) =>
+    request<{ updated: boolean; profile: FingerprintProfile }>(`/fingerprint-profiles/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  // Delete a custom profile (built-in profiles cannot be deleted)
+  delete: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/fingerprint-profiles/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  // Test profile matching
+  test: (data: FingerprintProfileTestRequest) =>
+    request<FingerprintProfileTestResult>('/fingerprint-profiles/test', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Reset built-in profiles to defaults
+  resetBuiltin: () =>
+    request<{ reset: boolean; count: number }>('/fingerprint-profiles/reset-builtin', {
+      method: 'POST',
+    }),
+}

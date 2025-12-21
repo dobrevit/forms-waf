@@ -807,6 +807,55 @@ function _M.get_additional_keywords(context)
     return result
 end
 
+-- Get fingerprint profile configuration for request context
+-- Implements inheritance: endpoint -> vhost -> global defaults
+-- Returns: { enabled, profiles, no_match_action, no_match_score }
+function _M.get_fingerprint_profiles(context)
+    -- Default fingerprint profile config
+    local default = {
+        enabled = true,
+        profiles = nil,  -- nil = use all global profiles
+        no_match_action = "use_default",  -- "use_default" | "flag" | "allow"
+        no_match_score = 15
+    }
+
+    if not context then
+        return default
+    end
+
+    -- Helper to merge config with defaults
+    local function merge_config(config)
+        if not config then
+            return nil
+        end
+        local result = {}
+        result.enabled = config.enabled ~= nil and config.enabled or default.enabled
+        result.profiles = config.profiles or default.profiles
+        result.no_match_action = config.no_match_action or default.no_match_action
+        result.no_match_score = config.no_match_score or default.no_match_score
+        return result
+    end
+
+    -- Check endpoint-level config first (most specific)
+    if context.endpoint and context.endpoint.fingerprint_profiles then
+        local merged = merge_config(context.endpoint.fingerprint_profiles)
+        if merged then
+            return merged
+        end
+    end
+
+    -- Check vhost-level config
+    if context.vhost and context.vhost.fingerprint_profiles then
+        local merged = merge_config(context.vhost.fingerprint_profiles)
+        if merged then
+            return merged
+        end
+    end
+
+    -- Return global defaults
+    return default
+end
+
 -- Build context summary for headers/logging
 function _M.get_context_summary(context)
     if not context then

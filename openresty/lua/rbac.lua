@@ -46,7 +46,8 @@ local DEFAULT_ROLES = {
             sync = {"execute"},
             status = {"read"},
             hashes = {"read", "create"},
-            whitelist = {"read", "create", "delete"}
+            whitelist = {"read", "create", "delete"},
+            fingerprint_profiles = {"create", "read", "update", "delete", "test", "reset"}
         },
         scope = "global"  -- Can access all vhosts
     },
@@ -71,7 +72,8 @@ local DEFAULT_ROLES = {
             cluster = {"read"},
             status = {"read"},
             hashes = {"read", "create"},
-            whitelist = {"read"}
+            whitelist = {"read"},
+            fingerprint_profiles = {"read", "update", "test"}
         },
         scope = "vhost-scoped"  -- Can only access assigned vhosts
     },
@@ -95,7 +97,8 @@ local DEFAULT_ROLES = {
             cluster = {"read"},
             status = {"read"},
             hashes = {"read"},
-            whitelist = {"read"}
+            whitelist = {"read"},
+            fingerprint_profiles = {"read"}
         },
         scope = "vhost-scoped"
     }
@@ -229,6 +232,12 @@ local ENDPOINT_PERMISSIONS = {
     ["GET:/cluster/leader"] = {resource = "cluster", action = "read"},
     ["GET:/cluster/config"] = {resource = "cluster", action = "read"},
     ["GET:/cluster/this"] = {resource = "cluster", action = "read"},
+
+    -- Fingerprint profiles
+    ["GET:/fingerprint-profiles"] = {resource = "fingerprint_profiles", action = "read"},
+    ["POST:/fingerprint-profiles"] = {resource = "fingerprint_profiles", action = "create"},
+    ["POST:/fingerprint-profiles/test"] = {resource = "fingerprint_profiles", action = "test"},
+    ["POST:/fingerprint-profiles/reset-builtin"] = {resource = "fingerprint_profiles", action = "reset"},
 }
 
 -- Parametric endpoint permissions (for /endpoints/{id}, /vhosts/{id}, etc.)
@@ -273,6 +282,12 @@ local PARAMETRIC_PERMISSIONS = {
         ["POST:test"] = {resource = "providers", action = "read"},
         ["POST:enable"] = {resource = "providers", action = "update"},
         ["POST:disable"] = {resource = "providers", action = "update"},
+    },
+    -- Fingerprint profiles
+    ["fingerprint-profiles"] = {
+        ["GET"] = {resource = "fingerprint_profiles", action = "read"},
+        ["PUT"] = {resource = "fingerprint_profiles", action = "update"},
+        ["DELETE"] = {resource = "fingerprint_profiles", action = "delete"},
     },
 }
 
@@ -463,6 +478,11 @@ function _M.get_endpoint_permission(method, path)
         local action = path:match("^/auth/providers/config/[a-zA-Z0-9_-]+/([a-z]+)$")
         local handler_key = action and (method .. ":" .. action) or method
         return PARAMETRIC_PERMISSIONS.auth_providers[handler_key], auth_provider_id, "auth_provider"
+    end
+
+    local profile_id = path:match("^/fingerprint%-profiles/([a-zA-Z0-9_-]+)$")
+    if profile_id and profile_id ~= "test" and profile_id ~= "reset-builtin" then
+        return PARAMETRIC_PERMISSIONS["fingerprint-profiles"][method], profile_id, "fingerprint_profile"
     end
 
     return nil

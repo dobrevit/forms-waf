@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Application</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 550px;
+            padding: 40px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            color: #555;
+            font-weight: 500;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        .required::after {
+            content: ' *';
+            color: #e74c3c;
+        }
+        input[type="text"],
+        input[type="email"],
+        input[type="tel"],
+        textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e1e1e1;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        input:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #11998e;
+            box-shadow: 0 0 0 3px rgba(17, 153, 142, 0.1);
+        }
+        input::placeholder,
+        textarea::placeholder {
+            color: #aaa;
+        }
+        textarea {
+            min-height: 150px;
+            resize: vertical;
+        }
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+            width: 100%;
+        }
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
+            width: 100%;
+            height: 100%;
+        }
+        .file-input-label {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            background: #f9f9f9;
+            cursor: pointer;
+            transition: border-color 0.3s, background 0.3s;
+        }
+        .file-input-label:hover {
+            border-color: #11998e;
+            background: #f0f9f8;
+        }
+        .file-input-label .icon {
+            font-size: 24px;
+            margin-right: 10px;
+        }
+        .file-name {
+            margin-top: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+        .honeypot {
+            position: absolute;
+            left: -9999px;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(17, 153, 142, 0.4);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        .message {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .back-link {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .back-link a {
+            color: #11998e;
+            text-decoration: none;
+        }
+        .back-link a:hover {
+            text-decoration: underline;
+        }
+        .note {
+            font-size: 12px;
+            color: #888;
+            margin-top: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Job Application</h1>
+        <p class="subtitle">Join our team! Please fill out the application form below.</p>
+
+        <div id="message" class="message"></div>
+
+        <form id="applyForm" action="/submit" method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="name" class="required">Full Name</label>
+                <input type="text" id="name" name="name" placeholder="Your full name" required>
+            </div>
+
+            <div class="form-group">
+                <label for="email" class="required">Email Address</label>
+                <input type="email" id="email" name="email" placeholder="your@email.com" required>
+            </div>
+
+            <div class="form-group">
+                <label for="phone" class="required">Phone Number</label>
+                <input type="tel" id="phone" name="phone" placeholder="+1 (555) 123-4567" required>
+            </div>
+
+            <div class="form-group">
+                <label for="resume">Resume / CV</label>
+                <div class="file-input-wrapper">
+                    <div class="file-input-label">
+                        <span class="icon">📄</span>
+                        <span>Choose file or drag here</span>
+                    </div>
+                    <input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx">
+                </div>
+                <div id="fileName" class="file-name">No file selected</div>
+                <p class="note">Accepted formats: PDF, DOC, DOCX (Max 5MB)</p>
+            </div>
+
+            <div class="form-group">
+                <label for="cover_letter" class="required">Cover Letter</label>
+                <textarea id="cover_letter" name="cover_letter" placeholder="Tell us why you're interested in this position and what makes you a great fit..." required></textarea>
+            </div>
+
+            <!-- Honeypot field - hidden from users, bots may fill it -->
+            <div class="honeypot">
+                <label for="company">Current Company (leave empty)</label>
+                <input type="text" id="company" name="company" tabindex="-1" autocomplete="off">
+            </div>
+
+            <button type="submit">Submit Application</button>
+        </form>
+
+        <div class="back-link">
+            <a href="/">Back to Home</a>
+        </div>
+    </div>
+
+    <script>
+        // Update file name display
+        document.getElementById('resume').addEventListener('change', function(e) {
+            const fileName = e.target.files[0] ? e.target.files[0].name : 'No file selected';
+            document.getElementById('fileName').textContent = fileName;
+        });
+
+        document.getElementById('applyForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const form = e.target;
+            const messageEl = document.getElementById('message');
+            const formData = new FormData(form);
+
+            // Convert FormData to URLSearchParams for non-file fields
+            // For simplicity, we'll send as form-urlencoded (files would need multipart handling)
+            const params = new URLSearchParams();
+            for (const [key, value] of formData.entries()) {
+                if (typeof value === 'string') {
+                    params.append(key, value);
+                }
+            }
+
+            try {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    body: params,
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    messageEl.className = 'message success';
+                    messageEl.textContent = 'Thank you! Your application has been submitted successfully. We will be in touch soon.';
+                    messageEl.style.display = 'block';
+                    form.reset();
+                    document.getElementById('fileName').textContent = 'No file selected';
+                } else {
+                    messageEl.className = 'message error';
+                    messageEl.textContent = data.message || 'Failed to submit application. Please try again.';
+                    messageEl.style.display = 'block';
+                }
+            } catch (error) {
+                messageEl.className = 'message error';
+                messageEl.textContent = 'An error occurred. Please try again later.';
+                messageEl.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -26,6 +26,7 @@ local endpoints_handler = require "api_handlers.endpoints"
 local vhosts_handler = require "api_handlers.vhosts"
 local behavioral_handler = require "api_handlers.behavioral"
 local cluster_handler = require "api_handlers.cluster"
+local fingerprint_profiles_handler = require "api_handlers.fingerprint_profiles"
 
 -- Configuration
 local REQUIRE_AUTH = os.getenv("WAF_ADMIN_AUTH") ~= "false"  -- Default: require auth
@@ -70,6 +71,7 @@ register_handlers(endpoints_handler)
 register_handlers(vhosts_handler)
 register_handlers(behavioral_handler)
 register_handlers(cluster_handler)
+register_handlers(fingerprint_profiles_handler)
 
 -- ==================== User Management Endpoints ====================
 -- Delegated to api_handlers/users.lua module
@@ -265,6 +267,17 @@ function _M.handle_request()
         local sso_handler = sso_handlers[method .. ":" .. sso_type]
         if sso_handler then
             return sso_handler(sso_provider_id)
+        end
+    end
+
+    -- Check for parameterized fingerprint profile routes: /fingerprint-profiles/{id}
+    local fp_profile_id = path:match("^/fingerprint%-profiles/([a-zA-Z0-9_-]+)$")
+
+    if fp_profile_id then
+        -- Route to appropriate fingerprint profile handler
+        local fp_handler = fingerprint_profiles_handler.handlers[method .. ":/fingerprint-profiles/:id"]
+        if fp_handler then
+            return fp_handler({id = fp_profile_id})
         end
     end
 

@@ -19,6 +19,7 @@ import { BulkOperations } from '@/pages/bulk/BulkOperations'
 import TimingConfig from '@/pages/security/TimingConfig'
 import GeoIPConfig from '@/pages/security/GeoIPConfig'
 import ReputationConfig from '@/pages/security/ReputationConfig'
+import { FingerprintProfiles } from '@/pages/security/FingerprintProfiles'
 import BehavioralAnalytics from '@/pages/analytics/BehavioralAnalytics'
 import ClusterStatus from '@/pages/cluster/ClusterStatus'
 import { About } from '@/pages/About'
@@ -72,6 +73,7 @@ export default function App() {
                 <Route path="/security/timing" element={<TimingConfig />} />
                 <Route path="/security/geoip" element={<GeoIPConfig />} />
                 <Route path="/security/reputation" element={<ReputationConfig />} />
+                <Route path="/security/fingerprint-profiles" element={<FingerprintProfiles />} />
                 <Route path="/analytics/behavioral" element={<BehavioralAnalytics />} />
                 <Route path="/cluster" element={<ClusterStatus />} />
                 <Route path="/about" element={<About />} />
