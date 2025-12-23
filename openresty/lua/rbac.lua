@@ -47,7 +47,9 @@ local DEFAULT_ROLES = {
             status = {"read"},
             hashes = {"read", "create"},
             whitelist = {"read", "create", "delete"},
-            fingerprint_profiles = {"create", "read", "update", "delete", "test", "reset"}
+            fingerprint_profiles = {"create", "read", "update", "delete", "test", "reset"},
+            defense_profiles = {"create", "read", "update", "delete", "reset"},
+            attack_signatures = {"create", "read", "update", "delete", "reset"}
         },
         scope = "global"  -- Can access all vhosts
     },
@@ -73,7 +75,9 @@ local DEFAULT_ROLES = {
             status = {"read"},
             hashes = {"read", "create"},
             whitelist = {"read"},
-            fingerprint_profiles = {"read", "update", "test"}
+            fingerprint_profiles = {"read", "update", "test"},
+            defense_profiles = {"read", "update"},
+            attack_signatures = {"read", "update"}
         },
         scope = "vhost-scoped"  -- Can only access assigned vhosts
     },
@@ -98,7 +102,9 @@ local DEFAULT_ROLES = {
             status = {"read"},
             hashes = {"read"},
             whitelist = {"read"},
-            fingerprint_profiles = {"read"}
+            fingerprint_profiles = {"read"},
+            defense_profiles = {"read"},
+            attack_signatures = {"read"}
         },
         scope = "vhost-scoped"
     }
@@ -238,6 +244,26 @@ local ENDPOINT_PERMISSIONS = {
     ["POST:/fingerprint-profiles"] = {resource = "fingerprint_profiles", action = "create"},
     ["POST:/fingerprint-profiles/test"] = {resource = "fingerprint_profiles", action = "test"},
     ["POST:/fingerprint-profiles/reset-builtin"] = {resource = "fingerprint_profiles", action = "reset"},
+
+    -- Defense profiles
+    ["GET:/defense-profiles"] = {resource = "defense_profiles", action = "read"},
+    ["POST:/defense-profiles"] = {resource = "defense_profiles", action = "create"},
+    ["POST:/defense-profiles/reset-builtins"] = {resource = "defense_profiles", action = "reset"},
+    ["GET:/defense-profiles/builtins"] = {resource = "defense_profiles", action = "read"},
+    ["GET:/defense-profiles/metadata"] = {resource = "defense_profiles", action = "read"},
+    ["POST:/defense-profiles/validate"] = {resource = "defense_profiles", action = "read"},
+    ["POST:/defense-profiles/simulate"] = {resource = "defense_profiles", action = "read"},
+
+    -- Attack signatures
+    ["GET:/attack-signatures"] = {resource = "attack_signatures", action = "read"},
+    ["POST:/attack-signatures"] = {resource = "attack_signatures", action = "create"},
+    ["POST:/attack-signatures/reset-builtins"] = {resource = "attack_signatures", action = "reset"},
+    ["GET:/attack-signatures/builtins"] = {resource = "attack_signatures", action = "read"},
+    ["GET:/attack-signatures/tags"] = {resource = "attack_signatures", action = "read"},
+    ["GET:/attack-signatures/export"] = {resource = "attack_signatures", action = "read"},
+    ["POST:/attack-signatures/import"] = {resource = "attack_signatures", action = "create"},
+    ["POST:/attack-signatures/validate"] = {resource = "attack_signatures", action = "read"},
+    ["GET:/attack-signatures/stats/summary"] = {resource = "attack_signatures", action = "read"},
 }
 
 -- Parametric endpoint permissions (for /endpoints/{id}, /vhosts/{id}, etc.)
@@ -288,6 +314,22 @@ local PARAMETRIC_PERMISSIONS = {
         ["GET"] = {resource = "fingerprint_profiles", action = "read"},
         ["PUT"] = {resource = "fingerprint_profiles", action = "update"},
         ["DELETE"] = {resource = "fingerprint_profiles", action = "delete"},
+    },
+    -- Defense profiles
+    ["defense-profiles"] = {
+        ["GET"] = {resource = "defense_profiles", action = "read"},
+        ["PUT"] = {resource = "defense_profiles", action = "update"},
+        ["DELETE"] = {resource = "defense_profiles", action = "delete"},
+    },
+    -- Attack signatures
+    ["attack-signatures"] = {
+        ["GET"] = {resource = "attack_signatures", action = "read"},
+        ["PUT"] = {resource = "attack_signatures", action = "update"},
+        ["DELETE"] = {resource = "attack_signatures", action = "delete"},
+        ["POST:clone"] = {resource = "attack_signatures", action = "create"},
+        ["POST:enable"] = {resource = "attack_signatures", action = "update"},
+        ["POST:disable"] = {resource = "attack_signatures", action = "update"},
+        ["GET:stats"] = {resource = "attack_signatures", action = "read"},
     },
 }
 
@@ -483,6 +525,21 @@ function _M.get_endpoint_permission(method, path)
     local profile_id = path:match("^/fingerprint%-profiles/([a-zA-Z0-9_-]+)$")
     if profile_id and profile_id ~= "test" and profile_id ~= "reset-builtin" then
         return PARAMETRIC_PERMISSIONS["fingerprint-profiles"][method], profile_id, "fingerprint_profile"
+    end
+
+    -- Defense profiles
+    local def_profile_id = path:match("^/defense%-profiles/([a-zA-Z0-9_-]+)$")
+    if def_profile_id and def_profile_id ~= "reset-builtins" and def_profile_id ~= "builtins"
+       and def_profile_id ~= "metadata" and def_profile_id ~= "validate" and def_profile_id ~= "simulate" then
+        return PARAMETRIC_PERMISSIONS["defense-profiles"][method], def_profile_id, "defense_profile"
+    end
+
+    -- Attack signatures
+    local sig_id, sig_action = path:match("^/attack%-signatures/([a-zA-Z0-9_-]+)/?([a-z]*)$")
+    if sig_id and sig_id ~= "builtins" and sig_id ~= "tags" and sig_id ~= "export"
+       and sig_id ~= "import" and sig_id ~= "validate" and sig_id ~= "reset-builtins" and sig_id ~= "stats" then
+        local handler_key = (sig_action and sig_action ~= "") and (method .. ":" .. sig_action) or method
+        return PARAMETRIC_PERMISSIONS["attack-signatures"][handler_key], sig_id, "attack_signature"
     end
 
     return nil

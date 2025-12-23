@@ -39,6 +39,9 @@ export interface RolePermissions {
   status?: string[]
   hashes?: string[]
   whitelist?: string[]
+  fingerprint_profiles?: string[]
+  defense_profiles?: string[]
+  attack_signatures?: string[]
 }
 
 export interface Role {
@@ -136,6 +139,7 @@ export interface Vhost {
   timing?: VhostTimingConfig  // Per-vhost timing validation configuration
   behavioral?: VhostBehavioralConfig  // Per-vhost behavioral tracking configuration
   fingerprint_profiles?: FingerprintProfileAttachment  // Fingerprint profile configuration
+  defense_profiles?: DefenseProfileAttachment  // Multi-profile defense configuration
   endpoint_count?: number  // Number of vhost-specific endpoints
 }
 
@@ -229,6 +233,8 @@ export interface Endpoint {
   patterns?: EndpointPatterns
   actions?: EndpointActions
   fingerprint_profiles?: FingerprintProfileAttachment  // Fingerprint profile configuration
+  defense_profiles?: DefenseProfileAttachment  // Multi-profile defense configuration
+  defense_lines?: DefenseLineAttachment[]  // Additional defense lines (run after base profile)
 }
 
 // Config types
@@ -503,3 +509,509 @@ export interface FingerprintProfileTestResult {
 export interface VhostFingerprintConfig extends FingerprintProfileAttachment {}
 
 export interface EndpointFingerprintConfig extends FingerprintProfileAttachment {}
+
+// ============================================================================
+// Defense Profile Types
+// ============================================================================
+
+// Node types in defense profile graph
+export type DefenseNodeType = 'start' | 'defense' | 'operator' | 'action' | 'observation'
+
+// Observation mechanism types (non-blocking, side-effect only)
+export type ObservationType = 'field_learner'
+
+// Defense mechanism types
+export type DefenseType =
+  | 'ip_allowlist'
+  | 'geoip'
+  | 'ip_reputation'
+  | 'timing_token'
+  | 'behavioral'
+  | 'honeypot'
+  | 'keyword_filter'
+  | 'content_hash'
+  | 'expected_fields'
+  | 'pattern_scan'
+  | 'disposable_email'
+  | 'field_anomalies'
+  | 'fingerprint'
+  | 'header_consistency'
+  | 'rate_limiter'
+
+// Operator types
+export type OperatorType = 'sum' | 'threshold_branch' | 'and' | 'or' | 'max' | 'min'
+
+// Action types
+export type ActionType = 'allow' | 'block' | 'tarpit' | 'captcha' | 'flag' | 'monitor'
+
+// Node position for visual editor
+export interface NodePosition {
+  x: number
+  y: number
+}
+
+// Threshold range for threshold_branch operator
+export interface ThresholdRange {
+  min: number
+  max?: number | null
+  output: string
+}
+
+// Base node interface
+export interface DefenseProfileNode {
+  id: string
+  type: DefenseNodeType
+  position?: NodePosition
+  outputs?: Record<string, string>
+  config?: Record<string, unknown>
+}
+
+// Defense node
+export interface DefenseNode extends DefenseProfileNode {
+  type: 'defense'
+  defense: DefenseType
+}
+
+// Operator node
+export interface OperatorNode extends DefenseProfileNode {
+  type: 'operator'
+  operator: OperatorType
+  inputs?: string[]
+}
+
+// Action node
+export interface ActionNode extends DefenseProfileNode {
+  type: 'action'
+  action: ActionType
+}
+
+// Start node
+export interface StartNode extends DefenseProfileNode {
+  type: 'start'
+}
+
+// Observation node (non-blocking, side-effect only - e.g., field learning)
+export interface ObservationNode extends DefenseProfileNode {
+  type: 'observation'
+  observation: ObservationType
+}
+
+// Union type for all nodes
+export type GraphNode = StartNode | DefenseNode | OperatorNode | ActionNode | ObservationNode
+
+// Profile graph
+export interface DefenseProfileGraph {
+  nodes: GraphNode[]
+}
+
+// Profile settings
+export interface DefenseProfileSettings {
+  default_action?: ActionType
+  max_execution_time_ms?: number
+}
+
+// Attack signature attachment item (for attaching signatures to profiles)
+export interface AttackSignatureAttachmentItem {
+  signature_id: string
+  priority?: number  // Order of application (lower = first)
+  enabled?: boolean  // Override signature's enabled state
+}
+
+// Merge mode for combining signature patterns
+export type SignatureMergeMode = 'UNION' | 'FIRST_MATCH'
+
+// Attack signature attachment configuration (attached to defense profile)
+export interface AttackSignatureAttachment {
+  items: AttackSignatureAttachmentItem[]
+  merge_mode: SignatureMergeMode
+}
+
+// Main defense profile interface
+export interface DefenseProfile {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  builtin: boolean
+  priority: number
+  extends?: string | null
+  graph: DefenseProfileGraph
+  settings?: DefenseProfileSettings
+  attack_signatures?: AttackSignatureAttachment  // Attached attack signatures
+}
+
+// Defense metadata for UI
+export interface DefenseMetadata {
+  name: string
+  description: string
+  outputs: string[]
+  output_types: Record<string, string>
+  config_schema?: Record<string, unknown>
+  score_range?: { min: number; max: number }
+}
+
+// Operator metadata for UI
+export interface OperatorMetadata {
+  name: string
+  description: string
+  input_type: string
+  output_type: string
+  config_schema?: Record<string, unknown>
+}
+
+// Action metadata for UI
+export interface ActionMetadata {
+  name: string
+  description: string
+  terminal: boolean
+  config_schema?: Record<string, unknown>
+}
+
+// Simulation result
+export interface DefenseProfileSimulationResult {
+  action: ActionType
+  score: number
+  flags: string[]
+  details: Record<string, unknown>
+  block_reason?: string
+  allow_reason?: string
+  tarpit_delay?: number
+  execution_time_ms: number
+  nodes_executed: number
+}
+
+// Validation result
+export interface DefenseProfileValidationResult {
+  valid: boolean
+  errors: string[]
+}
+
+// Profile attachment item (single profile within multi-profile config)
+export interface DefenseProfileAttachmentItem {
+  id: string
+  priority?: number  // Execution order (lower = first)
+  weight?: number    // For weighted score aggregation (0-1)
+}
+
+// Aggregation strategies for binary decisions
+export type DefenseAggregation = 'OR' | 'AND' | 'MAJORITY'
+
+// Score aggregation strategies
+export type DefenseScoreAggregation = 'SUM' | 'MAX' | 'WEIGHTED_AVG'
+
+// Multi-profile attachment for vhost/endpoint
+export interface DefenseProfileAttachment {
+  enabled: boolean
+  profiles: DefenseProfileAttachmentItem[]
+  aggregation: DefenseAggregation
+  score_aggregation: DefenseScoreAggregation
+  short_circuit?: boolean  // Stop on first block (optimization)
+}
+
+// ============================================================================
+// Attack Signature Types
+// ============================================================================
+
+// Signature section for IP Allowlist defense
+export interface IPAllowlistSignature {
+  allowed_cidrs?: string[]
+  allowed_ips?: string[]
+}
+
+// Signature section for GeoIP defense
+export interface GeoIPSignature {
+  blocked_countries?: string[]
+  flagged_countries?: { country: string; score: number }[]
+  blocked_regions?: string[]
+  flagged_regions?: { region: string; score: number }[]
+}
+
+// Signature section for IP Reputation defense
+export interface IPReputationSignature {
+  blocked_cidrs?: string[]
+  flagged_cidrs?: { cidr: string; score: number }[]
+  min_reputation_score?: number
+  blocked_asns?: string[]
+}
+
+// Signature section for Timing Token defense
+export interface TimingTokenSignature {
+  min_time_ms?: number
+  max_time_ms?: number
+  require_token?: boolean
+}
+
+// Signature section for Behavioral defense
+export interface BehavioralSignature {
+  min_interaction_score?: number
+  require_mouse_movement?: boolean
+  require_keyboard_input?: boolean
+  min_time_on_page_ms?: number
+  max_time_on_page_ms?: number
+  require_scroll?: boolean
+}
+
+// Signature section for Honeypot defense
+export interface HoneypotSignature {
+  field_names?: string[]
+  blocked_if_filled?: boolean
+  score_if_filled?: number
+}
+
+// Signature section for Keyword Filter defense
+export interface KeywordFilterSignature {
+  blocked_keywords?: string[]
+  flagged_keywords?: { keyword: string; score: number }[]
+  blocked_patterns?: string[]
+  flagged_patterns?: { pattern: string; score: number }[]
+  case_sensitive?: boolean
+}
+
+// Signature section for Content Hash defense
+export interface ContentHashSignature {
+  blocked_hashes?: string[]
+  blocked_fuzzy_hashes?: string[]
+  flagged_hashes?: { hash: string; score: number }[]
+}
+
+// Signature section for Expected Fields defense
+export interface ExpectedFieldsSignature {
+  required_fields?: string[]
+  forbidden_fields?: string[]
+  optional_fields?: string[]
+  max_extra_fields?: number
+}
+
+// Signature section for Pattern Scan defense
+export interface PatternScanSignature {
+  blocked_patterns?: string[]
+  flagged_patterns?: { pattern: string; score: number }[]
+  scan_fields?: string[]
+  multiline?: boolean
+}
+
+// Signature section for Disposable Email defense
+export interface DisposableEmailSignature {
+  blocked_domains?: string[]
+  allowed_domains?: string[]
+  blocked_patterns?: string[]
+  flagged_domains?: { domain: string; score: number }[]
+}
+
+// Field rule for Field Anomalies defense
+export interface FieldRule {
+  field: string
+  min_length?: number
+  max_length?: number
+  pattern?: string
+  forbidden_pattern?: string
+  score_on_violation?: number
+}
+
+// Signature section for Field Anomalies defense
+export interface FieldAnomaliesSignature {
+  field_rules?: FieldRule[]
+  max_field_length?: number
+  max_total_size?: number
+}
+
+// Signature section for Fingerprint defense
+export interface FingerprintSignature {
+  blocked_user_agents?: string[]
+  flagged_user_agents?: { pattern: string; score: number }[]
+  required_fingerprint_fields?: string[]
+  blocked_fingerprints?: string[]
+  flagged_fingerprints?: { hash: string; score: number }[]
+}
+
+// Header rule for Header Consistency defense
+export interface HeaderRule {
+  header: string
+  pattern?: string
+  forbidden_pattern?: string
+  score_on_violation?: number
+}
+
+// Signature section for Header Consistency defense
+export interface HeaderConsistencySignature {
+  required_headers?: string[]
+  forbidden_headers?: string[]
+  header_rules?: HeaderRule[]
+}
+
+// Signature section for Rate Limiter defense
+export interface RateLimiterSignature {
+  requests_per_second?: number
+  requests_per_minute?: number
+  requests_per_hour?: number
+  burst_limit?: number
+  by_field?: string
+}
+
+// All signature sections combined (1:1 mapping with DefenseType)
+export interface AttackSignatures {
+  ip_allowlist?: IPAllowlistSignature
+  geoip?: GeoIPSignature
+  ip_reputation?: IPReputationSignature
+  timing_token?: TimingTokenSignature
+  behavioral?: BehavioralSignature
+  honeypot?: HoneypotSignature
+  keyword_filter?: KeywordFilterSignature
+  content_hash?: ContentHashSignature
+  expected_fields?: ExpectedFieldsSignature
+  pattern_scan?: PatternScanSignature
+  disposable_email?: DisposableEmailSignature
+  field_anomalies?: FieldAnomaliesSignature
+  fingerprint?: FingerprintSignature
+  header_consistency?: HeaderConsistencySignature
+  rate_limiter?: RateLimiterSignature
+}
+
+// Threshold overrides when signature is active
+export interface AttackSignatureThresholds {
+  spam_score_block?: number
+  spam_score_flag?: number
+}
+
+// Signature match statistics
+export interface AttackSignatureStats {
+  total_matches: number
+  last_match_at?: string
+  matches_by_type?: Record<string, number>
+}
+
+// Main Attack Signature entity
+export interface AttackSignature {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  builtin?: boolean
+  builtin_version?: number
+  priority?: number
+
+  // Signature patterns for each defense type
+  signatures: AttackSignatures
+
+  // Threshold overrides
+  thresholds?: AttackSignatureThresholds
+
+  // Metadata
+  tags?: string[]
+  expires_at?: string
+
+  // Analytics (populated when include_stats=true)
+  stats?: AttackSignatureStats
+
+  // Timestamps
+  created_at?: string
+  updated_at?: string
+  created_by?: string
+}
+
+// ============================================================================
+// Defense Line Types (Endpoint configuration)
+// ============================================================================
+
+// Defense line attachment for endpoints
+export interface DefenseLineAttachment {
+  profile_id: string              // Defense Profile ID for this line
+  signature_ids?: string[]        // Attack Signature IDs (in priority order)
+  enabled?: boolean               // Enable/disable this line
+  inline_signatures?: AttackSignatures  // Optional inline signature overrides
+}
+
+// Extended Endpoint with Defense Lines
+export interface EndpointWithDefenseLines extends Endpoint {
+  defense_lines?: DefenseLineAttachment[]
+}
+
+// ============================================================================
+// Attack Signature API Response Types
+// ============================================================================
+
+export interface AttackSignatureListResponse {
+  signatures: AttackSignature[]
+}
+
+export interface AttackSignatureResponse {
+  signature: AttackSignature
+}
+
+export interface AttackSignatureCreateResponse {
+  created: boolean
+  signature: AttackSignature
+}
+
+export interface AttackSignatureUpdateResponse {
+  updated: boolean
+  signature: AttackSignature
+}
+
+export interface AttackSignatureDeleteResponse {
+  deleted: boolean
+  id: string
+}
+
+export interface AttackSignatureCloneResponse {
+  cloned: boolean
+  signature: AttackSignature
+}
+
+export interface AttackSignatureEnableResponse {
+  enabled: boolean
+  signature: AttackSignature
+}
+
+export interface AttackSignatureDisableResponse {
+  disabled: boolean
+  signature: AttackSignature
+}
+
+export interface AttackSignatureStatsResponse {
+  stats: AttackSignatureStats
+}
+
+export interface AttackSignatureBuiltinsResponse {
+  builtin_ids: string[]
+}
+
+export interface AttackSignatureResetBuiltinsResponse {
+  reset: boolean
+  count: number
+}
+
+export interface AttackSignatureTagsResponse {
+  tags: { tag: string; count: number }[]  // Array of tag objects
+}
+
+export interface AttackSignatureExportResponse {
+  signatures: AttackSignature[]
+  exported_at: string
+  count: number
+}
+
+export interface AttackSignatureImportResponse {
+  imported: number
+  errors: string[]
+  total: number
+}
+
+export interface AttackSignatureValidateResponse {
+  valid: boolean
+  errors: string[]
+}
+
+export interface AttackSignatureStatsSummary {
+  total_signatures: number
+  enabled_count: number
+  disabled_count: number
+  builtin_count: number
+  custom_count: number
+  total_matches: number
+  matches_by_type: Record<string, number>
+}
+
+export interface AttackSignatureStatsSummaryResponse {
+  summary: AttackSignatureStatsSummary
+}

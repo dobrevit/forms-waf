@@ -637,36 +637,6 @@ function _M.get_cluster_status()
 end
 
 -- ============================================================================
--- Graceful Shutdown
--- ============================================================================
-
-function _M.deregister_instance()
-    local red, err = get_redis_connection()
-    if not red then
-        return false, err
-    end
-
-    -- Remove from instance registry
-    red:hdel(KEYS.instances, INSTANCE_ID)
-
-    -- Remove heartbeat key
-    local heartbeat_key = KEYS.heartbeat_prefix .. INSTANCE_ID .. KEYS.heartbeat_suffix
-    red:del(heartbeat_key)
-
-    -- If we're leader, release leadership for faster failover
-    local current_leader = red:get(KEYS.leader)
-    if current_leader == INSTANCE_ID then
-        red:del(KEYS.leader)
-        red:del(KEYS.leader_since)
-        ngx.log(ngx.INFO, "instance_coordinator: released leadership on shutdown")
-    end
-
-    close_redis(red)
-    ngx.log(ngx.INFO, "instance_coordinator: deregistered instance '", INSTANCE_ID, "'")
-    return true
-end
-
--- ============================================================================
 -- Initialization
 -- ============================================================================
 

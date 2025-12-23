@@ -119,15 +119,6 @@ data:
             instance_coordinator.start_coordinator_timer()
         }
 
-        # Graceful shutdown: deregister instance from cluster
-        exit_worker_by_lua_block {
-            -- Only worker 0 handles instance registration/deregistration
-            if ngx.worker.id() == 0 then
-                local instance_coordinator = require "instance_coordinator"
-                instance_coordinator.deregister_instance()
-            end
-        }
-
         # Health check and metrics endpoint
         server {
             listen 8081;
@@ -245,15 +236,22 @@ data:
                 # Pass computed headers to upstream
                 # Note: Headers set by ngx.req.set_header() are forwarded automatically
                 # These proxy_set_header lines use $http_* to forward modified request headers
-                proxy_set_header X-Form-Hash $http_x_form_hash;
-                proxy_set_header X-Spam-Score $http_x_spam_score;
-                proxy_set_header X-Spam-Flags $http_x_spam_flags;
-                proxy_set_header X-Client-IP $http_x_client_ip;
-                proxy_set_header X-Submission-Fingerprint $http_x_submission_fingerprint;
+                proxy_set_header X-WAF-Form-Hash $http_x_waf_form_hash;
+                proxy_set_header X-WAF-Spam-Score $http_x_waf_spam_score;
+                proxy_set_header X-WAF-Spam-Flags $http_x_waf_spam_flags;
+                proxy_set_header X-WAF-Client-IP $http_x_waf_client_ip;
+                proxy_set_header X-WAF-Submission-Fingerprint $http_x_waf_submission_fingerprint;
+                proxy_set_header X-WAF-Fingerprint-Profile $http_x_waf_fingerprint_profile;
+                proxy_set_header X-WAF-Fingerprint-Threshold $http_x_waf_fingerprint_threshold;
+                proxy_set_header X-WAF-Spam-Threshold $http_x_waf_spam_threshold;
+                proxy_set_header X-WAF-Hash-Rate-Threshold $http_x_waf_hash_rate_threshold;
+                proxy_set_header X-WAF-IP-Spam-Threshold $http_x_waf_ip_spam_threshold;
                 proxy_set_header X-WAF-Debug $http_x_waf_debug;
                 proxy_set_header X-WAF-Mode $http_x_waf_mode;
                 proxy_set_header X-WAF-Rate-Limit $http_x_waf_rate_limit;
                 proxy_set_header X-WAF-Rate-Limit-Value $http_x_waf_rate_limit_value;
+                proxy_set_header X-WAF-Endpoint $http_x_waf_endpoint;
+                proxy_set_header X-WAF-Vhost $http_x_waf_vhost;
             }
         }
 
@@ -315,15 +313,22 @@ data:
                 proxy_set_header X-Forwarded-Proto https;
 
                 # Pass computed headers to upstream
-                proxy_set_header X-Form-Hash $http_x_form_hash;
-                proxy_set_header X-Spam-Score $http_x_spam_score;
-                proxy_set_header X-Spam-Flags $http_x_spam_flags;
-                proxy_set_header X-Client-IP $http_x_client_ip;
-                proxy_set_header X-Submission-Fingerprint $http_x_submission_fingerprint;
+                proxy_set_header X-WAF-Form-Hash $http_x_waf_form_hash;
+                proxy_set_header X-WAF-Spam-Score $http_x_waf_spam_score;
+                proxy_set_header X-WAF-Spam-Flags $http_x_waf_spam_flags;
+                proxy_set_header X-WAF-Client-IP $http_x_waf_client_ip;
+                proxy_set_header X-WAF-Submission-Fingerprint $http_x_waf_submission_fingerprint;
+                proxy_set_header X-WAF-Fingerprint-Profile $http_x_waf_fingerprint_profile;
+                proxy_set_header X-WAF-Fingerprint-Threshold $http_x_waf_fingerprint_threshold;
+                proxy_set_header X-WAF-Spam-Threshold $http_x_waf_spam_threshold;
+                proxy_set_header X-WAF-Hash-Rate-Threshold $http_x_waf_hash_rate_threshold;
+                proxy_set_header X-WAF-IP-Spam-Threshold $http_x_waf_ip_spam_threshold;
                 proxy_set_header X-WAF-Debug $http_x_waf_debug;
                 proxy_set_header X-WAF-Mode $http_x_waf_mode;
                 proxy_set_header X-WAF-Rate-Limit $http_x_waf_rate_limit;
                 proxy_set_header X-WAF-Rate-Limit-Value $http_x_waf_rate_limit_value;
+                proxy_set_header X-WAF-Endpoint $http_x_waf_endpoint;
+                proxy_set_header X-WAF-Vhost $http_x_waf_vhost;
             }
         }
     }

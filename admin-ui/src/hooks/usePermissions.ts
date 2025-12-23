@@ -109,6 +109,26 @@ export function usePermissions() {
     canAddToWhitelist: hasPermission('whitelist', 'create'),
     canAddBlockedHash: hasPermission('hashes', 'create'),
 
+    // Fingerprint profiles
+    canCreateFingerprintProfile: hasPermission('fingerprint_profiles', 'create'),
+    canEditFingerprintProfile: hasPermission('fingerprint_profiles', 'update'),
+    canDeleteFingerprintProfile: hasPermission('fingerprint_profiles', 'delete'),
+    canTestFingerprintProfile: hasPermission('fingerprint_profiles', 'test'),
+    canResetFingerprintProfiles: hasPermission('fingerprint_profiles', 'reset'),
+
+    // Defense profiles
+    canCreateDefenseProfile: hasPermission('defense_profiles', 'create'),
+    canEditDefenseProfile: hasPermission('defense_profiles', 'update'),
+    canDeleteDefenseProfile: hasPermission('defense_profiles', 'delete'),
+    canResetDefenseProfiles: hasPermission('defense_profiles', 'reset'),
+    canSimulateDefenseProfile: hasPermission('defense_profiles', 'read'),
+
+    // Attack signatures
+    canCreateAttackSignature: hasPermission('attack_signatures', 'create'),
+    canEditAttackSignature: hasPermission('attack_signatures', 'update'),
+    canDeleteAttackSignature: hasPermission('attack_signatures', 'delete'),
+    canResetAttackSignatures: hasPermission('attack_signatures', 'reset'),
+
     // Vhost scope helpers
     hasVhostAccess,
     vhostScope: user?.vhost_scope || [],

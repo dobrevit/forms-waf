@@ -463,8 +463,45 @@ _M.resource_handlers["PUT"] = function(endpoint_id)
         end
     end
 
+    -- Detect scope change (global <-> vhost-specific)
+    local old_vhost_id = existing_config.vhost_id
+    local new_vhost_id = new_config.vhost_id
+    local scope_changed = (old_vhost_id or "") ~= (new_vhost_id or "")
+
+    if scope_changed then
+        ngx.log(ngx.INFO, "Endpoint ", endpoint_id, " scope changing: ",
+                old_vhost_id or "global", " -> ", new_vhost_id or "global")
+    end
+
     -- Remove old path mappings (uses old config's vhost_id to find correct keys)
     remove_path_mappings(red, endpoint_id, existing_config)
+
+    -- If scope changed FROM global, explicitly clean up any remaining global mappings
+    -- This handles edge cases where remove_path_mappings may not fully clean up
+    if scope_changed and (not old_vhost_id or old_vhost_id == "" or old_vhost_id == ngx.null) then
+        ngx.log(ngx.DEBUG, "Cleaning up global mappings for endpoint: ", endpoint_id)
+        -- Force cleanup of global index
+        red:zrem(ENDPOINT_KEYS.index, endpoint_id)
+        -- Clean up global path entries
+        if existing_config.matching then
+            local methods = existing_config.matching.methods or {"*"}
+            if existing_config.matching.paths then
+                for _, path in ipairs(existing_config.matching.paths) do
+                    for _, method in ipairs(methods) do
+                        local key = path .. ":" .. method:upper()
+                        red:hdel(ENDPOINT_KEYS.paths_exact, key)
+                    end
+                end
+            end
+            if existing_config.matching.path_prefix then
+                local prefix = existing_config.matching.path_prefix
+                for _, method in ipairs(methods) do
+                    local pattern = prefix .. "|" .. method:upper() .. "|" .. endpoint_id
+                    red:zrem(ENDPOINT_KEYS.paths_prefix, pattern)
+                end
+            end
+        end
+    end
 
     -- Preserve created_at, update updated_at
     new_config.metadata = new_config.metadata or {}
@@ -508,14 +545,11 @@ _M.resource_handlers["DELETE"] = function(endpoint_id)
 
     local existing_config = cjson.decode(existing_json)
 
-    -- Remove path mappings
+    -- Remove path mappings (this also removes from the correct scoped index)
     remove_path_mappings(red, endpoint_id, existing_config)
 
     -- Delete configuration
     red:del(ENDPOINT_KEYS.config_prefix .. endpoint_id)
-
-    -- Remove from index
-    red:zrem(ENDPOINT_KEYS.index, endpoint_id)
 
     utils.close_redis(red)
 

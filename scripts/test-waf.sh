@@ -317,7 +317,96 @@ else
     log_pass "Admin API not accessible on main port"
 fi
 
+# Test 9: WordPress Login Protection with Defense Lines
+# Tests defense lines execution with attack signature pattern matching
+# The wp-login endpoint uses defense lines with builtin_wordpress_login and builtin_credential_stuffing signatures
+
+log_info "Testing WordPress login endpoint with defense lines..."
+
+# Check if wp-login endpoint exists
+WP_RESPONSE=$(curl -s -X POST "$BASE_URL/wp-login.php" \
+    -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+    -d "log=testuser&pwd=testpass")
+
+if echo "$WP_RESPONSE" | grep -q '"endpoint":"wp-login"'; then
+    log_pass "WP Login endpoint is configured"
+
+    # Wait for rate limit reset
+    sleep 3
+
+    # Test 1: Normal request with legitimate browser should pass
+    test_form_request "WP Login - Legitimate browser request" "200" "/wp-login.php" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+        -d "log=legituser" -d "pwd=SecureP@ss123!" -d "wp-submit=Log+In"
+
+    sleep 1
+
+    # Test 2: Honeypot field should trigger block
+    test_form_request "WP Login - Honeypot triggered" "403" "/wp-login.php" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+        -d "log=testuser" -d "pwd=testpass" -d "website=http://spam.com"
+
+    sleep 1
+
+    # Test 3: Python user agent should be blocked (from builtin_wordpress_login signature)
+    test_request "WP Login - Blocked UA (python-requests)" "403" "POST" "/wp-login.php" \
+        -A "python-requests/2.28.0" \
+        -d "log=testuser&pwd=testpass"
+
+    sleep 1
+
+    # Test 4: Curl user agent should be blocked
+    test_request "WP Login - Blocked UA (curl)" "403" "POST" "/wp-login.php" \
+        -A "curl/7.68.0" \
+        -d "log=testuser&pwd=testpass"
+
+    sleep 1
+
+    # Test 5: Wget user agent should be blocked
+    test_request "WP Login - Blocked UA (wget)" "403" "POST" "/wp-login.php" \
+        -A "Wget/1.21" \
+        -d "log=testuser&pwd=testpass"
+
+    sleep 1
+
+    # Test 6: Common username "admin" should be blocked (from builtin_credential_stuffing signature)
+    test_request "WP Login - Credential stuffing (admin)" "403" "POST" "/wp-login.php" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+        -d "log=admin&pwd=somepassword"
+
+    sleep 1
+
+    # Test 7: Common password should be blocked
+    test_request "WP Login - Credential stuffing (password123)" "403" "POST" "/wp-login.php" \
+        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+        -d "log=someuser&pwd=password123"
+
+else
+    log_info "WP Login endpoint not configured - skipping defense line tests"
+    log_info "  To enable: restart Redis to load init-data.sh, or add endpoint via Admin UI"
+    log_info "  The wp-login endpoint requires defense_lines with attack signatures"
+fi
+
 echo ""
+
+# Test 10: Attack Signatures API (authenticated)
+if [ -n "$WAF_ADMIN_USER" ] && [ -n "$WAF_ADMIN_PASS" ]; then
+    log_info "Testing Attack Signatures API..."
+
+    # Re-login for this section
+    curl -s -c "$ADMIN_COOKIE_JAR" \
+        -X POST "$ADMIN_URL/api/auth/login" \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"$WAF_ADMIN_USER\",\"password\":\"$WAF_ADMIN_PASS\"}" > /dev/null
+
+    test_auth_admin "List attack signatures" "200" "GET" "/api/attack-signatures"
+    test_auth_admin "Get signature tags" "200" "GET" "/api/attack-signatures/tags"
+    test_auth_admin "List builtin signatures" "200" "GET" "/api/attack-signatures/builtins"
+    test_auth_admin "Get WP login signature" "200" "GET" "/api/attack-signatures/builtin_wordpress_login"
+    test_auth_admin "Get credential stuffing signature" "200" "GET" "/api/attack-signatures/builtin_credential_stuffing"
+
+    echo ""
+fi
 
 # Summary
 echo "========================================"

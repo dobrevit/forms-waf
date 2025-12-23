@@ -35,7 +35,7 @@ data:
         timeout server  30s
         timeout http-request 10s
 
-        log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r form_hash=%[req.hdr(X-Form-Hash)] spam_score=%[req.hdr(X-Spam-Score)]"
+        log-format "%ci:%cp [%tr] %ft %b/%s %TR/%Tw/%Tc/%Tr/%Ta %ST %B %CC %CS %tsc %ac/%fc/%bc/%sc/%rc %sq/%bq %hr %hs %{+Q}r form_hash=%[req.hdr(X-WAF-Form-Hash)] spam_score=%[req.hdr(X-WAF-Spam-Score)]"
 
     peers haproxy_peers
         peer ${RELEASE_NAME:-forms-waf}-haproxy-0 ${RELEASE_NAME:-forms-waf}-haproxy-0.${RELEASE_NAME:-forms-waf}-haproxy-headless:10000
@@ -50,16 +50,16 @@ data:
         bind *:8080
 
         # ACL definitions for WAF headers
-        acl has_form_hash req.hdr(X-Form-Hash) -m found
-        acl has_spam_score req.hdr(X-Spam-Score) -m found
-        acl has_client_ip req.hdr(X-Client-IP) -m found
+        acl has_form_hash req.hdr(X-WAF-Form-Hash) -m found
+        acl has_spam_score req.hdr(X-WAF-Spam-Score) -m found
+        acl has_client_ip req.hdr(X-WAF-Client-IP) -m found
 
         # WAF mode check - only block when in blocking or strict mode
         # In monitoring/passthrough mode, HAProxy should track but not block
         acl waf_should_block req.hdr(X-WAF-Mode) -m str blocking strict
 
         # High spam score (blocked at HAProxy level)
-        acl spam_score_high req.hdr(X-Spam-Score) -m int ge 80
+        acl spam_score_high req.hdr(X-WAF-Spam-Score) -m int ge 80
 
         # Already blocked by OpenResty
         acl blocked_by_openresty req.hdr(X-Blocked) -m str true
@@ -82,13 +82,13 @@ data:
         #-----------------------------------------------------------------
 
         # Track form hash submissions globally (always, for duplicate detection)
-        http-request track-sc0 req.hdr(X-Form-Hash) table st_form_hashes if has_form_hash
+        http-request track-sc0 req.hdr(X-WAF-Form-Hash) table st_form_hashes if has_form_hash
 
         # Track client IP submissions (only when rate limiting is enabled for this request)
-        http-request track-sc1 req.hdr(X-Client-IP) table st_client_ips if has_client_ip rate_limit_enabled
+        http-request track-sc1 req.hdr(X-WAF-Client-IP) table st_client_ips if has_client_ip rate_limit_enabled
 
         # Track spam scores per IP (always, for abuse tracking)
-        http-request track-sc2 req.hdr(X-Client-IP) table st_spam_scores if has_client_ip
+        http-request track-sc2 req.hdr(X-WAF-Client-IP) table st_spam_scores if has_client_ip
 
         #-----------------------------------------------------------------
         # Stick-table based blocking rules (Stage 1)
@@ -126,7 +126,7 @@ data:
         http-request sc-inc-gpc0(0) if has_form_hash
 
         # Add spam score to IP's cumulative score
-        http-request set-var(txn.spam_score) req.hdr(X-Spam-Score) if has_spam_score
+        http-request set-var(txn.spam_score) req.hdr(X-WAF-Spam-Score) if has_spam_score
         # Note: GPC increment is by 1, for weighted scoring we'd use a map
 
         #-----------------------------------------------------------------
@@ -153,7 +153,7 @@ data:
         bind abns@ft_fingerprint accept-proxy
 
         # ACL for fingerprint header
-        acl has_fingerprint req.hdr(X-Submission-Fingerprint) -m found
+        acl has_fingerprint req.hdr(X-WAF-Submission-Fingerprint) -m found
         acl waf_should_block req.hdr(X-WAF-Mode) -m str blocking strict
 
         #-----------------------------------------------------------------
@@ -161,7 +161,7 @@ data:
         #-----------------------------------------------------------------
 
         # Track submission fingerprints (for coordinated attack detection)
-        http-request track-sc0 req.hdr(X-Submission-Fingerprint) table st_fingerprints if has_fingerprint
+        http-request track-sc0 req.hdr(X-WAF-Submission-Fingerprint) table st_fingerprints if has_fingerprint
 
         #-----------------------------------------------------------------
         # Fingerprint-based blocking

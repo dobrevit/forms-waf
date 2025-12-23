@@ -38,6 +38,42 @@ local function get_fingerprint_profiles()
     return fingerprint_profiles
 end
 
+-- Lazy load defense_profiles_store to avoid circular dependency
+local defense_profiles_store = nil
+local function get_defense_profiles_store()
+    if not defense_profiles_store then
+        defense_profiles_store = require "defense_profiles_store"
+    end
+    return defense_profiles_store
+end
+
+-- Lazy load defense_profiles_builtins
+local defense_profiles_builtins = nil
+local function get_defense_profiles_builtins()
+    if not defense_profiles_builtins then
+        defense_profiles_builtins = require "defense_profiles_builtins"
+    end
+    return defense_profiles_builtins
+end
+
+-- Lazy load attack_signatures_store
+local attack_signatures_store = nil
+local function get_attack_signatures_store()
+    if not attack_signatures_store then
+        attack_signatures_store = require "attack_signatures_store"
+    end
+    return attack_signatures_store
+end
+
+-- Lazy load attack_signatures_builtins
+local attack_signatures_builtins = nil
+local function get_attack_signatures_builtins()
+    if not attack_signatures_builtins then
+        attack_signatures_builtins = require "attack_signatures_builtins"
+    end
+    return attack_signatures_builtins
+end
+
 -- Configuration
 local REDIS_HOST = os.getenv("REDIS_HOST") or "redis"
 local REDIS_PORT = tonumber(os.getenv("REDIS_PORT")) or 6379
@@ -80,6 +116,15 @@ local KEYS = {
     fingerprint_profiles_index = "waf:fingerprint:profiles:index",
     fingerprint_profiles_config_prefix = "waf:fingerprint:profiles:config:",
     fingerprint_profiles_builtin = "waf:fingerprint:profiles:builtin",
+    -- Defense profile keys
+    defense_profiles_index = "waf:defense_profiles:index",
+    defense_profiles_config_prefix = "waf:defense_profiles:config:",
+    defense_profiles_builtin = "waf:defense_profiles:builtin",
+    -- Attack signature keys
+    attack_signatures_index = "waf:attack_signatures:index",
+    attack_signatures_config_prefix = "waf:attack_signatures:config:",
+    attack_signatures_builtin = "waf:attack_signatures:builtin",
+    attack_signatures_active = "waf:attack_signatures:active",
 }
 
 -- Shared dictionaries
@@ -602,10 +647,27 @@ end
 
 -- Sync all vhost-specific endpoint data for a single vhost
 local function sync_vhost_endpoints(red, vhost_id)
-    sync_vhost_endpoint_index(red, vhost_id)
+    -- Get endpoint IDs from the vhost-specific index
+    local endpoint_ids = sync_vhost_endpoint_index(red, vhost_id)
+
+    -- Sync path mappings
     sync_vhost_exact_paths(red, vhost_id)
     sync_vhost_prefix_patterns(red, vhost_id)
     sync_vhost_regex_patterns(red, vhost_id)
+
+    -- Sync endpoint configs for vhost-specific endpoints
+    -- Note: configs are stored globally (waf:endpoints:config:*) but need to be cached
+    local synced_count = 0
+    for _, endpoint_id in ipairs(endpoint_ids) do
+        local config = sync_endpoint_config(red, endpoint_id)
+        if config then
+            synced_count = synced_count + 1
+        end
+    end
+
+    if synced_count > 0 then
+        ngx.log(ngx.DEBUG, "Synced ", synced_count, " vhost-specific endpoint configs for ", vhost_id)
+    end
 end
 
 -- Sync all vhost-specific endpoints for all vhosts
@@ -909,6 +971,107 @@ local function sync_fingerprint_profiles(red)
     ngx.log(ngx.DEBUG, "Synced ", synced_count, " fingerprint profiles")
 end
 
+-- ============================================================================
+-- Defense Profile Sync Functions
+-- ============================================================================
+
+-- Sync all defense profiles from Redis
+local function sync_defense_profiles(red)
+    -- Get all profile IDs from sorted set (ordered by priority)
+    local profile_ids, err = red:zrange(KEYS.defense_profiles_index, 0, -1)
+    if not profile_ids then
+        ngx.log(ngx.DEBUG, "Failed to get defense profiles index: ", err)
+        return
+    end
+
+    local synced_count = 0
+
+    if type(profile_ids) == "table" then
+        for _, profile_id in ipairs(profile_ids) do
+            local config_key = KEYS.defense_profiles_config_prefix .. profile_id
+            local config_json, get_err = red:get(config_key)
+
+            if config_json and config_json ~= ngx.null then
+                local config = cjson.decode(config_json)
+                if config then
+                    -- Cache profile in shared dict
+                    if config_cache then
+                        config_cache:set("defense_profile:" .. profile_id, config_json, 120)
+                    end
+                    synced_count = synced_count + 1
+                end
+            end
+        end
+
+        -- Cache the index of enabled profiles
+        local enabled_ids = {}
+        for _, profile_id in ipairs(profile_ids) do
+            local config_key = KEYS.defense_profiles_config_prefix .. profile_id
+            local config_json = red:get(config_key)
+            if config_json and config_json ~= ngx.null then
+                local config = cjson.decode(config_json)
+                if config and config.enabled then
+                    table.insert(enabled_ids, profile_id)
+                end
+            end
+        end
+
+        if config_cache then
+            config_cache:set("defense_profiles:enabled", cjson.encode(enabled_ids), 120)
+            config_cache:set("defense_profiles:index", cjson.encode(profile_ids), 120)
+        end
+    end
+
+    ngx.log(ngx.DEBUG, "Synced ", synced_count, " defense profiles")
+end
+
+-- Sync all attack signatures from Redis
+local function sync_attack_signatures(red)
+    -- Get all signature IDs from sorted set (ordered by priority)
+    local signature_ids, err = red:zrange(KEYS.attack_signatures_index, 0, -1)
+    if not signature_ids then
+        ngx.log(ngx.DEBUG, "Failed to get attack signatures index: ", err)
+        return
+    end
+
+    local synced_count = 0
+
+    if type(signature_ids) == "table" then
+        for _, signature_id in ipairs(signature_ids) do
+            local config_key = KEYS.attack_signatures_config_prefix .. signature_id
+            local config_json, get_err = red:get(config_key)
+
+            if config_json and config_json ~= ngx.null then
+                -- Cache signature in shared dict
+                if config_cache then
+                    config_cache:set("attack_signature:" .. signature_id, config_json, 120)
+                end
+                synced_count = synced_count + 1
+            end
+        end
+
+        -- Cache the index of enabled signatures
+        local enabled_ids = {}
+        for _, signature_id in ipairs(signature_ids) do
+            local config_key = KEYS.attack_signatures_config_prefix .. signature_id
+            local config_json = red:get(config_key)
+            if config_json and config_json ~= ngx.null then
+                local config = cjson.decode(config_json)
+                if config and config.enabled then
+                    table.insert(enabled_ids, signature_id)
+                end
+            end
+        end
+
+        if config_cache then
+            config_cache:set("attack_signatures:enabled", cjson.encode(enabled_ids), 120)
+            config_cache:set("attack_signatures:index", cjson.encode(signature_ids), 120)
+        end
+    end
+
+    ngx.log(ngx.DEBUG, "Synced ", synced_count, " attack signatures")
+end
+
 -- Sync webhook configuration
 local function sync_webhooks(red)
     local config_str = red:get("waf:webhooks:config")
@@ -952,6 +1115,12 @@ local function do_sync()
 
     -- Sync fingerprint profiles
     sync_fingerprint_profiles(red)
+
+    -- Sync defense profiles
+    sync_defense_profiles(red)
+
+    -- Sync attack signatures
+    sync_attack_signatures(red)
 
     -- Sync webhook configuration
     sync_webhooks(red)
@@ -1334,6 +1503,104 @@ function _M.initialize_defaults()
             red:sadd(KEYS.fingerprint_profiles_builtin, profile.id)
         end
         table.insert(initialized, "fingerprint_profiles")
+    end
+
+    -- Initialize built-in defense profiles if none exist OR update if version changed
+    local dp_builtins = get_defense_profiles_builtins()
+    local defense_profile_count = red:zcard(KEYS.defense_profiles_index)
+    local builtin_version_key = "waf:defense_profiles:builtin_version"
+    local current_version = tonumber(red:get(builtin_version_key)) or 0
+    local code_version = dp_builtins.VERSION or 1
+
+    if not defense_profile_count or defense_profile_count == 0 then
+        -- Fresh install: seed all profiles
+        ngx.log(ngx.INFO, "Initializing built-in defense profiles in Redis")
+        for _, profile in ipairs(dp_builtins.PROFILES) do
+            local profile_json = cjson.encode(profile)
+            red:set(KEYS.defense_profiles_config_prefix .. profile.id, profile_json)
+            red:zadd(KEYS.defense_profiles_index, profile.priority, profile.id)
+            red:sadd(KEYS.defense_profiles_builtin, profile.id)
+        end
+        red:set(builtin_version_key, code_version)
+        table.insert(initialized, "defense_profiles")
+    elseif current_version < code_version then
+        -- Version mismatch: update built-in profiles to latest version
+        ngx.log(ngx.INFO, "Updating built-in defense profiles from v", current_version, " to v", code_version)
+        local builtin_ids = red:smembers(KEYS.defense_profiles_builtin) or {}
+        local builtin_set = {}
+        for _, id in ipairs(builtin_ids) do
+            builtin_set[id] = true
+        end
+
+        for _, profile in ipairs(dp_builtins.PROFILES) do
+            -- Only update profiles that are marked as built-in in Redis
+            -- This preserves any user modifications to custom profiles
+            if builtin_set[profile.id] or not red:exists(KEYS.defense_profiles_config_prefix .. profile.id) then
+                local profile_json = cjson.encode(profile)
+                red:set(KEYS.defense_profiles_config_prefix .. profile.id, profile_json)
+                red:zadd(KEYS.defense_profiles_index, profile.priority, profile.id)
+                red:sadd(KEYS.defense_profiles_builtin, profile.id)
+                ngx.log(ngx.DEBUG, "Updated built-in profile: ", profile.id)
+            end
+        end
+        red:set(builtin_version_key, code_version)
+        table.insert(initialized, "defense_profiles_updated")
+    end
+
+    -- Initialize built-in attack signatures if none exist OR update if version changed
+    local as_builtins = get_attack_signatures_builtins()
+    local attack_signature_count = red:zcard(KEYS.attack_signatures_index)
+    local as_builtin_version_key = "waf:attack_signatures:builtin_version"
+    local as_current_version = tonumber(red:get(as_builtin_version_key)) or 0
+    local as_code_version = as_builtins.BUILTIN_VERSION or 1
+
+    if not attack_signature_count or attack_signature_count == 0 then
+        -- Fresh install: seed all signatures
+        ngx.log(ngx.INFO, "Initializing built-in attack signatures in Redis")
+        for _, signature in ipairs(as_builtins.SIGNATURES) do
+            signature.created_at = ngx.utctime()
+            signature.updated_at = signature.created_at
+            local signature_json = cjson.encode(signature)
+            red:set(KEYS.attack_signatures_config_prefix .. signature.id, signature_json)
+            red:zadd(KEYS.attack_signatures_index, signature.priority or 100, signature.id)
+            red:sadd(KEYS.attack_signatures_builtin, signature.id)
+            if signature.enabled ~= false then
+                red:sadd(KEYS.attack_signatures_active, signature.id)
+            end
+            -- Add to tag indices
+            if signature.tags then
+                for _, tag in ipairs(signature.tags) do
+                    red:sadd("waf:attack_signatures:by_tag:" .. tag, signature.id)
+                end
+            end
+        end
+        red:set(as_builtin_version_key, as_code_version)
+        table.insert(initialized, "attack_signatures")
+    elseif as_current_version < as_code_version then
+        -- Version mismatch: update built-in signatures to latest version
+        ngx.log(ngx.INFO, "Updating built-in attack signatures from v", as_current_version, " to v", as_code_version)
+        local as_builtin_ids = red:smembers(KEYS.attack_signatures_builtin) or {}
+        local as_builtin_set = {}
+        for _, id in ipairs(as_builtin_ids) do
+            as_builtin_set[id] = true
+        end
+
+        for _, signature in ipairs(as_builtins.SIGNATURES) do
+            -- Only update signatures that are marked as built-in in Redis
+            if as_builtin_set[signature.id] or red:exists(KEYS.attack_signatures_config_prefix .. signature.id) == 0 then
+                signature.updated_at = ngx.utctime()
+                local signature_json = cjson.encode(signature)
+                red:set(KEYS.attack_signatures_config_prefix .. signature.id, signature_json)
+                red:zadd(KEYS.attack_signatures_index, signature.priority or 100, signature.id)
+                red:sadd(KEYS.attack_signatures_builtin, signature.id)
+                if signature.enabled ~= false then
+                    red:sadd(KEYS.attack_signatures_active, signature.id)
+                end
+                ngx.log(ngx.DEBUG, "Updated built-in attack signature: ", signature.id)
+            end
+        end
+        red:set(as_builtin_version_key, as_code_version)
+        table.insert(initialized, "attack_signatures_updated")
     end
 
     close_redis(red)
