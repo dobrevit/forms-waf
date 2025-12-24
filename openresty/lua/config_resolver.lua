@@ -356,7 +356,9 @@ function _M.resolve(endpoint_config)
                 requests_per_minute = global_thresholds.ip_rate_limit or 30
             },
             fields = deep_copy(DEFAULT_ENDPOINT_CONFIG.fields),
-            actions = deep_copy(DEFAULT_ENDPOINT_CONFIG.actions)
+            actions = deep_copy(DEFAULT_ENDPOINT_CONFIG.actions),
+            fingerprint_profiles = nil,  -- No profile attachment - use defaults
+            defense_profiles = nil  -- No profile attachment - use defaults (will fall back to legacy)
         }
     end
 
@@ -381,6 +383,8 @@ function _M.resolve(endpoint_config)
         fields = merge_fields(endpoint_config.fields),
         actions = merge_actions(endpoint_config.actions),
         security = endpoint_config.security,  -- Pass through security settings (honeypot, disposable email, etc.)
+        fingerprint_profiles = endpoint_config.fingerprint_profiles,  -- Pass through fingerprint profile attachment
+        defense_profiles = endpoint_config.defense_profiles,  -- Pass through defense profile attachment
         metadata = endpoint_config.metadata
     }
 

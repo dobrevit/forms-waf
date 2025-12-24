@@ -1,4 +1,4 @@
-import type { Endpoint, Vhost, Thresholds, CaptchaProvider, FingerprintProfile, LearnedField } from '@/api/types'
+import type { Endpoint, Vhost, Thresholds, CaptchaProvider, FingerprintProfile, DefenseProfile, LearnedField, AttackSignature } from '@/api/types'
 
 export interface EndpointTabProps {
   formData: Partial<Endpoint>
@@ -29,6 +29,10 @@ export interface FingerprintingTabProps extends EndpointTabProps {
   availableProfiles: FingerprintProfile[]
 }
 
+export interface DefenseProfilesTabProps extends EndpointTabProps {
+  availableProfiles: DefenseProfile[]
+}
+
 export interface LearnedFieldsTabProps extends EndpointTabProps {
   learnedFields: LearnedField[]
   learnedFieldsLoading: boolean
@@ -43,4 +47,9 @@ export interface LearnedFieldsTabProps extends EndpointTabProps {
   addToIgnoreFields: (fieldName: string) => void
   addToExpectedFields: (fieldName: string) => void
   addToHoneypotFields: (fieldName: string) => void
+}
+
+export interface DefenseLinesTabProps extends EndpointTabProps {
+  availableProfiles: DefenseProfile[]
+  availableSignatures: AttackSignature[]
 }

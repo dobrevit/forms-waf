@@ -241,6 +241,55 @@ redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:endpoints:config:webhooks" 
 redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:index" 20 "webhooks"
 redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:paths:prefix" 20 "/webhooks/|*|webhooks"
 
+# Example 5: WordPress Login with Defense Lines
+# This endpoint uses defense profiles and attack signatures for layered protection
+WP_LOGIN_ENDPOINT='{
+  "id": "wp-login",
+  "name": "WordPress Login Protection",
+  "description": "WordPress login with defense lines for brute force and credential stuffing protection",
+  "enabled": true,
+  "mode": "blocking",
+  "priority": 100,
+  "matching": {
+    "paths": ["/wp-login.php", "/wp-admin/"],
+    "methods": ["GET", "POST"],
+    "content_types": ["application/x-www-form-urlencoded", "multipart/form-data"]
+  },
+  "thresholds": {
+    "spam_score_block": 50,
+    "spam_score_flag": 25,
+    "ip_rate_limit": 10,
+    "ip_daily_limit": 100
+  },
+  "rate_limiting": {
+    "enabled": true,
+    "requests_per_minute": 10,
+    "requests_per_day": 100
+  },
+  "defense_lines": [
+    {
+      "profile_id": "builtin_strict",
+      "signature_ids": ["builtin_wordpress_login", "builtin_credential_stuffing"],
+      "enabled": true
+    }
+  ],
+  "fields": {
+    "required": [],
+    "honeypot": ["website", "url", "homepage"]
+  },
+  "security": {
+    "honeypot_action": "block",
+    "honeypot_score": 100
+  }
+}'
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:endpoints:config:wp-login" "$WP_LOGIN_ENDPOINT"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:index" 100 "wp-login"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:endpoints:paths:exact" "/wp-login.php:GET" "wp-login"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:endpoints:paths:exact" "/wp-login.php:POST" "wp-login"
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:endpoints:paths:prefix" 100 "/wp-admin/|*|wp-login"
+
+echo "Loaded wp-login endpoint with defense lines"
+
 echo "Loaded example endpoint configurations"
 
 # ============================================================================

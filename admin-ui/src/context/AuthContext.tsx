@@ -23,6 +23,9 @@ const DEFAULT_PERMISSIONS: Record<UserRole, RolePermissions> = {
     status: ['read'],
     hashes: ['read', 'create'],
     whitelist: ['read', 'create'],
+    fingerprint_profiles: ['create', 'read', 'update', 'delete', 'test', 'reset'],
+    defense_profiles: ['create', 'read', 'update', 'delete', 'reset'],
+    attack_signatures: ['create', 'read', 'update', 'delete', 'reset'],
   },
   operator: {
     vhosts: ['read', 'update', 'enable', 'disable'],
@@ -40,6 +43,9 @@ const DEFAULT_PERMISSIONS: Record<UserRole, RolePermissions> = {
     status: ['read'],
     hashes: ['read', 'create'],
     whitelist: ['read'],
+    fingerprint_profiles: ['read', 'update', 'test'],
+    defense_profiles: ['read', 'update'],
+    attack_signatures: ['read', 'update'],
   },
   viewer: {
     vhosts: ['read'],
@@ -56,6 +62,9 @@ const DEFAULT_PERMISSIONS: Record<UserRole, RolePermissions> = {
     status: ['read'],
     hashes: ['read'],
     whitelist: ['read'],
+    fingerprint_profiles: ['read'],
+    defense_profiles: ['read'],
+    attack_signatures: ['read'],
   },
 }
 

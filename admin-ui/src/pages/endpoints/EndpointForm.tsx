@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { endpointsApi, vhostsApi, configApi, learningApi, captchaApi, fingerprintProfilesApi, LearnedField } from '@/api/client'
+import { endpointsApi, vhostsApi, configApi, learningApi, captchaApi, fingerprintProfilesApi, defenseProfilesApi, attackSignaturesApi, LearnedField } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowLeft, Save, ShieldCheck, ShieldAlert, BookOpen, Fingerprint, Check } from 'lucide-react'
-import type { Endpoint, Vhost, Thresholds, CaptchaProvider, FingerprintProfile } from '@/api/types'
+import { ArrowLeft, Save, ShieldCheck, ShieldAlert, BookOpen, Fingerprint, Check, Shield, Layers } from 'lucide-react'
+import type { Endpoint, Vhost, Thresholds, CaptchaProvider, FingerprintProfile, DefenseProfile, AttackSignature } from '@/api/types'
+
+// Helper to ensure arrays (Lua JSON may serialize empty tables as {} instead of [])
+const ensureArray = <T,>(value: unknown): T[] => {
+  if (Array.isArray(value)) return value
+  return []
+}
 import {
   GeneralTab,
   MatchingTab,
@@ -16,6 +22,8 @@ import {
   CaptchaTab,
   SecurityTab,
   FingerprintingTab,
+  DefenseProfilesTab,
+  DefenseLinesTab,
   LearnedFieldsTab,
 } from './tabs'
 
@@ -140,7 +148,21 @@ export function EndpointForm() {
     queryKey: ['fingerprint-profiles'],
     queryFn: fingerprintProfilesApi.list,
   })
-  const availableProfiles: FingerprintProfile[] = fingerprintProfilesData?.profiles || []
+  const availableFingerprintProfiles: FingerprintProfile[] = ensureArray<FingerprintProfile>(fingerprintProfilesData?.profiles)
+
+  // Fetch defense profiles
+  const { data: defenseProfilesData } = useQuery({
+    queryKey: ['defense-profiles'],
+    queryFn: defenseProfilesApi.list,
+  })
+  const availableDefenseProfiles: DefenseProfile[] = ensureArray<DefenseProfile>(defenseProfilesData?.profiles)
+
+  // Fetch attack signatures
+  const { data: attackSignaturesData } = useQuery({
+    queryKey: ['attack-signatures'],
+    queryFn: () => attackSignaturesApi.list({ enabled: true }),
+  })
+  const availableAttackSignatures: AttackSignature[] = ensureArray<AttackSignature>(attackSignaturesData?.signatures)
 
   useEffect(() => {
     const endpoint = (data as { endpoint?: Endpoint } | undefined)?.endpoint || data as Endpoint | undefined
@@ -344,6 +366,14 @@ export function EndpointForm() {
               <Fingerprint className="h-3 w-3" />
               Fingerprinting
             </TabsTrigger>
+            <TabsTrigger value="defense-profiles" className="flex items-center gap-1">
+              <Shield className="h-3 w-3" />
+              Defense Profiles
+            </TabsTrigger>
+            <TabsTrigger value="defense-lines" className="flex items-center gap-1">
+              <Layers className="h-3 w-3" />
+              Defense Lines
+            </TabsTrigger>
             {!isNew && (
               <TabsTrigger value="learned-fields" className="flex items-center gap-1">
                 <BookOpen className="h-3 w-3" />
@@ -424,7 +454,26 @@ export function EndpointForm() {
               formData={formData}
               setFormData={setFormData}
               isEdit={!isNew}
-              availableProfiles={availableProfiles}
+              availableProfiles={availableFingerprintProfiles}
+            />
+          </TabsContent>
+
+          <TabsContent value="defense-profiles">
+            <DefenseProfilesTab
+              formData={formData}
+              setFormData={setFormData}
+              isEdit={!isNew}
+              availableProfiles={availableDefenseProfiles}
+            />
+          </TabsContent>
+
+          <TabsContent value="defense-lines">
+            <DefenseLinesTab
+              formData={formData}
+              setFormData={setFormData}
+              isEdit={!isNew}
+              availableProfiles={availableDefenseProfiles}
+              availableSignatures={availableAttackSignatures}
             />
           </TabsContent>
 

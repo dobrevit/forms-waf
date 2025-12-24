@@ -47,6 +47,17 @@ Client → Ingress → OpenResty → HAProxy → Backend
    - Visual management of all WAF features
    - Role-based authentication
 
+### Cluster Coordination
+
+Multi-instance deployments use Redis-based coordination:
+
+- **Instance Registration** - Each pod registers with heartbeat (15s interval)
+- **Leader Election** - Single leader via Redis SET NX PX
+- **Global Metrics** - Leader aggregates metrics from all instances
+- **Automatic Cleanup** - Stale instances removed after 5 minutes
+
+See [Cluster Coordination Guide](docs/CLUSTER_COORDINATION.md) for details.
+
 ---
 
 ## Quick Start
@@ -146,6 +157,16 @@ Creates client fingerprints based on:
 - Request characteristics
 
 Used for cross-request correlation and flood detection.
+
+#### ML-Based Behavioral Tracking
+Advanced statistical analysis of form submission patterns:
+- Flow-based monitoring across multi-page forms
+- Time-series aggregation (hour/day/week/month/year)
+- Duration histograms for bot detection
+- Baseline calculation with z-score anomaly detection
+- HyperLogLog for unique IP counting
+
+See [Behavioral Tracking Guide](docs/BEHAVIORAL_TRACKING.md) for details.
 
 ### 3. Threat Intelligence
 
@@ -273,10 +294,16 @@ Available at `/metrics` endpoint:
 
 | Metric | Description |
 |--------|-------------|
-| `waf_requests_total` | Total requests by vhost, endpoint, result |
-| `waf_spam_score_histogram` | Distribution of spam scores |
-| `waf_blocked_total` | Blocked requests by reason |
-| `waf_captcha_challenges_total` | CAPTCHA challenges issued |
+| `waf_requests_total` | Total requests by vhost, endpoint |
+| `waf_requests_blocked_total` | Blocked requests |
+| `waf_requests_monitored_total` | Monitored (would-block) requests |
+| `waf_requests_allowed_total` | Allowed requests |
+| `waf_spam_score_total` | Sum of spam scores |
+| `waf_form_submissions_total` | Form submissions processed |
+| `waf_shared_dict_bytes` | Shared dictionary memory usage |
+
+**Global Metrics Aggregation:**
+In multi-instance deployments, the leader aggregates metrics from all instances. The `/api/metrics` endpoint returns both local and global metrics side-by-side. See [Metrics Aggregation Guide](docs/METRICS_AGGREGATION.md).
 
 ### 6. Multi-tenancy
 
@@ -353,8 +380,37 @@ Automatic field discovery from submissions:
 | `REDIS_HOST` | redis | Redis hostname |
 | `REDIS_PORT` | 6379 | Redis port |
 | `REDIS_PASSWORD` | - | Redis password (optional) |
+| `REDIS_DB` | 0 | Redis database number |
+| `HOSTNAME` | - | Instance ID for cluster coordination |
 | `WAF_ADMIN_AUTH` | true | Require authentication for Admin API |
 | `WAF_EXPOSE_HEADERS` | false | Expose debug headers in responses |
+
+### Admin User Seeding
+
+The WAF automatically seeds a default admin user on startup when environment variables are configured:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `WAF_ADMIN_SALT` | Yes | - | 32+ character random salt for password hashing |
+| `WAF_ADMIN_PASSWORD` | No | changeme | Initial admin password |
+
+**Helm Configuration:**
+```yaml
+openresty:
+  adminSeed:
+    enabled: true
+    salt:
+      existingSecret: ""  # Use existing secret in production
+      value: ""           # Or provide salt directly (32+ chars)
+    password:
+      existingSecret: ""
+      value: "changeme"   # Change immediately after deployment
+```
+
+**Security Notes:**
+- Change default password immediately after deployment
+- Use `existingSecret` in production for salt management
+- Admin user is only created if not already present in Redis
 
 ---
 
@@ -458,20 +514,48 @@ forms-waf/
 ├── openresty/
 │   ├── Dockerfile
 │   └── lua/
-│       ├── waf_handler.lua       # Main WAF logic
-│       ├── timing_token.lua      # Form timing detection
-│       ├── geoip.lua             # GeoIP restrictions
-│       ├── ip_reputation.lua     # IP reputation checks
-│       ├── captcha_handler.lua   # CAPTCHA integration
-│       ├── webhooks.lua          # Webhook notifications
-│       ├── honeypot.lua          # Honeypot detection
-│       ├── disposable_domains.lua # Disposable email detection
-│       ├── field_learner.lua     # Field learning system
-│       └── metrics.lua           # Prometheus metrics
+│       ├── waf_handler.lua         # Main WAF orchestrator (1100+ lines)
+│       ├── form_parser.lua         # Multipart/JSON/urlencoded parsing
+│       ├── content_hasher.lua      # SHA256 content hashing
+│       ├── keyword_filter.lua      # Pattern and keyword scanning
+│       ├── vhost_resolver.lua      # 3-level config hierarchy
+│       ├── vhost_matcher.lua       # Hostname matching
+│       ├── endpoint_matcher.lua    # Path/method matching
+│       ├── behavioral_tracker.lua  # ML-based anomaly detection
+│       ├── instance_coordinator.lua # Leader election and cluster coordination
+│       ├── metrics.lua             # Prometheus metrics + global aggregation
+│       ├── redis_sync.lua          # Bidirectional Redis sync
+│       ├── timing_token.lua        # Form timing detection
+│       ├── geoip.lua               # GeoIP restrictions
+│       ├── ip_reputation.lua       # IP reputation checks
+│       ├── captcha_handler.lua     # CAPTCHA integration
+│       ├── captcha_providers.lua   # Provider implementations
+│       ├── webhooks.lua            # Webhook notifications
+│       ├── field_learner.lua       # Field learning system
+│       ├── admin_auth.lua          # Session authentication
+│       ├── rbac.lua                # Role-based access control
+│       ├── sso_ldap.lua            # LDAP SSO integration
+│       ├── sso_oidc.lua            # OpenID Connect integration
+│       └── api_handlers/           # 18 modular API handlers
+│           ├── system.lua          # /status, /metrics, /sync
+│           ├── users.lua           # User management
+│           ├── vhosts.lua          # Virtual host CRUD
+│           ├── endpoints.lua       # Endpoint configuration
+│           ├── keywords.lua        # Keyword management
+│           ├── behavioral.lua      # Behavioral tracking API
+│           ├── cluster.lua         # Cluster status API
+│           └── ...                 # 11 more handlers
 ├── haproxy/
 │   ├── Dockerfile
 │   └── haproxy.cfg
 ├── helm/forms-waf/           # Helm chart
+├── docs/                     # Documentation
+│   ├── ARCHITECTURE.md       # Technical architecture
+│   ├── RBAC.md              # Role-based access control
+│   ├── BEHAVIORAL_TRACKING.md # ML anomaly detection
+│   ├── CLUSTER_COORDINATION.md # Leader election
+│   ├── METRICS_AGGREGATION.md  # Global metrics
+│   └── SSO_*.md             # SSO integration guides
 └── scripts/
     ├── test-waf.sh
     └── load-test.sh

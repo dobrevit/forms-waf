@@ -179,6 +179,24 @@ Global Defaults
     "notify_webhook": null
   },
 
+  "defense_profiles": {
+    "enabled": true,
+    "profiles": [
+      {"id": "balanced-web", "priority": 100, "weight": 1.0}
+    ],
+    "aggregation": "OR",
+    "score_aggregation": "SUM",
+    "short_circuit": true
+  },
+
+  "defense_lines": [
+    {
+      "enabled": true,
+      "profile_id": "balanced-web",
+      "signature_ids": ["builtin_contact_form_spam"]
+    }
+  ],
+
   "metadata": {
     "group": "public-forms",
     "tags": ["contact", "high-risk"],
@@ -187,6 +205,77 @@ Global Defaults
   }
 }
 ```
+
+### Defense Profiles Configuration
+
+The `defense_profiles` section configures which defense profiles to execute for this endpoint:
+
+```json
+{
+  "defense_profiles": {
+    "enabled": true,
+    "profiles": [
+      {"id": "balanced-web", "priority": 100, "weight": 1.0},
+      {"id": "strict-api", "priority": 50, "weight": 0.8}
+    ],
+    "aggregation": "OR",
+    "score_aggregation": "SUM",
+    "short_circuit": true
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | boolean | Enable/disable defense profile execution |
+| `profiles` | array | List of profiles to attach |
+| `profiles[].id` | string | Defense profile ID |
+| `profiles[].priority` | number | Execution order (lower = first) |
+| `profiles[].weight` | number | Weight for WEIGHTED_AVG aggregation (0-1) |
+| `aggregation` | string | Decision aggregation: `OR`, `AND`, `MAJORITY` |
+| `score_aggregation` | string | Score aggregation: `SUM`, `MAX`, `WEIGHTED_AVG` |
+| `short_circuit` | boolean | Stop after first blocking profile |
+
+**Aggregation Strategies:**
+
+| Strategy | Behavior |
+|----------|----------|
+| `OR` | Block if ANY profile blocks (default) |
+| `AND` | Block only if ALL profiles block |
+| `MAJORITY` | Block if >50% of profiles block |
+
+See [DEFENSE_PROFILES.md](DEFENSE_PROFILES.md) for complete profile documentation.
+
+### Defense Lines Configuration
+
+The `defense_lines` section combines profiles with attack signatures:
+
+```json
+{
+  "defense_lines": [
+    {
+      "enabled": true,
+      "profile_id": "balanced-web",
+      "signature_ids": ["builtin_contact_form_spam", "builtin_credential_stuffing"]
+    },
+    {
+      "enabled": true,
+      "profile_id": "strict-api",
+      "signature_ids": ["builtin_api_abuse"]
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | boolean | Enable/disable this defense line |
+| `profile_id` | string | Base profile to use |
+| `signature_ids` | array | Attack signatures to merge into profile |
+
+Defense lines run AFTER base profiles pass. If any line blocks, the request is blocked.
+
+See [ATTACK_SIGNATURES.md](ATTACK_SIGNATURES.md) for signature documentation.
 
 ### Processing Modes
 
@@ -437,9 +526,9 @@ frontend ft_waf
     acl endpoint_contact req.hdr(X-WAF-Endpoint) -m str contact-form
     acl endpoint_newsletter req.hdr(X-WAF-Endpoint) -m str newsletter
 
-    http-request track-sc0 req.hdr(X-Form-Hash) table st_form_hashes_contact \
+    http-request track-sc0 req.hdr(X-WAF-Form-Hash) table st_form_hashes_contact \
                  if endpoint_contact has_form_hash
-    http-request track-sc0 req.hdr(X-Form-Hash) table st_form_hashes_newsletter \
+    http-request track-sc0 req.hdr(X-WAF-Form-Hash) table st_form_hashes_newsletter \
                  if endpoint_newsletter has_form_hash
 ```
 

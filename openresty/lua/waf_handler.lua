@@ -25,6 +25,23 @@ local fingerprint_profiles = require "fingerprint_profiles"
 local header_consistency = require "header_consistency"
 local cjson = require "cjson.safe"
 
+-- Lazy-load defense profile multi-executor to avoid startup overhead
+local _multi_executor
+local _defense_mechanisms_loaded = false
+
+local function get_multi_executor()
+    -- Ensure defense mechanisms are registered on first use
+    if not _defense_mechanisms_loaded then
+        require "defense_mechanisms"
+        _defense_mechanisms_loaded = true
+    end
+
+    if not _multi_executor then
+        _multi_executor = require "defense_profile_multi_executor"
+    end
+    return _multi_executor
+end
+
 -- Structured audit logging for security events
 -- Outputs JSON formatted log entries for easy parsing by log aggregation tools
 local function audit_log(event_type, event_data)
@@ -297,7 +314,11 @@ function _M.process_request()
     -- Always set X-WAF-Debug header for HAProxy (even for non-form requests)
     ngx.req.set_header("X-WAF-Debug", expose_headers and "on" or "off")
 
-    -- Set context headers early (only if expose_waf_headers is enabled)
+    -- Always set vhost/endpoint headers as request headers for HAProxy routing
+    ngx.req.set_header("X-WAF-Vhost", summary.vhost_id or "")
+    ngx.req.set_header("X-WAF-Endpoint", summary.endpoint_id or "global")
+
+    -- Set context headers as response headers (only if expose_waf_headers is enabled)
     if expose_headers then
         ngx.header["X-WAF-Vhost"] = summary.vhost_id
         ngx.header["X-WAF-Vhost-Match"] = summary.vhost_match
@@ -454,13 +475,325 @@ function _M.process_request()
         return
     end
 
-    -- Initialize pre-form variables for early IP checks
-    local early_spam_score = 0
-    local early_spam_flags = {}
-    local early_blocked = false
-    local early_block_reason = nil
+    -- ========================================================================
+    -- DEFENSE PROFILE EXECUTION
+    -- All defense processing is now handled by the profile system
+    -- If no profiles configured, the "legacy" profile is used as default
+    -- ========================================================================
+    local defense_profiles_config = nil
+    local using_default_profile = false
 
-    -- GeoIP check (optional feature - gracefully degrades if not configured)
+    -- Check endpoint first, then vhost for defense_profiles config
+    if effective_config and effective_config.defense_profiles then
+        defense_profiles_config = effective_config.defense_profiles
+    elseif context.vhost_config and context.vhost_config.defense_profiles then
+        defense_profiles_config = context.vhost_config.defense_profiles
+    end
+
+    -- If no profiles configured or disabled, use legacy profile as default
+    if not defense_profiles_config or not defense_profiles_config.enabled or
+       not defense_profiles_config.profiles or #defense_profiles_config.profiles == 0 then
+        defense_profiles_config = {
+            enabled = true,
+            profiles = {
+                {id = "legacy", priority = 100, weight = 1}
+            },
+            aggregation = "OR",
+            score_aggregation = "SUM",
+            short_circuit = true
+        }
+        using_default_profile = true
+    end
+
+    -- Execute defense profiles (always runs - either configured or default legacy)
+    if defense_profiles_config.enabled then
+
+        local multi_executor = get_multi_executor()
+
+        -- Build request context for profile execution
+        local request_context = {
+            client_ip = client_ip,
+            host = host,
+            path = path,
+            method = method,
+            content_type = content_type,
+            user_agent = ngx.var.http_user_agent,
+            accept_language = ngx.var.http_accept_language,
+            accept_encoding = ngx.var.http_accept_encoding,
+            referer = ngx.var.http_referer,
+            -- Form data will be parsed later if needed by defense mechanisms
+            ngx_vars = ngx.var,
+            vhost_id = summary.vhost_id,
+            endpoint_id = summary.endpoint_id,
+            endpoint_config = effective_config,
+            vhost_config = context.vhost_config,
+            context = context,
+        }
+
+        -- Execute all configured profiles
+        local profile_result = multi_executor.execute(defense_profiles_config, request_context)
+
+        -- Log profile execution
+        ngx.log(ngx.INFO, string.format(
+            "DEFENSE_PROFILES: ip=%s host=%s path=%s vhost=%s endpoint=%s action=%s score=%d profiles=%d blocked_by=%s flags=%s time=%.2fms default=%s",
+            client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
+            profile_result.action, profile_result.score or 0,
+            profile_result.profiles_executed or 0,
+            profile_result.blocked_by and table.concat(profile_result.blocked_by, ",") or "none",
+            profile_result.flags and table.concat(profile_result.flags, ",") or "none",
+            profile_result.execution_time_ms or 0,
+            using_default_profile and "yes" or "no"
+        ))
+
+        -- Set debug headers if enabled
+        if expose_headers then
+            ngx.header["X-Defense-Profiles-Executed"] = tostring(profile_result.profiles_executed or 0)
+            ngx.header["X-Defense-Profiles-Score"] = tostring(profile_result.score or 0)
+            ngx.header["X-Defense-Profiles-Action"] = profile_result.action
+            ngx.header["X-Defense-Profiles-Default"] = using_default_profile and "true" or "false"
+            if profile_result.blocked_by and #profile_result.blocked_by > 0 then
+                ngx.header["X-Defense-Profiles-Blocked-By"] = table.concat(profile_result.blocked_by, ",")
+            end
+            if profile_result.flags and #profile_result.flags > 0 then
+                ngx.header["X-Defense-Profiles-Flags"] = table.concat(profile_result.flags, ",")
+            end
+        end
+
+        -- Handle profile result actions
+        if profile_result.action == "block" then
+            local should_block = vhost_resolver.should_block(context)
+
+            if should_block then
+                if expose_headers then
+                    ngx.header["X-Blocked"] = "true"
+                    ngx.header["X-Block-Reason"] = "defense_profile"
+                end
+
+                ngx.log(ngx.WARN, string.format(
+                    "BLOCKED_BY_PROFILE: ip=%s host=%s path=%s vhost=%s endpoint=%s blocked_by=%s score=%d",
+                    client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
+                    profile_result.blocked_by and table.concat(profile_result.blocked_by, ",") or "unknown",
+                    profile_result.score or 0
+                ))
+
+                audit_log("request_blocked_by_profile", {
+                    vhost_id = summary.vhost_id,
+                    endpoint_id = summary.endpoint_id,
+                    profiles_executed = profile_result.profiles_executed,
+                    blocked_by = profile_result.blocked_by,
+                    score = profile_result.score,
+                    flags = profile_result.flags,
+                })
+
+                metrics.record_request(summary.vhost_id, summary.endpoint_id, "blocked", profile_result.score or 0)
+
+                ngx.status = ngx.HTTP_FORBIDDEN
+                ngx.header["Content-Type"] = "application/json"
+                local error_response = { error = "Request blocked" }
+                if expose_headers then
+                    error_response.reason = "defense_profile"
+                    error_response.blocked_by = profile_result.blocked_by
+                end
+                ngx.say(cjson.encode(error_response))
+                return ngx.exit(ngx.HTTP_FORBIDDEN)
+            else
+                -- Monitoring mode - log but don't block
+                if expose_headers then
+                    ngx.header["X-WAF-Would-Block"] = "true"
+                    ngx.header["X-WAF-Block-Reason"] = "defense_profile"
+                end
+                ngx.log(ngx.WARN, string.format(
+                    "MONITORING (profile would block): ip=%s host=%s path=%s vhost=%s endpoint=%s blocked_by=%s score=%d",
+                    client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
+                    profile_result.blocked_by and table.concat(profile_result.blocked_by, ",") or "unknown",
+                    profile_result.score or 0
+                ))
+                metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", profile_result.score or 0)
+                return
+            end
+
+        elseif profile_result.action == "captcha" then
+            -- Serve CAPTCHA challenge
+            local captcha_config = captcha_handler.get_captcha_config(context)
+            if captcha_config and captcha_config.enabled then
+                if captcha_handler.has_valid_trust(context, client_ip) then
+                    -- User has solved CAPTCHA recently, allow through
+                    ngx.log(ngx.INFO, string.format(
+                        "CAPTCHA_TRUSTED (profile): ip=%s vhost=%s endpoint=%s",
+                        client_ip, summary.vhost_id, summary.endpoint_id or "global"
+                    ))
+                    metrics.record_request(summary.vhost_id, summary.endpoint_id, "captcha_trusted", profile_result.score or 0)
+                    -- Continue processing
+                else
+                    ngx.log(ngx.WARN, string.format(
+                        "CAPTCHA_CHALLENGE (profile): ip=%s vhost=%s endpoint=%s score=%d",
+                        client_ip, summary.vhost_id, summary.endpoint_id or "global",
+                        profile_result.score or 0
+                    ))
+                    metrics.record_request(summary.vhost_id, summary.endpoint_id, "captcha_challenged", profile_result.score or 0)
+                    return captcha_handler.serve_challenge(context, nil, "defense_profile", client_ip)
+                end
+            end
+
+        elseif profile_result.action == "tarpit" then
+            -- Delay the response (tarpit)
+            local delay = 5 -- default 5 seconds
+            if profile_result.action_config and profile_result.action_config.delay_seconds then
+                delay = profile_result.action_config.delay_seconds
+            end
+
+            ngx.log(ngx.WARN, string.format(
+                "TARPIT (profile): ip=%s vhost=%s endpoint=%s delay=%ds score=%d",
+                client_ip, summary.vhost_id, summary.endpoint_id or "global",
+                delay, profile_result.score or 0
+            ))
+
+            ngx.sleep(delay)
+
+            -- After tarpit, check if we should block
+            if profile_result.action_config and profile_result.action_config.then_action == "block" then
+                metrics.record_request(summary.vhost_id, summary.endpoint_id, "blocked", profile_result.score or 0)
+                ngx.status = ngx.HTTP_FORBIDDEN
+                ngx.header["Content-Type"] = "application/json"
+                ngx.say(cjson.encode({ error = "Request blocked" }))
+                return ngx.exit(ngx.HTTP_FORBIDDEN)
+            end
+
+        elseif profile_result.action == "flag" then
+            -- Flag action: add to spam score but allow through
+            -- Set headers for downstream processing
+            ngx.req.set_header("X-WAF-Spam-Score", tostring(profile_result.score or 0))
+            ngx.req.set_header("X-WAF-Spam-Flags", profile_result.flags and table.concat(profile_result.flags, ",") or "")
+            ngx.log(ngx.INFO, string.format(
+                "FLAGGED (profile): ip=%s vhost=%s endpoint=%s score=%d flags=%s",
+                client_ip, summary.vhost_id, summary.endpoint_id or "global",
+                profile_result.score or 0,
+                profile_result.flags and table.concat(profile_result.flags, ",") or "none"
+            ))
+
+        elseif profile_result.action == "monitor" then
+            -- Monitor only: log but don't affect processing
+            ngx.log(ngx.INFO, string.format(
+                "MONITOR (profile): ip=%s vhost=%s endpoint=%s score=%d flags=%s",
+                client_ip, summary.vhost_id, summary.endpoint_id or "global",
+                profile_result.score or 0,
+                profile_result.flags and table.concat(profile_result.flags, ",") or "none"
+            ))
+        end
+
+        -- Check if this is a "would block" scenario (action=block but mode=monitoring)
+        local is_monitoring_would_block = profile_result.action == "block" and not vhost_resolver.should_block(context)
+
+        -- If we get here with allow/flag/monitor OR monitoring-mode block, continue processing
+        -- but skip the legacy inline defense checks since profiles handled it
+        if profile_result.action == "allow" or profile_result.action == "flag" or
+           profile_result.action == "monitor" or is_monitoring_would_block then
+
+            -- Set would-block header for monitoring mode
+            if is_monitoring_would_block then
+                if expose_headers then
+                    ngx.header["X-WAF-Would-Block"] = "true"
+                    ngx.header["X-WAF-Block-Reason"] = "defense_profile"
+                end
+                ngx.log(ngx.WARN, string.format(
+                    "WOULD_BLOCK (profile): ip=%s host=%s path=%s vhost=%s endpoint=%s blocked_by=%s score=%d",
+                    client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
+                    profile_result.blocked_by and table.concat(profile_result.blocked_by, ",") or "unknown",
+                    profile_result.score or 0
+                ))
+                metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", profile_result.score or 0)
+            else
+                metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", profile_result.score or 0)
+            end
+
+            -- Set request headers for HAProxy with profile results
+            ngx.req.set_header("X-WAF-Spam-Score", tostring(profile_result.score or 0))
+            if profile_result.flags and #profile_result.flags > 0 then
+                ngx.req.set_header("X-WAF-Spam-Flags", table.concat(profile_result.flags, ","))
+            end
+            ngx.req.set_header("X-WAF-Client-IP", client_ip)
+
+            -- Set fingerprint headers from ngx.ctx (populated by defense mechanisms)
+            -- HAProxy handles counting based on these values
+            local fingerprint = ngx.ctx.fingerprint
+            local fingerprint_profile = ngx.ctx.fingerprint_profile
+            if fingerprint then
+                ngx.req.set_header("X-WAF-Form-Fingerprint", fingerprint)
+                if expose_headers then
+                    ngx.header["x-waf-fingerprint"] = fingerprint
+                end
+            end
+            if fingerprint_profile then
+                ngx.req.set_header("X-WAF-Fingerprint-Profile", fingerprint_profile)
+                if expose_headers then
+                    ngx.header["x-waf-fingerprint-profile"] = fingerprint_profile
+                end
+            end
+
+            -- Set content hash header from ngx.ctx (populated by defense mechanisms)
+            -- HAProxy handles counting based on this value
+            local form_hash = ngx.ctx.form_hash
+            if form_hash then
+                ngx.req.set_header("X-WAF-Form-Hash", form_hash)
+                if expose_headers then
+                    ngx.header["x-waf-hash"] = form_hash
+                end
+            end
+
+            -- Set geo info headers if available
+            local geo_info = ngx.ctx.geo_info
+            if geo_info and expose_headers then
+                ngx.header["X-GeoIP-Country"] = geo_info.country_code or "unknown"
+                ngx.header["X-GeoIP-ASN"] = tostring(geo_info.asn or "unknown")
+            end
+
+            ngx.log(ngx.INFO, string.format(
+                "PROCESSED (profile): ip=%s host=%s path=%s vhost=%s endpoint=%s action=%s score=%d fp=%s hash=%s",
+                client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
+                is_monitoring_would_block and "would_block" or profile_result.action,
+                profile_result.score or 0,
+                fingerprint or "none",
+                form_hash or "none"
+            ))
+
+            -- Profiles handled everything
+            return
+        end
+    end
+
+    -- This should never be reached - profile execution handles all cases
+    ngx.log(ngx.ERR, "UNEXPECTED: Defense profile execution did not return a result")
+    metrics.record_request(summary.vhost_id, summary.endpoint_id, "error", 0)
+end
+
+-- LEGACY INLINE DEFENSE CODE REMOVED
+-- All defense processing is now handled by the profile system
+-- The "legacy" profile provides backwards-compatible behavior
+
+-- Get routing decision for balancer phase
+-- Returns: {use_haproxy = bool, upstream_url = string|nil, haproxy_backend = string|nil}
+function _M.get_routing_decision()
+    local routing = ngx.ctx.waf_routing
+    if not routing then
+        return {use_haproxy = true}
+    end
+
+    return {
+        use_haproxy = routing.use_haproxy,
+        upstream = routing.upstream,
+        haproxy_backend = routing.haproxy_backend
+    }
+end
+
+-- Get vhost context (for use in other modules)
+function _M.get_context()
+    return ngx.ctx.waf_context
+end
+
+return _M
+
+-- BEGIN REMOVED LEGACY CODE (kept for reference)
+--[[
     -- Checks country restrictions, ASN blocking, and datacenter detection
     if geoip.is_available() then
         local geo_result = geoip.check_ip(client_ip, effective_config)
@@ -1019,16 +1352,16 @@ function _M.process_request()
 
     -- Set request headers for HAProxy (upstream) - always set for internal use
     if form_hash and form_hash ~= "empty" then
-        ngx.req.set_header("X-Form-Hash", form_hash)
+        ngx.req.set_header("X-WAF-Form-Hash", form_hash)
     end
-    ngx.req.set_header("X-Spam-Score", tostring(spam_score))
-    ngx.req.set_header("X-Spam-Flags", table.concat(spam_flags, ","))
-    ngx.req.set_header("X-Client-IP", client_ip)
+    ngx.req.set_header("X-WAF-Spam-Score", tostring(spam_score))
+    ngx.req.set_header("X-WAF-Spam-Flags", table.concat(spam_flags, ","))
+    ngx.req.set_header("X-WAF-Client-IP", client_ip)
     if submission_fingerprint then
-        ngx.req.set_header("X-Submission-Fingerprint", submission_fingerprint)
+        ngx.req.set_header("X-WAF-Submission-Fingerprint", submission_fingerprint)
     end
     if fingerprint_profile_id then
-        ngx.req.set_header("X-Fingerprint-Profile", fingerprint_profile_id)
+        ngx.req.set_header("X-WAF-Fingerprint-Profile", fingerprint_profile_id)
     end
     -- Override fingerprint rate limit if profile specifies one
     if fp_result.fingerprint_rate_limit then
@@ -1041,16 +1374,16 @@ function _M.process_request()
     -- Set response headers for debugging (only if expose_waf_headers is enabled)
     if expose_headers then
         if form_hash and form_hash ~= "empty" then
-            ngx.header["X-Form-Hash"] = form_hash
+            ngx.header["X-WAF-Form-Hash"] = form_hash
         end
-        ngx.header["X-Spam-Score"] = tostring(spam_score)
-        ngx.header["X-Spam-Flags"] = table.concat(spam_flags, ",")
-        ngx.header["X-Client-IP"] = client_ip
+        ngx.header["X-WAF-Spam-Score"] = tostring(spam_score)
+        ngx.header["X-WAF-Spam-Flags"] = table.concat(spam_flags, ",")
+        ngx.header["X-WAF-Client-IP"] = client_ip
         if submission_fingerprint then
-            ngx.header["X-Submission-Fingerprint"] = submission_fingerprint
+            ngx.header["X-WAF-Submission-Fingerprint"] = submission_fingerprint
         end
         if fingerprint_profile_id then
-            ngx.header["X-Fingerprint-Profile"] = fingerprint_profile_id
+            ngx.header["X-WAF-Fingerprint-Profile"] = fingerprint_profile_id
         end
 
         -- Always show blocked state and reason when debug headers enabled
@@ -1197,26 +1530,5 @@ function _M.process_request()
             client_ip
         )
     end
-end
-
--- Get routing decision for balancer phase
--- Returns: {use_haproxy = bool, upstream_url = string|nil, haproxy_backend = string|nil}
-function _M.get_routing_decision()
-    local routing = ngx.ctx.waf_routing
-    if not routing then
-        return {use_haproxy = true}
-    end
-
-    return {
-        use_haproxy = routing.use_haproxy,
-        upstream = routing.upstream,
-        haproxy_backend = routing.haproxy_backend
-    }
-end
-
--- Get vhost context (for use in other modules)
-function _M.get_context()
-    return ngx.ctx.waf_context
-end
-
-return _M
+--]]
+-- END REMOVED LEGACY CODE

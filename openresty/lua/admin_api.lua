@@ -27,6 +27,8 @@ local vhosts_handler = require "api_handlers.vhosts"
 local behavioral_handler = require "api_handlers.behavioral"
 local cluster_handler = require "api_handlers.cluster"
 local fingerprint_profiles_handler = require "api_handlers.fingerprint_profiles"
+local defense_profiles_handler = require "api_handlers.defense_profiles"
+local attack_signatures_handler = require "api_handlers.attack_signatures"
 
 -- Configuration
 local REQUIRE_AUTH = os.getenv("WAF_ADMIN_AUTH") ~= "false"  -- Default: require auth
@@ -72,6 +74,8 @@ register_handlers(vhosts_handler)
 register_handlers(behavioral_handler)
 register_handlers(cluster_handler)
 register_handlers(fingerprint_profiles_handler)
+register_handlers(defense_profiles_handler)
+register_handlers(attack_signatures_handler)
 
 -- ==================== User Management Endpoints ====================
 -- Delegated to api_handlers/users.lua module
@@ -278,6 +282,39 @@ function _M.handle_request()
         local fp_handler = fingerprint_profiles_handler.handlers[method .. ":/fingerprint-profiles/:id"]
         if fp_handler then
             return fp_handler({id = fp_profile_id})
+        end
+    end
+
+    -- Check for parameterized defense profile routes: /defense-profiles/{id}
+    local dp_profile_id = path:match("^/defense%-profiles/([a-zA-Z0-9_-]+)$")
+
+    if dp_profile_id then
+        -- Route to appropriate defense profile handler
+        local dp_handler = defense_profiles_handler.handlers[method .. ":/defense-profiles/:id"]
+        if dp_handler then
+            return dp_handler({id = dp_profile_id})
+        end
+    end
+
+    -- Check for parameterized attack signature routes: /attack-signatures/{id} or /attack-signatures/{id}/action
+    local as_id, as_action = path:match("^/attack%-signatures/([a-zA-Z0-9_-]+)/?([a-z]*)$")
+
+    if as_id then
+        -- Skip if this matches a reserved static route
+        if as_id ~= "builtins" and as_id ~= "tags" and as_id ~= "export" and as_id ~= "import" and as_id ~= "validate" and as_id ~= "reset-builtins" and as_id ~= "stats" then
+            if as_action and as_action ~= "" then
+                -- Action route: /attack-signatures/{id}/clone, /attack-signatures/{id}/enable, etc.
+                local as_handler = attack_signatures_handler.handlers[method .. ":/attack-signatures/:id/" .. as_action]
+                if as_handler then
+                    return as_handler({id = as_id})
+                end
+            else
+                -- CRUD route: GET/PUT/DELETE /attack-signatures/{id}
+                local as_handler = attack_signatures_handler.handlers[method .. ":/attack-signatures/:id"]
+                if as_handler then
+                    return as_handler({id = as_id})
+                end
+            end
         end
     end
 
