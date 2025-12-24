@@ -1,6 +1,8 @@
 # Admin API Separation - Options Analysis
 
-## Current State
+> **Implementation Status: Complete** - Option 1 (Dedicated Admin Port on 8082) has been implemented. This document is retained as historical design documentation. See [ARCHITECTURE.md](ARCHITECTURE.md) for the current system architecture.
+
+## Current State (Historical)
 
 The WAF admin API is currently exposed on the **same server block as production traffic** (port 8080), protected only by IP-based access control:
 
