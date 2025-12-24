@@ -22,6 +22,7 @@ local ip_reputation = require "ip_reputation"
 local ip_utils = require "ip_utils"
 local behavioral_tracker = require "behavioral_tracker"
 local fingerprint_profiles = require "fingerprint_profiles"
+local header_consistency = require "header_consistency"
 local cjson = require "cjson.safe"
 
 -- Structured audit logging for security events
@@ -993,6 +994,20 @@ function _M.process_request()
 
     local submission_fingerprint = fp_result.fingerprint
     local fingerprint_profile_id = fp_result.profile_id
+
+    -- Step 3e: Header consistency checks
+    -- Validates that browser headers match expected patterns for claimed UA
+    -- Detects bots spoofing browser User-Agents without proper header sets
+    if security.check_header_consistency ~= false then  -- Enabled by default
+        local consistency_score, consistency_flags = header_consistency.check_consistency(ngx.var)
+        if consistency_score and consistency_score > 0 then
+            spam_score = spam_score + consistency_score
+            -- Add consistency flags (always, for logging purposes)
+            for _, flag in ipairs(consistency_flags or {}) do
+                table.insert(spam_flags, flag)
+            end
+        end
+    end
 
     -- Step 4: Check spam score threshold
     local block_threshold = vhost_resolver.get_block_threshold(context)

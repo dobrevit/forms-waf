@@ -105,7 +105,6 @@ const defaultProfile: Omit<FingerprintProfile, 'id' | 'builtin'> = {
     headers: ['User-Agent', 'Accept-Language', 'Accept-Encoding'],
     normalize: true,
     max_length: 100,
-    include_field_names: true,
   },
   action: 'allow',
   score: 0,
@@ -535,20 +534,6 @@ export function FingerprintProfiles() {
               }
             />
             <Label htmlFor="normalize">Normalize values</Label>
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <Switch
-              id="include_field_names"
-              checked={formData.fingerprint_headers.include_field_names !== false}
-              onCheckedChange={(checked) =>
-                setFormData({
-                  ...formData,
-                  fingerprint_headers: { ...formData.fingerprint_headers, include_field_names: checked },
-                })
-              }
-            />
-            <Label htmlFor="include_field_names">Include form field names</Label>
           </div>
         </div>
 
