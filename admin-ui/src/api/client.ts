@@ -1030,6 +1030,7 @@ import type {
   AttackSignatureEnableResponse,
   AttackSignatureDisableResponse,
   AttackSignatureStatsResponse,
+  AttackSignatureTestResponse,
   AttackSignatureBuiltinsResponse,
   AttackSignatureResetBuiltinsResponse,
   AttackSignatureTagsResponse,
@@ -1240,6 +1241,18 @@ export const attackSignaturesApi = {
   getStats: (id: string) =>
     request<AttackSignatureStatsResponse>(`/attack-signatures/${encodeURIComponent(id)}/stats`),
 
+  // Test signature against sample data
+  test: (id: string, sample: {
+    user_agent?: string
+    content?: string
+    username?: string
+    password?: string
+  }) =>
+    request<AttackSignatureTestResponse>(`/attack-signatures/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+      body: JSON.stringify({ sample }),
+    }),
+
   // Get overall stats summary
   getStatsSummary: () =>
     request<AttackSignatureStatsSummaryResponse>('/attack-signatures/stats/summary'),
@@ -1277,4 +1290,63 @@ export const attackSignaturesApi = {
       method: 'POST',
       body: JSON.stringify(signature),
     }),
+}
+
+// Backup and Restore API
+import type {
+  Backup,
+  BackupEntityInfo,
+  BackupExportOptions,
+  BackupImportMode,
+  BackupImportResponse,
+  BackupValidationResult,
+} from './types'
+
+export const backupApi = {
+  // Get available entity types
+  getEntities: () =>
+    request<{ entities: BackupEntityInfo[] }>('/backup/entities'),
+
+  // Export configuration
+  export: (options?: BackupExportOptions) => {
+    const params = new URLSearchParams()
+    if (options?.include_users !== undefined) params.append('include_users', String(options.include_users))
+    if (options?.include_builtins !== undefined) params.append('include_builtins', String(options.include_builtins))
+    if (options?.entities?.length) params.append('entities', options.entities.join(','))
+    const query = params.toString()
+    return request<Backup>(`/backup/export${query ? `?${query}` : ''}`)
+  },
+
+  // Validate backup file
+  validate: (backup: Backup) =>
+    request<BackupValidationResult>('/backup/validate', {
+      method: 'POST',
+      body: JSON.stringify(backup),
+    }),
+
+  // Import configuration
+  import: (backup: Backup, mode: BackupImportMode = 'merge', includeUsers: boolean = true) =>
+    request<BackupImportResponse>('/backup/import', {
+      method: 'POST',
+      body: JSON.stringify({
+        backup,
+        mode,
+        include_users: includeUsers,
+      }),
+    }),
+
+  // Download backup as file (helper)
+  downloadExport: async (options?: BackupExportOptions) => {
+    const backup = await backupApi.export(options)
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `waf-backup-${new Date().toISOString().slice(0, 19).replace(/[:-]/g, '')}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    return backup
+  },
 }

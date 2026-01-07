@@ -386,4 +386,222 @@ _M.handlers["GET:/attack-signatures/stats/summary"] = function()
     })
 end
 
+-- POST /attack-signatures/:id/test - Test a signature against sample data
+_M.handlers["POST:/attack-signatures/:id/test"] = function(params)
+    local id = params.id
+    if not id or id == "" then
+        return utils.error_response("Missing signature ID")
+    end
+
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    local data = cjson.decode(body or "{}")
+
+    if not data then
+        return utils.error_response("Invalid JSON body")
+    end
+
+    -- Get signature
+    local signature, err = attack_signatures_store.get(id)
+    if not signature then
+        local status = 404
+        if err and err:find("not found") then
+            status = 404
+        else
+            status = 500
+        end
+        return utils.error_response(err or "Signature not found", status)
+    end
+
+    -- Test data should have sample values for various fields
+    local sample = data.sample or {}
+    local results = {
+        signature_id = id,
+        signature_name = signature.name,
+        matches = {},
+        total_score = 0,
+        would_block = false
+    }
+
+    -- Test fingerprint patterns (user-agent)
+    if signature.signatures and signature.signatures.fingerprint and sample.user_agent then
+        local ua = sample.user_agent
+        local fp = signature.signatures.fingerprint
+
+        -- Check blocked user agents
+        if fp.blocked_user_agents then
+            for _, pattern in ipairs(fp.blocked_user_agents) do
+                local ok, matched = pcall(function()
+                    return ua:match(pattern)
+                end)
+                if ok and matched then
+                    table.insert(results.matches, {
+                        type = "fingerprint",
+                        pattern_type = "blocked_user_agents",
+                        pattern = pattern,
+                        matched_value = ua,
+                        action = "block"
+                    })
+                    results.would_block = true
+                elseif not ok then
+                    ngx.log(ngx.WARN, "attack_signatures_test: invalid pattern in blocked_user_agents: ", pattern, " - error: ", tostring(matched))
+                end
+            end
+        end
+
+        -- Check flagged user agents
+        if fp.flagged_user_agents then
+            for _, item in ipairs(fp.flagged_user_agents) do
+                local pattern = item.pattern or item[1]
+                local score = item.score or item[2] or 10
+                local ok, matched = pcall(function()
+                    return ua:match(pattern)
+                end)
+                if ok and matched then
+                    table.insert(results.matches, {
+                        type = "fingerprint",
+                        pattern_type = "flagged_user_agents",
+                        pattern = pattern,
+                        matched_value = ua,
+                        action = "flag",
+                        score = score
+                    })
+                    results.total_score = results.total_score + score
+                elseif not ok then
+                    ngx.log(ngx.WARN, "attack_signatures_test: invalid pattern in flagged_user_agents: ", pattern, " - error: ", tostring(matched))
+                end
+            end
+        end
+    end
+
+    -- Test keyword patterns
+    if signature.signatures and signature.signatures.keyword_filter then
+        local kf = signature.signatures.keyword_filter
+        local content = sample.content or sample.body or ""
+
+        -- Check blocked keywords
+        if kf.blocked_keywords then
+            for _, keyword in ipairs(kf.blocked_keywords) do
+                if content:lower():find(keyword:lower(), 1, true) then
+                    table.insert(results.matches, {
+                        type = "keyword_filter",
+                        pattern_type = "blocked_keywords",
+                        pattern = keyword,
+                        matched_value = content:sub(1, 100),
+                        action = "block"
+                    })
+                    results.would_block = true
+                end
+            end
+        end
+
+        -- Check flagged keywords
+        if kf.flagged_keywords then
+            for _, item in ipairs(kf.flagged_keywords) do
+                local keyword = item.keyword or item[1]
+                local score = item.score or item[2] or 10
+                if content:lower():find(keyword:lower(), 1, true) then
+                    table.insert(results.matches, {
+                        type = "keyword_filter",
+                        pattern_type = "flagged_keywords",
+                        pattern = keyword,
+                        matched_value = content:sub(1, 100),
+                        action = "flag",
+                        score = score
+                    })
+                    results.total_score = results.total_score + score
+                end
+            end
+        end
+
+        -- Check blocked patterns (regex)
+        if kf.blocked_patterns then
+            for _, pattern in ipairs(kf.blocked_patterns) do
+                local ok, matched = pcall(function()
+                    return content:match(pattern)
+                end)
+                if ok and matched then
+                    table.insert(results.matches, {
+                        type = "keyword_filter",
+                        pattern_type = "blocked_patterns",
+                        pattern = pattern,
+                        matched_value = matched,
+                        action = "block"
+                    })
+                    results.would_block = true
+                elseif not ok then
+                    ngx.log(ngx.WARN, "attack_signatures_test: invalid pattern in blocked_patterns: ", pattern, " - error: ", tostring(matched))
+                end
+            end
+        end
+
+        -- Check flagged patterns (regex)
+        if kf.flagged_patterns then
+            for _, item in ipairs(kf.flagged_patterns) do
+                local pattern = item.pattern or item[1]
+                local score = item.score or item[2] or 10
+                local ok, matched = pcall(function()
+                    return content:match(pattern)
+                end)
+                if ok and matched then
+                    table.insert(results.matches, {
+                        type = "keyword_filter",
+                        pattern_type = "flagged_patterns",
+                        pattern = pattern,
+                        matched_value = matched,
+                        action = "flag",
+                        score = score
+                    })
+                    results.total_score = results.total_score + score
+                elseif not ok then
+                    ngx.log(ngx.WARN, "attack_signatures_test: invalid pattern in flagged_patterns: ", pattern, " - error: ", tostring(matched))
+                end
+            end
+        end
+    end
+
+    -- Test rate limiter patterns
+    if signature.signatures and signature.signatures.rate_limiter and sample.username then
+        local rl = signature.signatures.rate_limiter
+        local username = sample.username
+
+        -- Check blocked usernames
+        if rl.blocked_usernames then
+            for _, blocked_user in ipairs(rl.blocked_usernames) do
+                if username:lower() == blocked_user:lower() then
+                    table.insert(results.matches, {
+                        type = "rate_limiter",
+                        pattern_type = "blocked_usernames",
+                        pattern = blocked_user,
+                        matched_value = username,
+                        action = "block"
+                    })
+                    results.would_block = true
+                end
+            end
+        end
+
+        -- Check blocked password patterns
+        if rl.blocked_passwords and sample.password then
+            for _, blocked_pass in ipairs(rl.blocked_passwords) do
+                if sample.password:lower() == blocked_pass:lower() then
+                    table.insert(results.matches, {
+                        type = "rate_limiter",
+                        pattern_type = "blocked_passwords",
+                        pattern = "[redacted]",
+                        matched_value = "[redacted]",
+                        action = "block"
+                    })
+                    results.would_block = true
+                end
+            end
+        end
+    end
+
+    return utils.json_response({
+        test = results,
+        sample_provided = sample
+    })
+end
+
 return _M

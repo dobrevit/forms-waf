@@ -29,6 +29,7 @@ import ClusterStatus from '@/pages/cluster/ClusterStatus'
 import { About } from '@/pages/About'
 import { Users } from '@/pages/admin/Users'
 import { AuthProviders } from '@/pages/admin/AuthProviders'
+import { BackupRestore } from '@/pages/settings/BackupRestore'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -88,6 +89,7 @@ export default function App() {
                 <Route path="/about" element={<About />} />
                 <Route path="/admin/users" element={<Users />} />
                 <Route path="/admin/providers" element={<AuthProviders />} />
+                <Route path="/admin/backup" element={<BackupRestore />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </AppLayout>

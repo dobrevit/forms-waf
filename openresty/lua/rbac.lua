@@ -49,7 +49,8 @@ local DEFAULT_ROLES = {
             whitelist = {"read", "create", "delete"},
             fingerprint_profiles = {"create", "read", "update", "delete", "test", "reset"},
             defense_profiles = {"create", "read", "update", "delete", "reset"},
-            attack_signatures = {"create", "read", "update", "delete", "reset"}
+            attack_signatures = {"create", "read", "update", "delete", "reset"},
+            backup = {"export", "import"}
         },
         scope = "global"  -- Can access all vhosts
     },
@@ -264,6 +265,12 @@ local ENDPOINT_PERMISSIONS = {
     ["POST:/attack-signatures/import"] = {resource = "attack_signatures", action = "create"},
     ["POST:/attack-signatures/validate"] = {resource = "attack_signatures", action = "read"},
     ["GET:/attack-signatures/stats/summary"] = {resource = "attack_signatures", action = "read"},
+
+    -- Backup and restore
+    ["GET:/backup/export"] = {resource = "backup", action = "export"},
+    ["POST:/backup/import"] = {resource = "backup", action = "import"},
+    ["POST:/backup/validate"] = {resource = "backup", action = "import"},
+    ["GET:/backup/entities"] = {resource = "backup", action = "export"},
 }
 
 -- Parametric endpoint permissions (for /endpoints/{id}, /vhosts/{id}, etc.)
@@ -330,6 +337,7 @@ local PARAMETRIC_PERMISSIONS = {
         ["POST:enable"] = {resource = "attack_signatures", action = "update"},
         ["POST:disable"] = {resource = "attack_signatures", action = "update"},
         ["GET:stats"] = {resource = "attack_signatures", action = "read"},
+        ["POST:test"] = {resource = "attack_signatures", action = "read"},
     },
 }
 

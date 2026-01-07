@@ -11,6 +11,9 @@ local redis_sync = require "redis_sync"
 _M.handlers = {}
 
 -- ==================== Blocked Keywords ====================
+-- Note: All keywords are stored in lowercase to enable case-insensitive matching
+-- during request processing. This prevents duplicate entries (e.g., "Spam" vs "spam")
+-- and ensures consistent lookup behavior across the system.
 
 -- GET /keywords/blocked - List blocked keywords
 _M.handlers["GET:/keywords/blocked"] = function()

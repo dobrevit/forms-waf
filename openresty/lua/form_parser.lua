@@ -1,10 +1,45 @@
 -- form_parser.lua
 -- Parses various form content types (urlencoded, multipart, JSON)
+-- Handles charset conversion for non-UTF-8 form submissions
 
 local _M = {}
 
 local upload = require "resty.upload"
 local cjson = require "cjson.safe"
+local charset = require "charset"
+
+-- Convert all keys and values in form data to UTF-8
+-- @param form_data: Table of form field key-value pairs
+-- @param source_charset: Source charset for conversion
+-- @return: New table with UTF-8 keys and values
+local function convert_form_to_utf8(form_data, source_charset)
+    if not form_data or not source_charset then
+        return form_data
+    end
+
+    local result = {}
+
+    for key, value in pairs(form_data) do
+        local new_key = charset.to_utf8(tostring(key), source_charset)
+        local new_value
+
+        if type(value) == "table" then
+            -- Handle array values (multiple values for same key)
+            new_value = {}
+            for i, v in ipairs(value) do
+                new_value[i] = charset.to_utf8(tostring(v), source_charset)
+            end
+        elseif type(value) == "string" then
+            new_value = charset.to_utf8(value, source_charset)
+        else
+            new_value = value
+        end
+
+        result[new_key] = new_value
+    end
+
+    return result
+end
 
 -- Parse URL-encoded form data
 local function parse_urlencoded(body)
@@ -51,6 +86,7 @@ local function parse_multipart()
     local current_field = nil
     local current_value = {}
     local current_filename = nil
+    local current_is_file = false  -- Track if this part is a file upload
 
     while true do
         local typ, res, err = form:read()
@@ -60,8 +96,10 @@ local function parse_multipart()
         end
 
         if typ == "header" then
-            -- Parse Content-Disposition header
-            if res[1] and res[1]:lower() == "content-disposition" then
+            local header_name = res[1] and res[1]:lower() or ""
+
+            if header_name == "content-disposition" then
+                -- Parse Content-Disposition header
                 local header_value = res[2] or ""
 
                 -- Extract field name
@@ -77,13 +115,37 @@ local function parse_multipart()
                     filename = header_value:match("filename=([^;%s]+)")
                 end
                 current_filename = filename
+
+                -- If filename is present, this is a file
+                if filename then
+                    current_is_file = true
+                end
+
+            elseif header_name == "content-type" then
+                -- If a Content-Type header is present for this part, consider it for file detection
+                -- Regular form fields typically don't have Content-Type headers; presence indicates a file
+                local content_type = res[2] or ""
+                -- Treat as file if:
+                -- 1. Already marked as file (has filename), OR
+                -- 2. Has binary/non-text content type, OR
+                -- 3. Has application/* type (documents, archives, etc.)
+                if not current_is_file then
+                    if content_type ~= "" and not content_type:match("^text/") then
+                        current_is_file = true
+                    end
+                end
             end
 
         elseif typ == "body" then
             if current_field then
-                -- Skip file contents, only track filename
-                if current_filename then
-                    current_value = {"[FILE:" .. current_filename .. "]"}
+                -- Skip file contents, only track filename/presence
+                if current_is_file then
+                    if current_filename then
+                        current_value = {"[FILE:" .. current_filename .. "]"}
+                    else
+                        -- File without filename - use placeholder
+                        current_value = {"[FILE:unnamed]"}
+                    end
                 else
                     table.insert(current_value, res)
                 end
@@ -108,6 +170,7 @@ local function parse_multipart()
             current_field = nil
             current_value = {}
             current_filename = nil
+            current_is_file = false
 
         elseif typ == "eof" then
             break
@@ -147,9 +210,14 @@ local function parse_json(body)
 end
 
 -- Main parse function - detects content type and parses accordingly
+-- Also handles charset conversion for non-UTF-8 form submissions
 function _M.parse()
-    local content_type = ngx.var.content_type or ""
-    content_type = content_type:lower()
+    local content_type_raw = ngx.var.content_type or ""
+    local content_type = content_type_raw:lower()
+
+    -- Parse charset from Content-Type header (e.g., "charset=iso-8859-1")
+    -- Note: JSON is always UTF-8 by RFC specification, so we skip charset for JSON
+    local source_charset = charset.parse_charset(content_type_raw)
 
     local data, err
 
@@ -175,6 +243,8 @@ function _M.parse()
         data = parse_urlencoded(body)
 
     elseif content_type:find("application/json") then
+        -- JSON is always UTF-8 by spec, no charset conversion needed
+        source_charset = nil
         ngx.req.read_body()
         local body = ngx.req.get_body_data()
 
@@ -193,6 +263,11 @@ function _M.parse()
     else
         -- Unsupported content type
         return nil, "unsupported content type"
+    end
+
+    -- Convert form data to UTF-8 if a non-UTF-8 charset was specified
+    if data and source_charset and source_charset ~= "UTF-8" and source_charset ~= "ASCII" then
+        data = convert_form_to_utf8(data, source_charset)
     end
 
     return data, err

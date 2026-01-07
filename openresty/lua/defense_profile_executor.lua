@@ -272,8 +272,15 @@ end
 local ACTIONS = {}
 
 -- Allow action: pass request through
+-- In monitoring mode, when a defense triggers a block, we set final_action="block" but
+-- continue processing to collect metrics from remaining defenses. Without this guard,
+-- subsequent defenses or the allow action node would overwrite the block decision,
+-- causing monitoring metrics to incorrectly show "allowed" instead of "monitored".
 ACTIONS["allow"] = function(context, config)
-    context.final_action = "allow"
+    -- Preserve would-block state in monitoring mode (don't overwrite block with allow)
+    if not (context.is_monitoring_mode and context.final_action == "block") then
+        context.final_action = "allow"
+    end
     context.action_config = config
     return true
 end
@@ -571,6 +578,9 @@ function _M.execute(profile, request_context)
         is_monitoring_mode = not should_block
     end
 
+    -- Store monitoring mode in exec_context so action nodes can access it
+    exec_context.is_monitoring_mode = is_monitoring_mode
+
     -- Execute starting from start node
     local current_node_id = graph.start_node_id
     local max_iterations = 100  -- Prevent infinite loops
@@ -654,7 +664,10 @@ function _M.execute(profile, request_context)
                     current_node_id = allow_output
                     goto continue
                 else
-                    exec_context.final_action = "allow"
+                    -- In monitoring mode, preserve would-block state (don't overwrite block with allow)
+                    if not (is_monitoring_mode and exec_context.final_action == "block") then
+                        exec_context.final_action = "allow"
+                    end
                     exec_context.allow_reason = result.allow_reason
                     break
                 end
