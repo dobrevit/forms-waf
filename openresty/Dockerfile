@@ -13,12 +13,16 @@ USER root
 # - lua-resty-jwt: JWT parsing and validation (dependency of openidc)
 # - lua-resty-session: Session management (dependency of openidc)
 # - lua-resty-woothee: User-Agent parser for header consistency checks
+# - lua-iconv: Character set conversion for non-UTF-8 form data
 # Note: LDAP support uses pure Lua implementation via cosocket (no external deps)
 RUN apk add --no-cache curl perl openssl libmaxminddb libmaxminddb-dev luarocks5.1 && \
+    apk add --no-cache --virtual .build-deps musl-dev build-base && \
     opm get ledgetech/lua-resty-http && \
     opm get anjia0532/lua-resty-maxminddb && \
     opm get zmartzone/lua-resty-openidc && \
     luarocks-5.1 install lua-resty-woothee && \
+    luarocks-5.1 install lua-iconv ICONV_DIR=/usr LUA_INCDIR=/usr/local/openresty/luajit/include/luajit-2.1 && \
+    apk del .build-deps && \
     mkdir -p /usr/share/GeoIP /var/log/nginx /etc/nginx/ssl \
              /usr/local/openresty/nginx/client_body_temp \
              /usr/local/openresty/nginx/proxy_temp \

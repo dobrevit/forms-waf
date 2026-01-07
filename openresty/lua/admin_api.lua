@@ -29,6 +29,7 @@ local cluster_handler = require "api_handlers.cluster"
 local fingerprint_profiles_handler = require "api_handlers.fingerprint_profiles"
 local defense_profiles_handler = require "api_handlers.defense_profiles"
 local attack_signatures_handler = require "api_handlers.attack_signatures"
+local backup_handler = require "api_handlers.backup"
 
 -- Configuration
 local REQUIRE_AUTH = os.getenv("WAF_ADMIN_AUTH") ~= "false"  -- Default: require auth
@@ -76,6 +77,7 @@ register_handlers(cluster_handler)
 register_handlers(fingerprint_profiles_handler)
 register_handlers(defense_profiles_handler)
 register_handlers(attack_signatures_handler)
+register_handlers(backup_handler)
 
 -- ==================== User Management Endpoints ====================
 -- Delegated to api_handlers/users.lua module

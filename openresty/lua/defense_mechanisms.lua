@@ -5,6 +5,7 @@
 local _M = {}
 
 local executor = require "defense_profile_executor"
+local charset = require "charset"
 
 -- Lazy-load modules to avoid circular dependencies
 local function get_geoip()
@@ -378,6 +379,9 @@ executor.register_defense("keyword_filter", function(request_context, node_confi
         end
     end
 
+    -- Note: Vhost/endpoint-specific additional keywords are checked in waf_handler.lua
+    -- after all defense profiles run, to avoid duplicate evaluation
+
     return executor.result_score(score, flags, {
         blocked_keywords = blocked_keywords,
         flagged_keywords = flagged_keywords
@@ -487,7 +491,12 @@ executor.register_defense("expected_fields", function(request_context, node_conf
             if new_body then
                 ngx.req.set_body_data(new_body)
                 ngx.req.set_header("X-WAF-Filtered", "true")
-                ngx.req.set_header("X-WAF-Filtered-Fields", table.concat(unexpected, ","))
+                -- Sanitize field names to ensure valid UTF-8 in headers
+                local sanitized_fields = {}
+                for _, f in ipairs(unexpected) do
+                    table.insert(sanitized_fields, charset.sanitize_for_header(f))
+                end
+                ngx.req.set_header("X-WAF-Filtered-Fields", table.concat(sanitized_fields, ","))
             end
             return executor.result_score(0, {"filtered:" .. #unexpected}, {
                 unexpected = unexpected,

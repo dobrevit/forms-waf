@@ -189,6 +189,11 @@ export function VhostForm() {
             end_methods: Array.isArray(f.end_methods) ? f.end_methods : [],
           })) : [],
         } : defaultVhost.behavioral,
+        // Normalize defense_profiles.profiles (Lua cjson may encode empty arrays as objects)
+        defense_profiles: vhost.defense_profiles ? {
+          ...vhost.defense_profiles,
+          profiles: Array.isArray(vhost.defense_profiles.profiles) ? vhost.defense_profiles.profiles : [],
+        } : undefined,
       }
       setFormData(normalized)
     }

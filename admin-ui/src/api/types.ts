@@ -1001,6 +1001,28 @@ export interface AttackSignatureValidateResponse {
   errors: string[]
 }
 
+export interface AttackSignatureTestMatch {
+  type: string
+  pattern_type: string
+  pattern: string
+  matched_value: string
+  action: 'block' | 'flag'
+  score?: number
+}
+
+export interface AttackSignatureTestResult {
+  signature_id: string
+  signature_name: string
+  matches: AttackSignatureTestMatch[]
+  total_score: number
+  would_block: boolean
+}
+
+export interface AttackSignatureTestResponse {
+  test: AttackSignatureTestResult
+  sample_provided: Record<string, string>
+}
+
 export interface AttackSignatureStatsSummary {
   total_signatures: number
   enabled_count: number
@@ -1014,3 +1036,113 @@ export interface AttackSignatureStatsSummary {
 export interface AttackSignatureStatsSummaryResponse {
   summary: AttackSignatureStatsSummary
 }
+
+// ============================================================================
+// Backup and Restore Types
+// ============================================================================
+
+// Entity types available for backup
+export interface BackupEntityInfo {
+  id: string
+  name: string
+  has_builtins: boolean
+  sensitive: boolean
+}
+
+// Backup metadata
+export interface BackupMetadata {
+  version: string
+  created_at: string
+  entity_counts: Record<string, number>
+  include_builtins: boolean
+  include_users: boolean
+}
+
+// Backup data structure
+export interface BackupData {
+  vhosts?: Vhost[]
+  endpoints?: Endpoint[]
+  defense_profiles?: DefenseProfile[]
+  attack_signatures?: AttackSignature[]
+  fingerprint_profiles?: FingerprintProfile[]
+  captcha_providers?: CaptchaProvider[]
+  auth_providers?: Record<string, unknown>[]
+  users?: Partial<User>[]
+  roles?: Role[]
+  keywords?: {
+    blocked?: string[]
+    flagged?: string[]
+  }
+  hashes?: {
+    blocked?: string[]
+  }
+  whitelist?: {
+    ips?: string[]
+  }
+  config?: {
+    geoip?: Record<string, unknown>
+    timing_token?: Record<string, unknown>
+    routing?: GlobalRouting
+    thresholds?: Thresholds
+    webhooks?: Record<string, unknown>
+    captcha?: CaptchaGlobalConfig
+    reputation?: Record<string, unknown>
+  }
+}
+
+// Full backup structure
+export interface Backup {
+  metadata: BackupMetadata
+  data: BackupData
+  checksum?: string
+}
+
+// Validation result
+export interface BackupValidationResult {
+  valid: boolean
+  errors: string[]
+  warnings: string[]
+  summary: Record<string, number | string>
+  conflicts?: Record<string, string[]>
+}
+
+// Import mode
+export type BackupImportMode = 'merge' | 'replace' | 'update'
+
+// Import request
+export interface BackupImportRequest {
+  backup: Backup
+  mode: BackupImportMode
+  include_users?: boolean
+}
+
+// Import result details
+export interface BackupImportResultDetails {
+  imported: Record<string, number>
+  skipped: Record<string, number>
+  updated: Record<string, number>
+  errors: Record<string, string[]>
+}
+
+// Import response
+export interface BackupImportResponse {
+  success: boolean
+  mode: BackupImportMode
+  results: BackupImportResultDetails
+}
+
+// Export options
+export interface BackupExportOptions {
+  include_users?: boolean
+  include_builtins?: boolean
+  entities?: string[]  // Filter to specific entity types
+}
+
+// API Responses
+export interface BackupEntitiesResponse {
+  entities: BackupEntityInfo[]
+}
+
+export interface BackupExportResponse extends Backup {}
+
+export interface BackupValidateResponse extends BackupValidationResult {}

@@ -24,6 +24,7 @@ local behavioral_tracker = require "behavioral_tracker"
 local fingerprint_profiles = require "fingerprint_profiles"
 local header_consistency = require "header_consistency"
 local cjson = require "cjson.safe"
+local charset = require "charset"
 
 -- Lazy-load defense profile multi-executor to avoid startup overhead
 local _multi_executor
@@ -533,6 +534,54 @@ function _M.process_request()
         -- Execute all configured profiles
         local profile_result = multi_executor.execute(defense_profiles_config, request_context)
 
+        -- Check vhost/endpoint additional keywords (runs once, after all profiles)
+        -- This is separate from defense profiles to avoid duplicate evaluation
+        local additional_kw = vhost_resolver.get_additional_keywords(context)
+        if additional_kw and (#additional_kw.blocked > 0 or #additional_kw.flagged > 0) then
+            -- Parse form data for keyword checking
+            local kw_form_data, _ = form_parser.parse()
+            if kw_form_data then
+                local kw_ignore = vhost_resolver.get_ignore_fields(context)
+                local kw_exclude = {}
+                for _, f in ipairs(kw_ignore) do
+                    kw_exclude[f] = true
+                end
+                local combined_text = form_parser.get_combined_text(kw_form_data, kw_exclude):lower()
+
+                -- Ensure profile_result.flags exists
+                profile_result.flags = profile_result.flags or {}
+
+                -- Track already-checked keywords to avoid duplicates from vhost+endpoint merge
+                local checked_blocked = {}
+                local checked_flagged = {}
+
+                -- Check additional blocked keywords
+                for _, kw in ipairs(additional_kw.blocked) do
+                    local kw_lower = kw:lower()
+                    if not checked_blocked[kw_lower] and combined_text:find(kw_lower, 1, true) then
+                        checked_blocked[kw_lower] = true
+                        table.insert(profile_result.flags, "vhost:add_kw:" .. kw)
+                        profile_result.action = "block"
+                        profile_result.blocked_by = profile_result.blocked_by or {}
+                        table.insert(profile_result.blocked_by, "additional_keyword")
+                        ngx.log(ngx.INFO, "ADDITIONAL_KEYWORD_BLOCK: keyword=", kw)
+                    end
+                end
+
+                -- Check additional flagged keywords (add to score)
+                for _, entry in ipairs(additional_kw.flagged) do
+                    local kw, score_str = entry:match("([^:]+):?(%d*)")
+                    local kw_score = tonumber(score_str) or 10
+                    local kw_lower = kw and kw:lower()
+                    if kw_lower and not checked_flagged[kw_lower] and combined_text:find(kw_lower, 1, true) then
+                        checked_flagged[kw_lower] = true
+                        profile_result.score = (profile_result.score or 0) + kw_score
+                        table.insert(profile_result.flags, "vhost:add_flag:" .. kw)
+                    end
+                end
+            end
+        end
+
         -- Log profile execution
         ngx.log(ngx.INFO, string.format(
             "DEFENSE_PROFILES: ip=%s host=%s path=%s vhost=%s endpoint=%s action=%s score=%d profiles=%d blocked_by=%s flags=%s time=%.2fms default=%s",
@@ -564,16 +613,28 @@ function _M.process_request()
             local should_block = vhost_resolver.should_block(context)
 
             if should_block then
+                -- Set nginx variables for logging (internal, not exposed to client)
+                local form_hash = ngx.ctx.form_hash or ""
+                ngx.var.waf_spam_score = tostring(profile_result.score or 0)
+                ngx.var.waf_spam_flags = profile_result.flags and table.concat(profile_result.flags, ",") or ""
+                ngx.var.waf_form_hash = form_hash
+                ngx.var.waf_blocked = "true"
+
                 if expose_headers then
-                    ngx.header["X-Blocked"] = "true"
+                    -- Also set response headers for debugging
+                    ngx.header["X-WAF-Spam-Score"] = tostring(profile_result.score or 0)
+                    ngx.header["X-WAF-Spam-Flags"] = profile_result.flags and table.concat(profile_result.flags, ",") or ""
+                    ngx.header["X-WAF-Form-Hash"] = form_hash
+                    ngx.header["X-WAF-Blocked"] = "true"
                     ngx.header["X-Block-Reason"] = "defense_profile"
                 end
 
                 ngx.log(ngx.WARN, string.format(
-                    "BLOCKED_BY_PROFILE: ip=%s host=%s path=%s vhost=%s endpoint=%s blocked_by=%s score=%d",
+                    "BLOCKED_BY_PROFILE: ip=%s host=%s path=%s vhost=%s endpoint=%s blocked_by=%s score=%d flags=%s",
                     client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
                     profile_result.blocked_by and table.concat(profile_result.blocked_by, ",") or "unknown",
-                    profile_result.score or 0
+                    profile_result.score or 0,
+                    profile_result.flags and table.concat(profile_result.flags, ",") or "none"
                 ))
 
                 audit_log("request_blocked_by_profile", {
@@ -598,17 +659,50 @@ function _M.process_request()
                 return ngx.exit(ngx.HTTP_FORBIDDEN)
             else
                 -- Monitoring mode - log but don't block
+                -- Set nginx variables for logging (internal, not exposed to client)
+                local form_hash = ngx.ctx.form_hash or ""
+                local fingerprint = ngx.ctx.fingerprint
+                local fingerprint_profile = ngx.ctx.fingerprint_profile
+                ngx.var.waf_spam_score = tostring(profile_result.score or 0)
+                ngx.var.waf_spam_flags = profile_result.flags and table.concat(profile_result.flags, ",") or ""
+                ngx.var.waf_form_hash = form_hash
+                ngx.var.waf_blocked = "would_block"
+
+                -- Set request headers for HAProxy (needed for rate limiting counters)
+                ngx.req.set_header("X-WAF-Spam-Score", tostring(profile_result.score or 0))
+                if profile_result.flags and #profile_result.flags > 0 then
+                    ngx.req.set_header("X-WAF-Spam-Flags", table.concat(profile_result.flags, ","))
+                end
+                ngx.req.set_header("X-WAF-Client-IP", client_ip)
+                if fingerprint then
+                    ngx.req.set_header("X-WAF-Form-Fingerprint", fingerprint)
+                end
+                if fingerprint_profile then
+                    ngx.req.set_header("X-WAF-Fingerprint-Profile", fingerprint_profile)
+                end
+                if form_hash and form_hash ~= "" then
+                    ngx.req.set_header("X-WAF-Form-Hash", form_hash)
+                end
+
                 if expose_headers then
+                    -- Also set response headers for debugging
+                    -- Note: x-waf-fingerprint and x-waf-fingerprint-profile are set by HAProxy
+                    ngx.header["X-WAF-Spam-Score"] = tostring(profile_result.score or 0)
+                    ngx.header["X-WAF-Spam-Flags"] = profile_result.flags and table.concat(profile_result.flags, ",") or ""
+                    ngx.header["X-WAF-Form-Hash"] = form_hash
+                    ngx.header["X-WAF-Blocked"] = "would_block"
                     ngx.header["X-WAF-Would-Block"] = "true"
                     ngx.header["X-WAF-Block-Reason"] = "defense_profile"
                 end
                 ngx.log(ngx.WARN, string.format(
-                    "MONITORING (profile would block): ip=%s host=%s path=%s vhost=%s endpoint=%s blocked_by=%s score=%d",
+                    "MONITORING (profile would block): ip=%s host=%s path=%s vhost=%s endpoint=%s blocked_by=%s score=%d flags=%s",
                     client_ip, host, path, summary.vhost_id, summary.endpoint_id or "global",
                     profile_result.blocked_by and table.concat(profile_result.blocked_by, ",") or "unknown",
-                    profile_result.score or 0
+                    profile_result.score or 0,
+                    profile_result.flags and table.concat(profile_result.flags, ",") or "none"
                 ))
                 metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", profile_result.score or 0)
+                -- Return to continue to proxy_pass - HAProxy will use the request headers we set
                 return
             end
 
@@ -745,6 +839,20 @@ function _M.process_request()
             if geo_info and expose_headers then
                 ngx.header["X-GeoIP-Country"] = geo_info.country_code or "unknown"
                 ngx.header["X-GeoIP-ASN"] = tostring(geo_info.asn or "unknown")
+            end
+
+            -- Set nginx variables for logging (internal, not exposed to client)
+            ngx.var.waf_spam_score = tostring(profile_result.score or 0)
+            ngx.var.waf_spam_flags = profile_result.flags and table.concat(profile_result.flags, ",") or ""
+            ngx.var.waf_form_hash = form_hash or ""
+            ngx.var.waf_blocked = is_monitoring_would_block and "would_block" or "false"
+
+            if expose_headers then
+                -- Also set response headers for debugging
+                ngx.header["X-WAF-Spam-Score"] = tostring(profile_result.score or 0)
+                ngx.header["X-WAF-Spam-Flags"] = profile_result.flags and table.concat(profile_result.flags, ",") or ""
+                ngx.header["X-WAF-Form-Hash"] = form_hash or ""
+                ngx.header["X-WAF-Blocked"] = is_monitoring_would_block and "would_block" or "false"
             end
 
             ngx.log(ngx.INFO, string.format(
@@ -999,7 +1107,8 @@ return _M
             local hp_value = form_data[hp_field] or form_data[hp_field:lower()]
             if hp_value and hp_value ~= "" then
                 -- Honeypot triggered!
-                table.insert(spam_flags, "honeypot:" .. hp_field)
+                -- Sanitize field name to ensure valid UTF-8 in headers
+                table.insert(spam_flags, "honeypot:" .. charset.sanitize_for_header(hp_field))
 
                 ngx.log(ngx.WARN, string.format(
                     "HONEYPOT: ip=%s host=%s path=%s field=%s value=%s action=%s",
@@ -1189,14 +1298,20 @@ return _M
                 if new_body then
                     ngx.req.set_body_data(new_body)
                     ngx.req.set_header("X-WAF-Filtered", "true")
-                    ngx.req.set_header("X-WAF-Filtered-Fields", table.concat(unexpected_fields, ","))
+                    -- Sanitize field names to ensure valid UTF-8 in headers
+                    local sanitized_fields = {}
+                    for _, f in ipairs(unexpected_fields) do
+                        table.insert(sanitized_fields, charset.sanitize_for_header(f))
+                    end
+                    ngx.req.set_header("X-WAF-Filtered-Fields", table.concat(sanitized_fields, ","))
                 end
             elseif unexpected_action ~= "ignore" then
                 -- Default: flag (add score)
                 spam_score = spam_score + (5 * #unexpected_fields)
             end
             for _, f in ipairs(unexpected_fields) do
-                table.insert(spam_flags, "unexpected:" .. f)
+                -- Sanitize field name to ensure valid UTF-8 in headers
+                table.insert(spam_flags, "unexpected:" .. charset.sanitize_for_header(f))
             end
         end
     end
@@ -1261,7 +1376,8 @@ return _M
         if disposable_result.found then
             -- Found disposable email(s)
             for _, email in ipairs(disposable_result.emails) do
-                table.insert(spam_flags, "disposable:" .. email)
+                -- Sanitize email to ensure valid UTF-8 in headers
+                table.insert(spam_flags, "disposable:" .. charset.sanitize_for_header(email))
             end
 
             if security.disposable_email_action == "block" then

@@ -1336,15 +1336,37 @@ function _M.get_status()
             status.whitelisted_ips_count = whitelisted_ips
         end
 
-        local endpoints = red:zcard(KEYS.endpoint_index)
-        if endpoints and endpoints ~= ngx.null then
-            status.endpoints_count = endpoints
+        -- Count global endpoints
+        local global_endpoints = red:zcard(KEYS.endpoint_index)
+        if not global_endpoints or global_endpoints == ngx.null then
+            global_endpoints = 0
         end
+        status.global_endpoints_count = global_endpoints
 
+        -- Count vhost-specific endpoints
         local vhosts = red:zcard(KEYS.vhost_index)
-        if vhosts and vhosts ~= ngx.null then
-            status.vhosts_count = vhosts
+        if not vhosts or vhosts == ngx.null then
+            vhosts = 0
         end
+        status.vhosts_count = vhosts
+
+        local vhost_endpoints_count = 0
+        if vhosts > 0 then
+            local vhost_ids = red:zrange(KEYS.vhost_index, 0, -1)
+            if vhost_ids and vhost_ids ~= ngx.null then
+                for _, vhost_id in ipairs(vhost_ids) do
+                    local vhost_ep_key = "waf:vhosts:endpoints:" .. vhost_id .. ":index"
+                    local count = red:zcard(vhost_ep_key)
+                    if count and count ~= ngx.null then
+                        vhost_endpoints_count = vhost_endpoints_count + count
+                    end
+                end
+            end
+        end
+        status.vhost_endpoints_count = vhost_endpoints_count
+
+        -- Total endpoints = global + vhost-specific
+        status.endpoints_count = global_endpoints + vhost_endpoints_count
 
         close_redis(red)
     end

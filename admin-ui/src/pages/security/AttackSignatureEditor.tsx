@@ -35,8 +35,10 @@ import {
   Plus,
   Trash2,
   Info,
+  Play,
 } from 'lucide-react'
 import { SignatureStatsPanel } from '@/components/attack-signatures/SignatureStatsPanel'
+import { SignatureTestDialog } from '@/components/attack-signatures/SignatureTestDialog'
 
 // Defense type info for UI
 const DEFENSE_INFO: Record<DefenseType, { label: string; description: string }> = {
@@ -234,6 +236,7 @@ export default function AttackSignatureEditor() {
   const [signature, setSignature] = useState<AttackSignature>(createEmptySignature())
   const [tagsInput, setTagsInput] = useState('')
   const [hasChanges, setHasChanges] = useState(false)
+  const [showTestDialog, setShowTestDialog] = useState(false)
 
   // Fetch existing signature
   const { data: signatureData, isLoading } = useQuery({
@@ -350,17 +353,25 @@ export default function AttackSignatureEditor() {
             <Badge variant="secondary">Built-in</Badge>
           )}
         </div>
-        <Button
-          onClick={handleSave}
-          disabled={saveMutation.isPending || isReadOnly || !hasChanges}
-        >
-          {saveMutation.isPending ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <Save className="h-4 w-4 mr-2" />
+        <div className="flex gap-2">
+          {!isNew && (
+            <Button variant="outline" onClick={() => setShowTestDialog(true)}>
+              <Play className="h-4 w-4 mr-2" />
+              Test
+            </Button>
           )}
-          Save
-        </Button>
+          <Button
+            onClick={handleSave}
+            disabled={saveMutation.isPending || isReadOnly || !hasChanges}
+          >
+            {saveMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4 mr-2" />
+            )}
+            Save
+          </Button>
+        </div>
       </div>
 
       {/* Basic Info */}
@@ -1027,6 +1038,16 @@ export default function AttackSignatureEditor() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* Test Dialog */}
+      {!isNew && id && (
+        <SignatureTestDialog
+          open={showTestDialog}
+          onOpenChange={setShowTestDialog}
+          signatureId={id}
+          signatureName={signature.name}
+        />
       )}
     </div>
   )

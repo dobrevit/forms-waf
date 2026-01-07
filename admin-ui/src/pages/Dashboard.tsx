@@ -59,8 +59,9 @@ export function Dashboard() {
   })
 
   const { data: endpointsData } = useQuery({
-    queryKey: ['endpoints'],
-    queryFn: endpointsApi.list,
+    queryKey: ['endpoints', 'all'],
+    queryFn: () => endpointsApi.list(),
+    staleTime: 0, // Always refetch on mount to ensure accurate counts
   })
 
   const { data: blockedKeywordsData } = useQuery({

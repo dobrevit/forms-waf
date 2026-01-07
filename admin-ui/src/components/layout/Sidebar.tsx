@@ -25,6 +25,7 @@ import {
   Fingerprint,
   Workflow,
   Target,
+  Archive,
 } from 'lucide-react'
 
 const navigation = [
@@ -82,6 +83,7 @@ const navigation = [
     children: [
       { name: 'User Management', href: '/admin/users', icon: Users },
       { name: 'Auth Providers', href: '/admin/providers', icon: KeyRound },
+      { name: 'Backup & Restore', href: '/admin/backup', icon: Archive },
       { name: 'Cluster Status', href: '/cluster', icon: Server },
     ],
   },
