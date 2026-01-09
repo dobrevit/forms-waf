@@ -10,7 +10,7 @@ local redis_sync = require "redis_sync"
 local _M = {}
 
 -- Configuration
-local SESSION_TTL = 86400  -- 24 hours
+local SESSION_TTL = tonumber(os.getenv("WAF_SESSION_TTL")) or 86400  -- 24 hours
 local SESSION_COOKIE_NAME = "waf_admin_session"
 local REDIS_PREFIX = "waf:admin:"
 

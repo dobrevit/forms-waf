@@ -6,7 +6,7 @@
 
 local _M = {}
 
-local http = require "resty.http"
+local http_utils = require "http_utils"
 local cjson = require "cjson.safe"
 
 -- Shared dictionary for webhook queue and config
@@ -106,9 +106,6 @@ local function send_webhook(config, events)
         return false, "No webhook URL configured"
     end
 
-    local httpc = http.new()
-    httpc:set_timeout(5000)  -- 5 second timeout
-
     -- Build payload
     local payload = {
         source = "forms-waf",
@@ -130,12 +127,12 @@ local function send_webhook(config, events)
         end
     end
 
-    -- Send request
-    local body = cjson.encode(payload)
-    local res, err = httpc:request_uri(config.url, {
+    -- Send request with proxy support
+    local res, err = http_utils.request(config.url, {
         method = "POST",
-        body = body,
+        body = cjson.encode(payload),
         headers = headers,
+        timeout = 5000,
         ssl_verify = config.ssl_verify ~= false,
     })
 
