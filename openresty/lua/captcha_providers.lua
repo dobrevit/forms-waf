@@ -7,54 +7,10 @@
     - hCaptcha
 ]]
 
-local http = require "resty.http"
+local http_utils = require "http_utils"
 local cjson = require "cjson.safe"
 
 local _M = {}
-
--- Proxy configuration from environment
-local HTTP_PROXY = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
-local HTTPS_PROXY = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
-local NO_PROXY = os.getenv("NO_PROXY") or os.getenv("no_proxy") or ""
-
--- Parse NO_PROXY into a lookup table
-local no_proxy_hosts = {}
-for host in NO_PROXY:gmatch("[^,]+") do
-    local h = host:match("^%s*(.-)%s*$")  -- trim whitespace
-    if h and h ~= "" then
-        no_proxy_hosts[h:lower()] = true
-    end
-end
-
--- Check if a host should bypass proxy
-local function should_bypass_proxy(host)
-    if not host then return true end
-    host = host:lower()
-
-    -- Direct match
-    if no_proxy_hosts[host] then return true end
-
-    -- Wildcard match (e.g., .example.com matches sub.example.com)
-    for pattern, _ in pairs(no_proxy_hosts) do
-        if pattern:sub(1, 1) == "." then
-            -- Wildcard pattern
-            if host:sub(-#pattern) == pattern or host == pattern:sub(2) then
-                return true
-            end
-        end
-    end
-
-    return false
-end
-
--- Get proxy URL for a given target URL
-local function get_proxy_for_url(url)
-    if url:match("^https://") then
-        return HTTPS_PROXY
-    else
-        return HTTP_PROXY
-    end
-end
 
 -- Provider verification URLs
 local VERIFY_URLS = {
@@ -64,104 +20,12 @@ local VERIFY_URLS = {
     hcaptcha = "https://hcaptcha.com/siteverify",
 }
 
--- HTTP POST to verification endpoint
+-- HTTP POST to verification endpoint (with proxy support via http_utils)
 local function http_post(url, params)
-    local httpc = http.new()
-    httpc:set_timeout(5000)  -- 5 second timeout
-
-    -- Build form body
-    local body_parts = {}
-    for k, v in pairs(params) do
-        if v then
-            table.insert(body_parts, ngx.escape_uri(k) .. "=" .. ngx.escape_uri(tostring(v)))
-        end
-    end
-    local body = table.concat(body_parts, "&")
-
-    -- Build request options
-    local request_opts = {
-        method = "POST",
-        body = body,
-        headers = {
-            ["Content-Type"] = "application/x-www-form-urlencoded",
-        },
+    local res, err = http_utils.post_form(url, params, {
+        timeout = 5000,
         ssl_verify = true,
-    }
-
-    -- Add proxy support if configured
-    local host = url:match("https?://([^/:]+)")
-    if host and not should_bypass_proxy(host) then
-        local proxy_url = get_proxy_for_url(url)
-        if proxy_url then
-            -- Parse proxy URL
-            local proxy_host, proxy_port = proxy_url:match("https?://([^/:]+):?(%d*)")
-            if proxy_host then
-                proxy_port = tonumber(proxy_port) or 80
-                ngx.log(ngx.DEBUG, "Using proxy ", proxy_host, ":", proxy_port, " for ", url)
-
-                -- Connect through proxy
-                local ok, conn_err = httpc:connect(proxy_host, proxy_port)
-                if not ok then
-                    ngx.log(ngx.ERR, "Failed to connect to proxy: ", conn_err)
-                    return nil, "Proxy connection failed: " .. conn_err
-                end
-
-                -- For HTTPS, use CONNECT tunnel
-                if url:match("^https://") then
-                    local target_host = url:match("https://([^/]+)")
-                    local res, err = httpc:request({
-                        method = "CONNECT",
-                        path = target_host,
-                        headers = {
-                            ["Host"] = target_host,
-                        },
-                    })
-                    if not res or res.status ~= 200 then
-                        ngx.log(ngx.ERR, "CONNECT tunnel failed: ", err or res.status)
-                        return nil, "Proxy CONNECT failed"
-                    end
-
-                    -- Upgrade to TLS
-                    local ok, ssl_err = httpc:ssl_handshake(nil, host, true)
-                    if not ok then
-                        ngx.log(ngx.ERR, "SSL handshake through proxy failed: ", ssl_err)
-                        return nil, "SSL handshake failed: " .. ssl_err
-                    end
-                end
-
-                -- Make the actual request
-                local path = url:match("https?://[^/]+(.*)") or "/"
-                request_opts.path = path
-                request_opts.headers["Host"] = host
-
-                local res, err = httpc:request(request_opts)
-                if not res then
-                    ngx.log(ngx.ERR, "CAPTCHA verification request failed through proxy: ", err)
-                    return nil, err
-                end
-
-                -- Read body
-                local body_data, read_err = res:read_body()
-                if not body_data then
-                    ngx.log(ngx.ERR, "Failed to read response body: ", read_err)
-                    return nil, "Failed to read response"
-                end
-
-                httpc:set_keepalive()
-
-                local data, decode_err = cjson.decode(body_data)
-                if not data then
-                    ngx.log(ngx.ERR, "CAPTCHA response decode failed: ", decode_err, " body: ", body_data)
-                    return nil, "Invalid response from CAPTCHA provider"
-                end
-
-                return data
-            end
-        end
-    end
-
-    -- Direct connection (no proxy)
-    local res, err = httpc:request_uri(url, request_opts)
+    })
 
     if not res then
         ngx.log(ngx.ERR, "CAPTCHA verification request failed: ", err)
@@ -333,10 +197,6 @@ end
 
 -- Test provider connectivity (for admin UI)
 function _M.test_provider(provider_config)
-    -- Use provider's test keys if available, otherwise just check URL reachability
-    local httpc = http.new()
-    httpc:set_timeout(5000)
-
     local url = VERIFY_URLS[provider_config.type]
     if not url then
         return false, "Unknown provider type"

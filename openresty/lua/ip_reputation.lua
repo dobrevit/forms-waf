@@ -12,7 +12,7 @@
 local _M = {}
 
 local cjson = require "cjson.safe"
-local http = require "resty.http"
+local http_utils = require "http_utils"
 
 -- Configuration defaults
 local DEFAULT_CONFIG = {
@@ -171,17 +171,15 @@ local function check_abuseipdb(ip, config)
         return nil
     end
 
-    local httpc = http.new()
-    httpc:set_timeout(3000)  -- 3 second timeout
-
     local url = string.format(
         "https://api.abuseipdb.com/api/v2/check?ipAddress=%s&maxAgeInDays=%d",
         ngx.escape_uri(ip),
         config.abuseipdb.max_age_days or 90
     )
 
-    local res, err = httpc:request_uri(url, {
+    local res, err = http_utils.request(url, {
         method = "GET",
+        timeout = 3000,
         headers = {
             ["Key"] = api_key,
             ["Accept"] = "application/json",
@@ -240,9 +238,6 @@ local function check_webhook(ip, config)
         return nil
     end
 
-    local httpc = http.new()
-    httpc:set_timeout(config.webhook.timeout or 2000)
-
     -- Build request URL with IP
     local request_url = url
     if url:find("?") then
@@ -254,8 +249,9 @@ local function check_webhook(ip, config)
     local headers = config.webhook.headers or {}
     headers["Accept"] = "application/json"
 
-    local res, err = httpc:request_uri(request_url, {
+    local res, err = http_utils.request(request_url, {
         method = "GET",
+        timeout = config.webhook.timeout or 2000,
         headers = headers,
     })
 
