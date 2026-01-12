@@ -662,26 +662,41 @@ function _M.start_coordinator_timer()
     ngx.log(ngx.INFO, "instance_coordinator: initializing instance '", INSTANCE_ID, "'")
 
     -- Defer registration to timer (Redis not allowed directly in init_worker)
-    local ok, err = ngx.timer.at(0, function()
-        -- Register instance
-        local ok, err = register_instance()
-        if not ok then
-            ngx.log(ngx.ERR, "instance_coordinator: failed to register: ", err)
+    local ok, err = ngx.timer.at(0, function(premature)
+        if premature then
+            ngx.log(ngx.WARN, "instance_coordinator: premature timer during initialization")
+            return
         end
 
-        -- Try to acquire leadership
-        try_acquire_leadership()
+        -- Wrap in pcall to catch any errors
+        local success, init_err = pcall(function()
+            -- Register instance
+            local ok, err = register_instance()
+            if not ok then
+                ngx.log(ngx.ERR, "instance_coordinator: failed to register: ", err)
+                return
+            end
 
-        -- Start heartbeat timer
-        local ok, err = ngx.timer.at(HEARTBEAT_INTERVAL, heartbeat_timer_handler)
-        if not ok then
-            ngx.log(ngx.ERR, "instance_coordinator: failed to start heartbeat timer: ", err)
-        end
+            ngx.log(ngx.INFO, "instance_coordinator: instance registered successfully")
 
-        -- Start leader maintenance timer
-        ok, err = ngx.timer.at(LEADER_RENEW_INTERVAL, leader_maintenance_handler)
-        if not ok then
-            ngx.log(ngx.ERR, "instance_coordinator: failed to start leader timer: ", err)
+            -- Try to acquire leadership
+            try_acquire_leadership()
+
+            -- Start heartbeat timer
+            local ok, err = ngx.timer.at(HEARTBEAT_INTERVAL, heartbeat_timer_handler)
+            if not ok then
+                ngx.log(ngx.ERR, "instance_coordinator: failed to start heartbeat timer: ", err)
+            end
+
+            -- Start leader maintenance timer
+            ok, err = ngx.timer.at(LEADER_RENEW_INTERVAL, leader_maintenance_handler)
+            if not ok then
+                ngx.log(ngx.ERR, "instance_coordinator: failed to start leader timer: ", err)
+            end
+        end)
+
+        if not success then
+            ngx.log(ngx.ERR, "instance_coordinator: initialization failed with error: ", init_err)
         end
     end)
 

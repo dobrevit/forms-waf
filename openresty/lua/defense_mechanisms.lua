@@ -264,6 +264,29 @@ executor.register_defense("keyword_filter", function(request_context, node_confi
     local blocked_keywords = {}
     local flagged_keywords = {}
 
+    -- Get global flagged keyword scores for score adjustment when vhost overrides
+    local global_keyword_scores = keyword_filter.get_flagged_keyword_scores()
+
+    -- Build set of vhost override keywords to exclude from global scoring
+    -- When vhost/endpoint has the same keyword, vhost takes precedence (score override, not sum)
+    local vhost_override_keywords = {}
+    local additional = vhost_resolver.get_additional_keywords(context)
+    if additional then
+        if additional.flagged then
+            for _, entry in ipairs(additional.flagged) do
+                local kw = entry:match("([^:]+)")
+                if kw then
+                    vhost_override_keywords[kw:lower()] = true
+                end
+            end
+        end
+        if additional.blocked then
+            for _, kw in ipairs(additional.blocked) do
+                vhost_override_keywords[kw:lower()] = true
+            end
+        end
+    end
+
     -- Check for signature patterns (from attack signatures)
     local sig_patterns = node_config and node_config.signature_patterns
     if sig_patterns then
@@ -348,18 +371,35 @@ executor.register_defense("keyword_filter", function(request_context, node_confi
     end
 
     -- Apply context-specific keyword exclusions for blocked keywords
+    -- Skip keywords that have vhost/endpoint overrides (vhost takes precedence)
     if result.blocked_keywords and #result.blocked_keywords > 0 then
         for _, kw in ipairs(result.blocked_keywords) do
-            if not vhost_resolver.is_keyword_excluded(context, kw, "blocked") then
+            local kw_lower = kw:lower()
+            if vhost_override_keywords[kw_lower] then
+                -- Skip: vhost/endpoint has override for this keyword
+                ngx.log(ngx.DEBUG, "KEYWORD_OVERRIDE: skipping global blocked '", kw, "' (vhost override)")
+            elseif not vhost_resolver.is_keyword_excluded(context, kw, "blocked") then
                 table.insert(blocked_keywords, kw)
             end
         end
     end
 
     -- Apply context-specific keyword exclusions for flagged keywords
+    -- Skip keywords that have vhost/endpoint overrides (vhost takes precedence, avoids score sum)
     if result.flagged_keywords and #result.flagged_keywords > 0 then
         for _, kw in ipairs(result.flagged_keywords) do
-            if not vhost_resolver.is_keyword_excluded(context, kw, "flagged") then
+            local kw_lower = kw:lower()
+            if vhost_override_keywords[kw_lower] then
+                -- Skip: vhost/endpoint has override for this keyword (will use vhost score instead)
+                -- Subtract the global keyword score since it was already added by keyword_filter.scan()
+                local global_score = global_keyword_scores[kw_lower] or 0
+                if global_score > 0 then
+                    score = score - global_score
+                    ngx.log(ngx.DEBUG, "KEYWORD_OVERRIDE: subtracting global score ", global_score, " for '", kw, "'")
+                end
+                table.insert(flags, "kw:" .. kw .. ":vhost_override")
+                ngx.log(ngx.DEBUG, "KEYWORD_OVERRIDE: skipping global flagged '", kw, "' (vhost override)")
+            elseif not vhost_resolver.is_keyword_excluded(context, kw, "flagged") then
                 table.insert(flagged_keywords, kw)
                 table.insert(flags, "kw:" .. kw)
             end
