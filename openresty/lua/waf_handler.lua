@@ -582,6 +582,23 @@ function _M.process_request()
             end
         end
 
+        -- Re-check threshold after vhost keyword scores are added
+        -- This ensures that if vhost keywords push score over threshold, action changes to block
+        if profile_result.action ~= "block" then
+            local block_threshold = vhost_resolver.get_block_threshold(context)
+            if profile_result.score and profile_result.score >= block_threshold then
+                profile_result.action = "block"
+                profile_result.blocked_by = profile_result.blocked_by or {}
+                table.insert(profile_result.blocked_by, "spam_score_exceeded")
+                profile_result.flags = profile_result.flags or {}
+                table.insert(profile_result.flags, "score:exceeded")
+                ngx.log(ngx.INFO, string.format(
+                    "THRESHOLD_EXCEEDED: ip=%s score=%d threshold=%d",
+                    client_ip, profile_result.score, block_threshold
+                ))
+            end
+        end
+
         -- Log profile execution
         ngx.log(ngx.INFO, string.format(
             "DEFENSE_PROFILES: ip=%s host=%s path=%s vhost=%s endpoint=%s action=%s score=%d profiles=%d blocked_by=%s flags=%s time=%.2fms default=%s",

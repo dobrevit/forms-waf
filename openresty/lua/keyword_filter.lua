@@ -384,4 +384,21 @@ function _M.get_stats()
     }
 end
 
+-- Get flagged keywords with their scores (for score adjustment when vhost overrides global)
+-- Returns table: { keyword_lower = score }
+function _M.get_flagged_keyword_scores()
+    local cached = keyword_cache:get("flagged_keywords")
+    if cached then
+        local keywords = {}
+        for entry in cached:gmatch("[^|]+") do
+            local kw, score = entry:match("([^:]+):?(%d*)")
+            if kw then
+                keywords[kw:lower()] = tonumber(score) or 10
+            end
+        end
+        return keywords
+    end
+    return {}
+end
+
 return _M
