@@ -47,6 +47,13 @@ spec:
             - name: stunnel-config
               mountPath: /etc/stunnel
               readOnly: true
+            - name: stunnel-tmp
+              mountPath: /tmp
+            {{- if and .Values.externalRedis.tls.verify (or .Values.externalRedis.tls.caCert .Values.externalRedis.tls.existingCaSecret.name) }}
+            - name: redis-ca-cert
+              mountPath: /etc/redis-ca
+              readOnly: true
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -169,11 +176,26 @@ spec:
             name: {{ include "forms-waf.fullname" . }}-openresty-config
         - name: ssl-certs
           emptyDir: {}
-        {{- /* stunnel ConfigMap for Redis TLS */}}
+        {{- /* stunnel ConfigMap and tmp volume for Redis TLS */}}
         {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls.enabled }}
         - name: stunnel-config
           configMap:
             name: {{ include "forms-waf.fullname" . }}-stunnel-config
+        - name: stunnel-tmp
+          emptyDir: {}
+        {{- if and .Values.externalRedis.tls.verify (or .Values.externalRedis.tls.caCert .Values.externalRedis.tls.existingCaSecret.name) }}
+        - name: redis-ca-cert
+          {{- if .Values.externalRedis.tls.existingCaSecret.name }}
+          secret:
+            secretName: {{ .Values.externalRedis.tls.existingCaSecret.name }}
+            items:
+              - key: {{ .Values.externalRedis.tls.existingCaSecret.key | default "ca.crt" }}
+                path: ca.crt
+          {{- else }}
+          configMap:
+            name: {{ include "forms-waf.fullname" . }}-redis-ca
+          {{- end }}
+        {{- end }}
         {{- end }}
       {{- with .Values.openresty.nodeSelector }}
       nodeSelector:

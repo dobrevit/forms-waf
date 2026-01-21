@@ -23,8 +23,9 @@ local function xor_strings(s1, s2)
     return table.concat(result)
 end
 
--- HMAC-SHA256 implementation
-local function hmac_sha256(key, message)
+-- HMAC-SHA256 implementation (RFC 2104)
+-- Exported for use by other modules (e.g., log integrity)
+function _M.hmac_sha256(key, message)
     local block_size = 64  -- SHA256 block size
 
     -- If key is longer than block size, hash it
@@ -82,12 +83,12 @@ local function pbkdf2_sha256(password, salt, iterations, dk_len)
             bit.band(block_num, 0xff)
         )
 
-        local u = hmac_sha256(password, salt .. block_num_bytes)
+        local u = _M.hmac_sha256(password, salt .. block_num_bytes)
         local t = u
 
         -- Iterate: U2 = PRF(Password, U1), etc.
         for _ = 2, iterations do
-            u = hmac_sha256(password, u)
+            u = _M.hmac_sha256(password, u)
             t = xor_strings(t, u)
         end
 

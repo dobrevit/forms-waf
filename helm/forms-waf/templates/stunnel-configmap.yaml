@@ -15,6 +15,16 @@ data:
     client = yes
     accept = 127.0.0.1:{{ .Values.externalRedis.tls.stunnel.localPort | default 6379 }}
     connect = {{ .Values.externalRedis.host }}:{{ .Values.externalRedis.port | default 6379 }}
+    {{- if .Values.externalRedis.tls.verify }}
+    ; Certificate verification enabled
+    verify = 2
+    {{- if or .Values.externalRedis.tls.caCert .Values.externalRedis.tls.existingCaSecret.name }}
+    CAfile = /etc/redis-ca/ca.crt
+    {{- end }}
+    {{- else }}
+    ; WARNING: Certificate verification disabled - vulnerable to MITM attacks
+    verify = 0
+    {{- end }}
     {{- if .Values.externalRedis.tls.stunnel.extraOptions }}
     {{ .Values.externalRedis.tls.stunnel.extraOptions | nindent 4 }}
     {{- end }}

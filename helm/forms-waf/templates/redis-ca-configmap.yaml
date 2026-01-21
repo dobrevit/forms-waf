@@ -1,0 +1,13 @@
+{{- if and (not .Values.redis.enabled) .Values.externalRedis.tls.enabled .Values.externalRedis.tls.verify .Values.externalRedis.tls.caCert }}
+{{- if not .Values.externalRedis.tls.existingCaSecret.name }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "forms-waf.fullname" . }}-redis-ca
+  labels:
+    {{- include "forms-waf.labels" . | nindent 4 }}
+data:
+  ca.crt: |
+    {{- .Values.externalRedis.tls.caCert | nindent 4 }}
+{{- end }}
+{{- end }}

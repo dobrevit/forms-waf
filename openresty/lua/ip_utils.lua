@@ -85,10 +85,25 @@ function _M.ipv6_to_groups(ip)
     -- Normalize to lowercase
     ip = ip:lower()
 
-    -- Handle IPv4-mapped IPv6 (::ffff:192.168.1.1)
-    local ipv4_part = ip:match("::ffff:(%d+%.%d+%.%d+%.%d+)$")
-    if ipv4_part then
-        local ipv4_num = _M.ip_to_number(ipv4_part)
+    -- Validate: :: must appear at most once in the address
+    -- Count occurrences of :: (not just :)
+    local double_colon_count = 0
+    local pos = 1
+    while true do
+        local found = ip:find("::", pos, true)  -- plain search, not pattern
+        if not found then break end
+        double_colon_count = double_colon_count + 1
+        pos = found + 2
+    end
+    if double_colon_count > 1 then
+        return nil  -- Invalid: multiple :: in address
+    end
+
+    -- Handle IPv4-mapped IPv6 (::ffff:192.168.1.1 or ::ffff:0:192.168.1.1)
+    -- Must be exactly ::ffff: prefix (not 1:2::ffff:...)
+    local ipv4_mapped = ip:match("^::ffff:(%d+%.%d+%.%d+%.%d+)$")
+    if ipv4_mapped then
+        local ipv4_num = _M.ip_to_number(ipv4_mapped)
         if not ipv4_num then
             return nil
         end
@@ -97,7 +112,19 @@ function _M.ipv6_to_groups(ip)
                 bit.band(ipv4_num, 0xffff)}
     end
 
-    -- Split on ::
+    -- Also handle ::ffff:0:a.b.c.d format (SIIT)
+    local ipv4_siit = ip:match("^::ffff:0:(%d+%.%d+%.%d+%.%d+)$")
+    if ipv4_siit then
+        local ipv4_num = _M.ip_to_number(ipv4_siit)
+        if not ipv4_num then
+            return nil
+        end
+        return {0, 0, 0, 0, 0xffff, 0,
+                bit.rshift(ipv4_num, 16),
+                bit.band(ipv4_num, 0xffff)}
+    end
+
+    -- Split on :: (we already validated there's at most one)
     local left, right = ip:match("^(.*)::(.*)$")
     local groups = {}
 

@@ -8,13 +8,14 @@ local ip_utils = require "ip_utils"
 
 -- Default trusted proxy CIDRs (private networks)
 -- These should be overridden via WAF_TRUSTED_PROXIES environment variable
+-- SECURITY: Loopback (127.0.0.0/8, ::1/128) is NOT included by default to prevent
+-- X-Forwarded-For spoofing from localhost connections. If you have a legitimate
+-- reverse proxy running on localhost, add "127.0.0.1" to WAF_TRUSTED_PROXIES.
 local DEFAULT_TRUSTED_CIDRS = {
     "10.0.0.0/8",
     "172.16.0.0/12",
     "192.168.0.0/16",
-    "127.0.0.0/8",
-    "100.64.0.0/10",  -- Kubernetes pod network
-    "::1/128",        -- IPv6 loopback
+    "100.64.0.0/10",  -- Carrier-grade NAT / Kubernetes pod network
     "fc00::/7",       -- IPv6 private
     "fe80::/10",      -- IPv6 link-local
 }
@@ -78,19 +79,9 @@ end
 
 -- Get the real client IP from the request
 -- Uses nginx's real_ip module result ($remote_addr after real_ip processing)
--- Falls back to manual XFF parsing if needed
+-- The real_ip module has already processed X-Forwarded-For based on
+-- set_real_ip_from directives in nginx.conf
 function _M.get_client_ip()
-    -- nginx's real_ip module already processes XFF and sets remote_addr
-    -- to the real client IP based on set_real_ip_from directives
-    local remote_addr = ngx.var.remote_addr
-
-    -- If we have a binary_remote_addr, remote_addr is already processed
-    -- by the real_ip module - this is the recommended approach
-    if remote_addr then
-        return remote_addr
-    end
-
-    -- Fallback: should not normally reach here
     return ngx.var.remote_addr or "0.0.0.0"
 end
 

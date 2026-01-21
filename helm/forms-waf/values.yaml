@@ -294,6 +294,23 @@ externalRedis:
   tls:
     # Enable TLS connection to Redis
     enabled: false
+
+    # SECURITY: Certificate verification settings
+    # WARNING: Setting verify=false disables certificate verification, making the connection
+    # vulnerable to man-in-the-middle attacks. Only disable for testing or when using
+    # self-signed certificates without proper CA setup.
+    verify: true
+
+    # CA certificate for verifying the Redis server certificate
+    # For AWS ElastiCache: download the Amazon root CA from https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/in-transit-encryption.html
+    # For Azure Cache: uses DigiCert Global Root G2, usually in system trust store
+    caCert: ""  # Inline PEM-encoded CA certificate
+
+    # Or reference an existing secret containing the CA certificate
+    existingCaSecret:
+      name: ""           # Secret name containing CA cert
+      key: "ca.crt"      # Key in secret containing the PEM certificate
+
     # stunnel sidecar configuration
     stunnel:
       # stunnel image

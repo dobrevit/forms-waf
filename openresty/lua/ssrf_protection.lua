@@ -167,6 +167,12 @@ function _M.validate_url(url)
         return false, "no_host"
     end
 
+    -- Remove userinfo FIRST if present (http://user:pass@host)
+    -- This must be done before parsing hostname:port to avoid confusion with colons
+    if host_with_port:find("@") then
+        host_with_port = host_with_port:match("@(.+)$") or host_with_port
+    end
+
     -- Handle IPv6 addresses in brackets
     local hostname, port
     if host_with_port:match("^%[") then
@@ -180,11 +186,6 @@ function _M.validate_url(url)
 
     if not hostname then
         return false, "invalid_host_format"
-    end
-
-    -- Remove userinfo if present (http://user:pass@host)
-    if hostname:find("@") then
-        hostname = hostname:match("@(.+)$") or hostname
     end
 
     hostname = hostname:lower()

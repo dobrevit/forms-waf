@@ -16,11 +16,16 @@
 local http = require "resty.http"
 local cjson = require "cjson.safe"
 local ssrf_protection = require "ssrf_protection"
+local ip_utils = require "ip_utils"
 
 local _M = {}
 
 -- F15: SSRF protection enabled by default
 local SSRF_PROTECTION_ENABLED = os.getenv("WAF_DISABLE_SSRF_PROTECTION") ~= "true"
+
+-- DNS nameservers for resolution check (use local resolver or Google/Cloudflare)
+local DNS_NAMESERVERS = { "127.0.0.53", "8.8.8.8", "1.1.1.1" }
+local DNS_TIMEOUT = 2000  -- 2 seconds
 
 -- Proxy configuration from environment (read once at module load time)
 local HTTP_PROXY = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
@@ -105,6 +110,71 @@ local function parse_proxy_url(proxy_url)
     return proxy_host, proxy_port
 end
 
+-- Resolve hostname and check if resolved IP is safe (DNS rebinding protection)
+-- Returns: true if safe, or (false, error_reason) if blocked
+local function check_dns_resolution(host, allowlist)
+    -- Skip check if host is already an IP address
+    if ip_utils.is_valid_ip(host) then
+        -- Already checked by static validation
+        return true
+    end
+
+    -- Use resty.dns.resolver to resolve the hostname
+    local resolver = require "resty.dns.resolver"
+    local r, err = resolver:new{
+        nameservers = DNS_NAMESERVERS,
+        retrans = 2,
+        timeout = DNS_TIMEOUT,
+    }
+
+    if not r then
+        ngx.log(ngx.WARN, "http_utils: failed to create DNS resolver: ", err)
+        -- Fail open in case resolver can't be created (allow request but log)
+        return true
+    end
+
+    -- Query A records (IPv4)
+    local answers, err = r:query(host, { qtype = r.TYPE_A })
+    if not answers then
+        ngx.log(ngx.WARN, "http_utils: DNS query failed for ", host, ": ", err)
+        -- Fail open for DNS errors
+        return true
+    end
+
+    if answers.errcode then
+        ngx.log(ngx.DEBUG, "http_utils: DNS error for ", host, ": ", answers.errstr)
+        -- Fail open for DNS errors (NXDOMAIN, etc.)
+        return true
+    end
+
+    -- Check each resolved IP address
+    for _, ans in ipairs(answers) do
+        if ans.address then
+            local is_safe, reason = ssrf_protection.check_resolved_ip(ans.address)
+            if not is_safe then
+                ngx.log(ngx.WARN, "http_utils: DNS rebinding blocked - ", host, " resolved to private IP: ", ans.address)
+                return false, "DNS rebinding: " .. host .. " resolved to private IP " .. ans.address
+            end
+        end
+    end
+
+    -- Also check AAAA records (IPv6)
+    local answers6, err6 = r:query(host, { qtype = r.TYPE_AAAA })
+    if answers6 and not answers6.errcode then
+        for _, ans in ipairs(answers6) do
+            if ans.address then
+                local is_safe, reason = ssrf_protection.check_resolved_ip(ans.address)
+                if not is_safe then
+                    ngx.log(ngx.WARN, "http_utils: DNS rebinding blocked (IPv6) - ", host, " resolved to private IP: ", ans.address)
+                    return false, "DNS rebinding: " .. host .. " resolved to private IPv6 " .. ans.address
+                end
+            end
+        end
+    end
+
+    return true
+end
+
 -- Perform HTTP request with optional proxy support
 -- opts: {
 --   method = "GET" | "POST" | ...,
@@ -134,6 +204,15 @@ function _M.request(url, opts)
     local host = extract_host(url)
     if not host then
         return nil, "Invalid URL: cannot extract host"
+    end
+
+    -- F15: Runtime DNS resolution check to prevent DNS rebinding attacks
+    -- This catches cases where a public hostname resolves to a private IP
+    if SSRF_PROTECTION_ENABLED and not opts.skip_ssrf_check then
+        local dns_safe, dns_err = check_dns_resolution(host, opts.ssrf_allowlist)
+        if not dns_safe then
+            return nil, dns_err
+        end
     end
 
     -- Check if we should use proxy

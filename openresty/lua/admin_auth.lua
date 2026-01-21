@@ -236,8 +236,13 @@ function _M.handle_login()
             user.password_hash = new_hash
             user.salt = nil  -- Salt is now embedded in PBKDF2 hash
             user.password_upgraded_at = ngx.time()
-            red:set(REDIS_PREFIX .. "users:" .. username, cjson.encode(user))
-            ngx.log(ngx.INFO, "admin_auth: upgraded password hash for user ", username)
+            local ok, err = red:set(REDIS_PREFIX .. "users:" .. username, cjson.encode(user))
+            if ok then
+                ngx.log(ngx.INFO, "admin_auth: upgraded password hash for user ", username)
+            else
+                -- Log error but don't fail login - upgrade will be retried on next login
+                ngx.log(ngx.ERR, "admin_auth: failed to save upgraded password hash for user ", username, ": ", err)
+            end
         end
     end
 

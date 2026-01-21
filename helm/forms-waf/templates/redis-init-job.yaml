@@ -24,7 +24,8 @@ spec:
           imagePullPolicy: {{ .Values.redisInit.image.pullPolicy }}
           {{- if and (not .Values.redis.enabled) (or .Values.externalRedis.password .Values.externalRedis.existingSecret.name) }}
           env:
-            - name: REDIS_PASSWORD
+            # SECURITY: Use REDISCLI_AUTH instead of -a flag to avoid password exposure in ps output
+            - name: REDISCLI_AUTH
               {{- if .Values.externalRedis.existingSecret.name }}
               valueFrom:
                 secretKeyRef:
@@ -35,11 +36,18 @@ spec:
               {{- end }}
           {{- else if .Values.redis.auth.enabled }}
           env:
-            - name: REDIS_PASSWORD
+            # SECURITY: Use REDISCLI_AUTH instead of -a flag to avoid password exposure in ps output
+            - name: REDISCLI_AUTH
               valueFrom:
                 secretKeyRef:
                   name: {{ .Release.Name }}-redis
                   key: redis-password
+          {{- end }}
+          {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls.enabled .Values.externalRedis.tls.verify (or .Values.externalRedis.tls.caCert .Values.externalRedis.tls.existingCaSecret.name) }}
+          volumeMounts:
+            - name: redis-ca-cert
+              mountPath: /etc/redis-ca
+              readOnly: true
           {{- end }}
           command:
             - /bin/sh
@@ -54,19 +62,27 @@ spec:
               REDIS_HOST="{{ .Values.externalRedis.host }}"
               REDIS_PORT="{{ .Values.externalRedis.port | default 6379 }}"
               {{- if .Values.externalRedis.tls.enabled }}
+              {{- if .Values.externalRedis.tls.verify }}
+              {{- if or .Values.externalRedis.tls.caCert .Values.externalRedis.tls.existingCaSecret.name }}
+              # TLS with certificate verification using provided CA
+              REDIS_TLS_OPTS="--tls --cacert /etc/redis-ca/ca.crt"
+              {{- else }}
+              # TLS with system CA store (works for most cloud providers with public CAs)
+              REDIS_TLS_OPTS="--tls"
+              {{- end }}
+              {{- else }}
+              # WARNING: TLS without certificate verification - vulnerable to MITM attacks
               REDIS_TLS_OPTS="--tls --insecure"
+              {{- end }}
               {{- else }}
               REDIS_TLS_OPTS=""
               {{- end }}
               {{- end }}
 
-              # Build redis-cli command with optional auth and TLS
+              # Build redis-cli command with optional TLS
+              # SECURITY: Authentication is handled via REDISCLI_AUTH env var (set above)
+              # which avoids exposing password in process listings
               REDIS_CLI="redis-cli -h $REDIS_HOST -p $REDIS_PORT $REDIS_TLS_OPTS"
-              {{- if or .Values.redis.auth.enabled (and (not .Values.redis.enabled) (or .Values.externalRedis.password .Values.externalRedis.existingSecret.name)) }}
-              if [ -n "$REDIS_PASSWORD" ]; then
-                REDIS_CLI="$REDIS_CLI -a $REDIS_PASSWORD"
-              fi
-              {{- end }}
 
               echo "Waiting for Redis to be ready..."
               echo "Connecting to: $REDIS_HOST:$REDIS_PORT (TLS: {{ if and (not .Values.redis.enabled) .Values.externalRedis.tls.enabled }}enabled{{ else }}disabled{{ end }})"
@@ -201,4 +217,18 @@ spec:
               {{- end }}
               {{- end }}
               {{- end }}
+      {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls.enabled .Values.externalRedis.tls.verify (or .Values.externalRedis.tls.caCert .Values.externalRedis.tls.existingCaSecret.name) }}
+      volumes:
+        - name: redis-ca-cert
+          {{- if .Values.externalRedis.tls.existingCaSecret.name }}
+          secret:
+            secretName: {{ .Values.externalRedis.tls.existingCaSecret.name }}
+            items:
+              - key: {{ .Values.externalRedis.tls.existingCaSecret.key | default "ca.crt" }}
+                path: ca.crt
+          {{- else }}
+          configMap:
+            name: {{ include "forms-waf.fullname" . }}-redis-ca
+          {{- end }}
+      {{- end }}
 {{- end }}

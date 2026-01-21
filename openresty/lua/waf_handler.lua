@@ -71,18 +71,14 @@ local function audit_log(event_type, event_data)
     end
 
     -- F08: Add HMAC signature for log integrity if key is configured
+    -- Uses proper RFC 2104 HMAC-SHA256: H((K ⊕ opad) || H((K ⊕ ipad) || message))
     if LOG_HMAC_KEY and LOG_HMAC_KEY ~= "" then
-        local resty_sha256 = require "resty.sha256"
+        local password_utils = require "password_utils"
         local resty_string = require "resty.string"
 
-        -- Create HMAC-like signature (HMAC = H(key || H(key || message)))
-        local sha = resty_sha256:new()
         local log_json = cjson.encode(log_entry)
-        sha:update(LOG_HMAC_KEY)
-        sha:update(log_json)
-        sha:update(LOG_HMAC_KEY)
-        local digest = sha:final()
-        log_entry["_integrity"] = resty_string.to_hex(digest):sub(1, 16)  -- Short signature
+        local hmac_digest = password_utils.hmac_sha256(LOG_HMAC_KEY, log_json)
+        log_entry["_integrity"] = resty_string.to_hex(hmac_digest):sub(1, 16)  -- Short signature
     end
 
     -- Output as JSON to error log (can be parsed by log shippers)
