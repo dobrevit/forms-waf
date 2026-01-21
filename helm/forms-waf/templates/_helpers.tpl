@@ -98,10 +98,14 @@ Create the name of the service account for HAProxy
 
 {{/*
 Redis host (FQDN for reliable DNS resolution)
+When using external Redis with TLS, returns localhost (stunnel proxy)
 */}}
 {{- define "forms-waf.redis.host" -}}
 {{- if .Values.redis.enabled }}
 {{- printf "%s-redis-master.%s.svc.cluster.local" .Release.Name .Release.Namespace }}
+{{- else if and .Values.externalRedis.tls.enabled (not .Values.redis.enabled) }}
+{{- /* When TLS is enabled, stunnel sidecar proxies to external Redis, so connect to localhost */ -}}
+{{- "localhost" }}
 {{- else }}
 {{- .Values.externalRedis.host }}
 {{- end }}
@@ -109,13 +113,42 @@ Redis host (FQDN for reliable DNS resolution)
 
 {{/*
 Redis port
+When using external Redis with TLS, returns stunnel local port
 */}}
 {{- define "forms-waf.redis.port" -}}
 {{- if .Values.redis.enabled }}
 {{- 6379 }}
+{{- else if and .Values.externalRedis.tls.enabled (not .Values.redis.enabled) }}
+{{- /* When TLS is enabled, connect to stunnel's local port */ -}}
+{{- .Values.externalRedis.tls.stunnel.localPort | default 6379 }}
 {{- else }}
 {{- .Values.externalRedis.port | default 6379 }}
 {{- end }}
+{{- end }}
+
+{{/*
+Check if stunnel sidecar is needed (external Redis with TLS)
+*/}}
+{{- define "forms-waf.redis.useStunnel" -}}
+{{- if and (not .Values.redis.enabled) .Values.externalRedis.tls.enabled }}
+{{- true }}
+{{- else }}
+{{- false }}
+{{- end }}
+{{- end }}
+
+{{/*
+External Redis host (actual host for stunnel to connect to)
+*/}}
+{{- define "forms-waf.redis.externalHost" -}}
+{{- .Values.externalRedis.host }}
+{{- end }}
+
+{{/*
+External Redis port (actual port for stunnel to connect to)
+*/}}
+{{- define "forms-waf.redis.externalPort" -}}
+{{- .Values.externalRedis.port | default 6379 }}
 {{- end }}
 
 {{/*

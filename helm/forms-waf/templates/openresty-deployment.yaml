@@ -30,6 +30,27 @@ spec:
       securityContext:
         {{- toYaml .Values.openresty.securityContext | nindent 8 }}
       containers:
+        {{- /* stunnel sidecar for Redis TLS (external Redis with TLS enabled) */}}
+        {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls.enabled }}
+        - name: stunnel
+          image: "{{ .Values.externalRedis.tls.stunnel.image.repository }}:{{ .Values.externalRedis.tls.stunnel.image.tag }}"
+          imagePullPolicy: {{ .Values.externalRedis.tls.stunnel.image.pullPolicy }}
+          args:
+            - /etc/stunnel/stunnel.conf
+          ports:
+            - name: redis-proxy
+              containerPort: {{ .Values.externalRedis.tls.stunnel.localPort | default 6379 }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.externalRedis.tls.stunnel.resources | nindent 12 }}
+          volumeMounts:
+            - name: stunnel-config
+              mountPath: /etc/stunnel
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+        {{- end }}
         - name: openresty
           image: "{{ .Values.global.imageRegistry }}{{ .Values.openresty.image.repository }}:{{ .Values.openresty.image.tag }}"
           imagePullPolicy: {{ .Values.openresty.image.pullPolicy }}
@@ -84,6 +105,17 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-redis
                   key: redis-password
+            {{- else if and (not .Values.redis.enabled) (or .Values.externalRedis.password .Values.externalRedis.existingSecret.name) }}
+            {{- /* External Redis password */}}
+            - name: REDIS_PASSWORD
+              {{- if .Values.externalRedis.existingSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalRedis.existingSecret.name }}
+                  key: {{ .Values.externalRedis.existingSecret.key | default "redis-password" }}
+              {{- else }}
+              value: {{ .Values.externalRedis.password | quote }}
+              {{- end }}
             {{- end }}
             {{- if .Values.openresty.adminSeed.enabled }}
             - name: WAF_ADMIN_SALT
@@ -137,6 +169,12 @@ spec:
             name: {{ include "forms-waf.fullname" . }}-openresty-config
         - name: ssl-certs
           emptyDir: {}
+        {{- /* stunnel ConfigMap for Redis TLS */}}
+        {{- if and (not .Values.redis.enabled) .Values.externalRedis.tls.enabled }}
+        - name: stunnel-config
+          configMap:
+            name: {{ include "forms-waf.fullname" . }}-stunnel-config
+        {{- end }}
       {{- with .Values.openresty.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

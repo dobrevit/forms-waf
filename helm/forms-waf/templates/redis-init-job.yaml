@@ -1,4 +1,4 @@
-{{- if and .Values.redis.enabled .Values.redisInit.enabled }}
+{{- if and (or .Values.redis.enabled (not (empty .Values.externalRedis.host))) .Values.redisInit.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -22,43 +22,82 @@ spec:
         - name: redis-init
           image: "{{ .Values.redisInit.image.repository }}:{{ .Values.redisInit.image.tag }}"
           imagePullPolicy: {{ .Values.redisInit.image.pullPolicy }}
+          {{- if and (not .Values.redis.enabled) (or .Values.externalRedis.password .Values.externalRedis.existingSecret.name) }}
+          env:
+            - name: REDIS_PASSWORD
+              {{- if .Values.externalRedis.existingSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalRedis.existingSecret.name }}
+                  key: {{ .Values.externalRedis.existingSecret.key | default "redis-password" }}
+              {{- else }}
+              value: {{ .Values.externalRedis.password | quote }}
+              {{- end }}
+          {{- else if .Values.redis.auth.enabled }}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-redis
+                  key: redis-password
+          {{- end }}
           command:
             - /bin/sh
             - -c
             - |
               set -e
+              {{- if .Values.redis.enabled }}
               REDIS_HOST="{{ include "forms-waf.redis.host" . }}"
               REDIS_PORT="{{ include "forms-waf.redis.port" . }}"
+              REDIS_TLS_OPTS=""
+              {{- else }}
+              REDIS_HOST="{{ .Values.externalRedis.host }}"
+              REDIS_PORT="{{ .Values.externalRedis.port | default 6379 }}"
+              {{- if .Values.externalRedis.tls.enabled }}
+              REDIS_TLS_OPTS="--tls --insecure"
+              {{- else }}
+              REDIS_TLS_OPTS=""
+              {{- end }}
+              {{- end }}
+
+              # Build redis-cli command with optional auth and TLS
+              REDIS_CLI="redis-cli -h $REDIS_HOST -p $REDIS_PORT $REDIS_TLS_OPTS"
+              {{- if or .Values.redis.auth.enabled (and (not .Values.redis.enabled) (or .Values.externalRedis.password .Values.externalRedis.existingSecret.name)) }}
+              if [ -n "$REDIS_PASSWORD" ]; then
+                REDIS_CLI="$REDIS_CLI -a $REDIS_PASSWORD"
+              fi
+              {{- end }}
 
               echo "Waiting for Redis to be ready..."
-              until redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; do
+              echo "Connecting to: $REDIS_HOST:$REDIS_PORT (TLS: {{ if and (not .Values.redis.enabled) .Values.externalRedis.tls.enabled }}enabled{{ else }}disabled{{ end }})"
+              until $REDIS_CLI ping 2>/dev/null | grep -q PONG; do
                   echo "Waiting for Redis..."
                   sleep 2
               done
 
               echo "Loading blocked keywords..."
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:keywords:blocked \
+              $REDIS_CLI SADD waf:keywords:blocked \
               {{- range .Values.redisInit.blockedKeywords }}
                 "{{ . }}" \
               {{- end }}
                 "placeholder-to-avoid-empty"
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SREM waf:keywords:blocked "placeholder-to-avoid-empty"
+              $REDIS_CLI SREM waf:keywords:blocked "placeholder-to-avoid-empty"
 
               echo "Loading flagged keywords..."
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:keywords:flagged \
+              $REDIS_CLI SADD waf:keywords:flagged \
               {{- range .Values.redisInit.flaggedKeywords }}
                 "{{ . }}" \
               {{- end }}
                 "placeholder-to-avoid-empty"
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SREM waf:keywords:flagged "placeholder-to-avoid-empty"
+              $REDIS_CLI SREM waf:keywords:flagged "placeholder-to-avoid-empty"
 
               echo "Loading thresholds..."
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET waf:config:thresholds \
+              $REDIS_CLI HSET waf:config:thresholds \
               {{- range $key, $value := .Values.redisInit.thresholds }}
                 {{ $key }} {{ $value }} \
               {{- end }}
                 placeholder 0
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HDEL waf:config:thresholds placeholder
+              $REDIS_CLI HDEL waf:config:thresholds placeholder
 
               {{- if .Values.redisInit.routing.enabled }}
               echo "Loading routing configuration..."
@@ -71,7 +110,7 @@ spec:
               {{- if not $haproxyUpstreamSsl }}
               {{- $haproxyUpstreamSsl = printf "%s:%d" $haproxyFqdn (int .Values.haproxy.service.httpsPort) }}
               {{- end }}
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET waf:config:routing \
+              $REDIS_CLI HSET waf:config:routing \
                 haproxy_upstream "{{ $haproxyUpstream }}" \
                 haproxy_upstream_ssl "{{ $haproxyUpstreamSsl }}" \
                 upstream_ssl "{{ .Values.openresty.env.UPSTREAM_SSL | default "false" }}" \
@@ -82,12 +121,12 @@ spec:
               {{- end }}
 
               echo "Loading IP whitelist..."
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:whitelist:ips \
+              $REDIS_CLI SADD waf:whitelist:ips \
               {{- range .Values.redisInit.whitelistedIPs }}
                 "{{ . }}" \
               {{- end }}
                 "placeholder-to-avoid-empty"
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SREM waf:whitelist:ips "placeholder-to-avoid-empty"
+              $REDIS_CLI SREM waf:whitelist:ips "placeholder-to-avoid-empty"
 
               {{- if .Values.adminUI.enabled }}
               # NOTE: Admin user and RBAC roles are now seeded by OpenResty/Lua on startup
@@ -105,7 +144,7 @@ spec:
               {{ $provider | toJson }}
               PROVIDEREOF
               )
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:auth:providers:config:{{ $provider.id }}" "$PROVIDER_{{ $provider.id | replace "-" "_" }}_JSON"
+              $REDIS_CLI SET "waf:auth:providers:config:{{ $provider.id }}" "$PROVIDER_{{ $provider.id | replace "-" "_" }}_JSON"
               echo "  - Added provider: {{ $provider.id }} ({{ $provider.type }})"
               {{- end }}
               {{- end }}
@@ -115,38 +154,38 @@ spec:
               {{- range $vhost := .Values.redisInit.vhosts }}
               # Virtual host: {{ $vhost.id }}
               VHOST_{{ $vhost.id | replace "-" "_" }}='{{ $vhost.config | toJson }}'
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:vhosts:config:{{ $vhost.id }}" "$VHOST_{{ $vhost.id | replace "-" "_" }}"
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:vhosts:index" {{ $vhost.priority | default 100 }} "{{ $vhost.id }}"
+              $REDIS_CLI SET "waf:vhosts:config:{{ $vhost.id }}" "$VHOST_{{ $vhost.id | replace "-" "_" }}"
+              $REDIS_CLI ZADD "waf:vhosts:index" {{ $vhost.priority | default 100 }} "{{ $vhost.id }}"
               {{- range $hostname := $vhost.hostnames }}
               {{- if hasPrefix "*" $hostname }}
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZADD "waf:vhosts:hosts:wildcard" {{ $vhost.priority | default 100 }} "{{ $hostname }}|{{ $vhost.id }}"
+              $REDIS_CLI ZADD "waf:vhosts:hosts:wildcard" {{ $vhost.priority | default 100 }} "{{ $hostname }}|{{ $vhost.id }}"
               {{- else }}
-              redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET "waf:vhosts:hosts:exact" "{{ $hostname }}" "{{ $vhost.id }}"
+              $REDIS_CLI HSET "waf:vhosts:hosts:exact" "{{ $hostname }}" "{{ $vhost.id }}"
               {{- end }}
               {{- end }}
               {{- end }}
 
               echo "Redis initialization complete!"
               echo "=== Loaded Data Summary ==="
-              echo "Blocked keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:blocked)"
-              echo "Flagged keywords: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:keywords:flagged)"
-              echo "Whitelisted IPs: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SCARD waf:whitelist:ips)"
-              echo "Virtual hosts: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZCARD waf:vhosts:index)"
+              echo "Blocked keywords: $($REDIS_CLI SCARD waf:keywords:blocked)"
+              echo "Flagged keywords: $($REDIS_CLI SCARD waf:keywords:flagged)"
+              echo "Whitelisted IPs: $($REDIS_CLI SCARD waf:whitelist:ips)"
+              echo "Virtual hosts: $($REDIS_CLI ZCARD waf:vhosts:index)"
               {{- if .Values.redisInit.routing.enabled }}
               echo ""
               echo "=== Routing Configuration ==="
-              echo "HAProxy upstream (HTTP): $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HGET waf:config:routing haproxy_upstream)"
-              echo "HAProxy upstream (SSL):  $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HGET waf:config:routing haproxy_upstream_ssl)"
-              echo "Use SSL: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HGET waf:config:routing upstream_ssl)"
-              echo "Timeout: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HGET waf:config:routing haproxy_timeout)s"
+              echo "HAProxy upstream (HTTP): $($REDIS_CLI HGET waf:config:routing haproxy_upstream)"
+              echo "HAProxy upstream (SSL):  $($REDIS_CLI HGET waf:config:routing haproxy_upstream_ssl)"
+              echo "Use SSL: $($REDIS_CLI HGET waf:config:routing upstream_ssl)"
+              echo "Timeout: $($REDIS_CLI HGET waf:config:routing haproxy_timeout)s"
               {{- end }}
               {{- if .Values.adminUI.enabled }}
-              echo "Admin users: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" KEYS 'waf:admin:users:*' | wc -l)"
+              echo "Admin users: $($REDIS_CLI KEYS 'waf:admin:users:*' | wc -l)"
               {{- if .Values.adminUI.auth.rbac.enabled }}
-              echo "RBAC roles: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" KEYS 'waf:auth:roles:config:*' | wc -l)"
+              echo "RBAC roles: $($REDIS_CLI KEYS 'waf:auth:roles:config:*' | wc -l)"
               {{- end }}
               {{- if .Values.adminUI.auth.providers }}
-              echo "Auth providers: $(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" KEYS 'waf:auth:providers:config:*' | wc -l)"
+              echo "Auth providers: $($REDIS_CLI KEYS 'waf:auth:providers:config:*' | wc -l)"
               {{- end }}
               echo ""
               echo "=== Admin UI Access ==="

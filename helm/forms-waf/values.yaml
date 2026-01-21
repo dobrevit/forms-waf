@@ -276,6 +276,44 @@ redis:
     maxmemory-policy allkeys-lru
     notify-keyspace-events KEA
 
+# External Redis configuration (when redis.enabled=false)
+# Use this for AWS ElastiCache, Azure Cache for Redis, or other managed Redis services
+externalRedis:
+  # Redis host (FQDN or IP)
+  host: ""
+  # Redis port (default: 6379)
+  port: 6379
+  # Redis password (optional)
+  password: ""
+  # Use existing secret for password
+  existingSecret:
+    name: ""
+    key: "redis-password"
+
+  # TLS/SSL configuration for Redis connection (e.g., AWS ElastiCache with in-transit encryption)
+  tls:
+    # Enable TLS connection to Redis
+    enabled: false
+    # stunnel sidecar configuration
+    stunnel:
+      # stunnel image
+      image:
+        repository: dweomer/stunnel
+        tag: latest
+        pullPolicy: IfNotPresent
+      # Local port for stunnel to listen on (OpenResty connects here)
+      localPort: 6379
+      # Resources for stunnel sidecar
+      resources:
+        limits:
+          cpu: 100m
+          memory: 64Mi
+        requests:
+          cpu: 10m
+          memory: 16Mi
+      # Additional stunnel options (rarely needed)
+      extraOptions: ""
+
 # Admin UI configuration
 adminUI:
   enabled: true
