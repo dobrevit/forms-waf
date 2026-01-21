@@ -20,6 +20,7 @@ local timing_token = require "timing_token"
 local geoip = require "geoip"
 local ip_reputation = require "ip_reputation"
 local ip_utils = require "ip_utils"
+local trusted_proxies = require "trusted_proxies"
 local behavioral_tracker = require "behavioral_tracker"
 local fingerprint_profiles = require "fingerprint_profiles"
 local header_consistency = require "header_consistency"
@@ -43,14 +44,18 @@ local function get_multi_executor()
     return _multi_executor
 end
 
+-- F08: HMAC key for log integrity (optional)
+local LOG_HMAC_KEY = os.getenv("WAF_LOG_HMAC_KEY")
+
 -- Structured audit logging for security events
 -- Outputs JSON formatted log entries for easy parsing by log aggregation tools
+-- F08: Optionally adds HMAC signature for log integrity verification
 local function audit_log(event_type, event_data)
     local log_entry = {
         ["@timestamp"] = os.date("!%Y-%m-%dT%H:%M:%SZ"),
         event_type = event_type,
         request_id = ngx.var.request_id or tostring(ngx.now()),
-        client_ip = ngx.var.http_x_forwarded_for or ngx.var.remote_addr,
+        client_ip = trusted_proxies.get_client_ip(),  -- F01: Use secure IP extraction
         host = ngx.var.http_host or ngx.var.host,
         path = ngx.var.uri,
         method = ngx.req.get_method(),
@@ -63,6 +68,21 @@ local function audit_log(event_type, event_data)
         for k, v in pairs(event_data) do
             log_entry[k] = v
         end
+    end
+
+    -- F08: Add HMAC signature for log integrity if key is configured
+    if LOG_HMAC_KEY and LOG_HMAC_KEY ~= "" then
+        local resty_sha256 = require "resty.sha256"
+        local resty_string = require "resty.string"
+
+        -- Create HMAC-like signature (HMAC = H(key || H(key || message)))
+        local sha = resty_sha256:new()
+        local log_json = cjson.encode(log_entry)
+        sha:update(LOG_HMAC_KEY)
+        sha:update(log_json)
+        sha:update(LOG_HMAC_KEY)
+        local digest = sha:final()
+        log_entry["_integrity"] = resty_string.to_hex(digest):sub(1, 16)  -- Short signature
     end
 
     -- Output as JSON to error log (can be parsed by log shippers)
@@ -447,12 +467,9 @@ function _M.process_request()
         return
     end
 
-    -- Get client IP (considering proxies)
-    local client_ip = ngx.var.http_x_forwarded_for or ngx.var.remote_addr
-    if client_ip then
-        -- Take first IP if multiple
-        client_ip = client_ip:match("([^,]+)")
-    end
+    -- Get client IP securely (F01: trusted proxy validation)
+    -- Uses nginx real_ip module result, which respects set_real_ip_from directives
+    local client_ip = trusted_proxies.get_client_ip()
 
     -- Check IP allowlist first (supports both exact IPs and CIDR ranges)
     local allowlist = ngx.shared.ip_whitelist

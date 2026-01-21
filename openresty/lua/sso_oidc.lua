@@ -47,9 +47,27 @@ local function close_redis(red)
     end
 end
 
--- Generate secure random string
+-- Generate secure random string (F03: use cryptographic random)
 local function generate_random_string(length)
     length = length or 32
+
+    -- Use cryptographic random
+    local resty_random = require "resty.random"
+    local random_bytes = resty_random.bytes(length, true)
+    if not random_bytes then
+        ngx.log(ngx.WARN, "sso_oidc: strong random failed, using fallback")
+        random_bytes = resty_random.bytes(length, false)
+    end
+
+    if random_bytes then
+        -- Convert to URL-safe base64 and trim
+        local token = ngx.encode_base64(random_bytes)
+        token = token:gsub("+", "A"):gsub("/", "B"):gsub("=", "")
+        return token:sub(1, length)
+    end
+
+    -- Last resort fallback (should not happen)
+    ngx.log(ngx.ERR, "sso_oidc: crypto random unavailable")
     local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     local result = {}
     for i = 1, length do
@@ -518,6 +536,7 @@ function _M.handle_callback()
 end
 
 -- Test provider connection (validates configuration)
+-- F15: Use http_utils with SSRF protection
 function _M.test_provider(provider_id)
     local provider, err = _M.get_provider(provider_id)
     if not provider then
@@ -528,13 +547,13 @@ function _M.test_provider(provider_id)
         return { success = false, message = "Provider is not OIDC type" }
     end
 
-    -- Try to fetch the discovery document
-    local http = require "resty.http"
-    local httpc = http.new()
+    -- Use http_utils for SSRF protection
+    local http_utils = require "http_utils"
 
     local discovery_url = provider.oidc.discovery or (provider.oidc.issuer .. "/.well-known/openid-configuration")
 
-    local res, err = httpc:request_uri(discovery_url, {
+    -- Make request through http_utils which has SSRF protection
+    local res, err = http_utils.request(discovery_url, {
         method = "GET",
         ssl_verify = provider.oidc.ssl_verify ~= false,
         timeout = 5000,

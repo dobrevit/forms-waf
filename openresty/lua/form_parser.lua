@@ -6,7 +6,11 @@ local _M = {}
 
 local upload = require "resty.upload"
 local cjson = require "cjson.safe"
+local safe_json = require "safe_json"  -- F07: JSON with depth limits
 local charset = require "charset"
+
+-- F12: Per-field size limit for multipart forms (1MB default)
+local MAX_FIELD_SIZE = 1024 * 1024
 
 -- Convert all keys and values in form data to UTF-8
 -- @param form_data: Table of form field key-value pairs
@@ -147,7 +151,21 @@ local function parse_multipart()
                         current_value = {"[FILE:unnamed]"}
                     end
                 else
-                    table.insert(current_value, res)
+                    -- F12: Check per-field size limit before adding
+                    local current_size = 0
+                    for _, chunk in ipairs(current_value) do
+                        current_size = current_size + #chunk
+                    end
+                    if current_size + #res > MAX_FIELD_SIZE then
+                        ngx.log(ngx.WARN, "form_parser: field '", current_field, "' exceeds size limit")
+                        -- Truncate or skip - we'll truncate to limit
+                        local remaining = MAX_FIELD_SIZE - current_size
+                        if remaining > 0 then
+                            table.insert(current_value, res:sub(1, remaining))
+                        end
+                    else
+                        table.insert(current_value, res)
+                    end
                 end
             end
 
@@ -180,32 +198,40 @@ local function parse_multipart()
     return data
 end
 
--- Parse JSON body
+-- Parse JSON body (F07: with depth limit protection)
 local function parse_json(body)
     if not body or body == "" then
         return {}
     end
 
-    local data, err = cjson.decode(body)
+    -- F07: Use safe_json which has depth limits configured
+    local data, err = safe_json.decode(body)
     if not data then
         return nil, "JSON parse error: " .. (err or "unknown")
     end
 
     -- Flatten nested JSON to key-value pairs for scanning
     local flat = {}
+    local depth = 0
+    local max_depth = safe_json.get_max_depth()
 
-    local function flatten(obj, prefix)
+    local function flatten(obj, prefix, current_depth)
+        -- Additional depth check during flattening
+        if current_depth > max_depth then
+            return
+        end
+
         if type(obj) == "table" then
             for k, v in pairs(obj) do
                 local new_key = prefix and (prefix .. "." .. tostring(k)) or tostring(k)
-                flatten(v, new_key)
+                flatten(v, new_key, current_depth + 1)
             end
         else
             flat[prefix or "value"] = tostring(obj)
         end
     end
 
-    flatten(data, nil)
+    flatten(data, nil, 0)
     return flat
 end
 

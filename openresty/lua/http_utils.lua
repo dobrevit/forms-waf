@@ -15,8 +15,12 @@
 
 local http = require "resty.http"
 local cjson = require "cjson.safe"
+local ssrf_protection = require "ssrf_protection"
 
 local _M = {}
+
+-- F15: SSRF protection enabled by default
+local SSRF_PROTECTION_ENABLED = os.getenv("WAF_DISABLE_SSRF_PROTECTION") ~= "true"
 
 -- Proxy configuration from environment (read once at module load time)
 local HTTP_PROXY = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
@@ -108,10 +112,22 @@ end
 --   headers = table,
 --   timeout = number (ms),
 --   ssl_verify = boolean,
+--   skip_ssrf_check = boolean,  -- For trusted internal use only
+--   ssrf_allowlist = table,     -- Optional allowlist for specific URLs
 -- }
 -- Returns: response table with {status, headers, body} or nil, error
 function _M.request(url, opts)
     opts = opts or {}
+
+    -- F15: SSRF protection - validate URL before making request
+    if SSRF_PROTECTION_ENABLED and not opts.skip_ssrf_check then
+        local is_safe, ssrf_reason = ssrf_protection.validate_url_safe(url, opts.ssrf_allowlist)
+        if not is_safe then
+            ngx.log(ngx.WARN, "http_utils: SSRF protection blocked request to ", url, " (", ssrf_reason, ")")
+            return nil, "SSRF protection: " .. (ssrf_reason or "blocked")
+        end
+    end
+
     local httpc = http.new()
     httpc:set_timeout(opts.timeout or 5000)
 

@@ -77,33 +77,56 @@ local function get_config()
     return config_cache
 end
 
--- Get or generate encryption key
+-- Get or generate encryption key (F05: atomic key generation across workers)
 local function get_encryption_key()
     local config = get_config()
 
+    -- First priority: configured secret key
     if config.secret_key and #config.secret_key >= 32 then
         return config.secret_key:sub(1, 32)
     end
 
-    -- Try to get from shared dict (generated once per worker lifecycle)
+    -- Second priority: shared dict with atomic add
     local shared = ngx.shared.waf_timing
     if shared then
+        -- Try to get existing key first
         local key = shared:get("encryption_key")
         if key then
             return key
         end
 
-        -- Generate new key
+        -- Generate new key using strong random
         local random_bytes = resty_random.bytes(32, true)
+        if not random_bytes then
+            ngx.log(ngx.WARN, "timing_token: strong random failed, using fallback")
+            random_bytes = resty_random.bytes(32, false)
+        end
+
         if random_bytes then
-            key = resty_string.to_hex(random_bytes):sub(1, 32)
-            shared:set("encryption_key", key, 86400)  -- 24 hour TTL
-            return key
+            local new_key = resty_string.to_hex(random_bytes):sub(1, 32)
+
+            -- F05: Use atomic add - only one worker will succeed
+            -- If add fails, another worker already set the key
+            local success, err, forcible = shared:add("encryption_key", new_key, 86400)
+            if success then
+                return new_key
+            else
+                -- Another worker beat us - get their key
+                key = shared:get("encryption_key")
+                if key then
+                    return key
+                end
+                -- Rare edge case: key expired between add and get
+                ngx.log(ngx.WARN, "timing_token: key race condition, retrying")
+                shared:set("encryption_key", new_key, 86400)
+                return new_key
+            end
         end
     end
 
     -- Fallback: use a deterministic key based on server info (less secure but functional)
-    local fallback = ngx.md5(ngx.var.server_name .. ngx.var.server_addr .. "waf_timing_secret")
+    ngx.log(ngx.WARN, "timing_token: using fallback deterministic key - configure WAF_TIMING_SECRET for security")
+    local fallback = ngx.md5((ngx.var.server_name or "default") .. (ngx.var.server_addr or "127.0.0.1") .. "waf_timing_secret")
     return fallback
 end
 

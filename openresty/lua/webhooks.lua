@@ -8,6 +8,7 @@ local _M = {}
 
 local http_utils = require "http_utils"
 local cjson = require "cjson.safe"
+local trusted_proxies = require "trusted_proxies"
 
 -- Shared dictionary for webhook queue and config
 local webhook_cache = ngx.shared.keyword_cache  -- Reuse existing cache
@@ -237,10 +238,11 @@ function _M.update_config(config_data)
 end
 
 -- Helper function to create common event data
+-- F14: Use trusted_proxies for secure IP extraction
 function _M.create_event_data(context, extra_data)
     local data = {
         request_id = ngx.var.request_id or ngx.now(),
-        client_ip = ngx.var.http_x_forwarded_for or ngx.var.remote_addr,
+        client_ip = trusted_proxies.get_client_ip(),
         host = ngx.var.http_host or ngx.var.host,
         path = ngx.var.uri,
         method = ngx.req.get_method(),
