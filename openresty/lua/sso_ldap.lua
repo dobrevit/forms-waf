@@ -47,9 +47,27 @@ local function close_redis(red)
     end
 end
 
--- Generate secure random string
+-- Generate secure random string (F03/F16: use cryptographic random)
 local function generate_random_string(length)
     length = length or 32
+
+    -- Use cryptographic random
+    local resty_random = require "resty.random"
+    local random_bytes = resty_random.bytes(length, true)
+    if not random_bytes then
+        ngx.log(ngx.WARN, "sso_ldap: strong random failed, using fallback")
+        random_bytes = resty_random.bytes(length, false)
+    end
+
+    if random_bytes then
+        -- Convert to URL-safe base64 and trim
+        local token = ngx.encode_base64(random_bytes)
+        token = token:gsub("+", "A"):gsub("/", "B"):gsub("=", "")
+        return token:sub(1, length)
+    end
+
+    -- Last resort fallback (should not happen)
+    ngx.log(ngx.ERR, "sso_ldap: crypto random unavailable")
     local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     local result = {}
     for i = 1, length do

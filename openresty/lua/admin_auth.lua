@@ -5,7 +5,9 @@
 local cjson = require "cjson.safe"
 local resty_sha256 = require "resty.sha256"
 local resty_string = require "resty.string"
+local resty_random = require "resty.random"
 local redis_sync = require "redis_sync"
+local password_utils = require "password_utils"
 
 local _M = {}
 
@@ -14,23 +16,33 @@ local SESSION_TTL = tonumber(os.getenv("WAF_SESSION_TTL")) or 86400  -- 24 hours
 local SESSION_COOKIE_NAME = "waf_admin_session"
 local REDIS_PREFIX = "waf:admin:"
 
--- Helper: Generate random token
+-- Helper: Generate cryptographically secure random token (F03)
 local function generate_token(length)
     length = length or 32
-    local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    local token = {}
 
-    -- Use OpenResty's random generator
-    for i = 1, length do
-        local rand = math.random(1, #chars)
-        table.insert(token, chars:sub(rand, rand))
+    -- Use cryptographically secure random bytes
+    local random_bytes = resty_random.bytes(length, true)
+    if not random_bytes then
+        -- Log warning but try fallback
+        ngx.log(ngx.WARN, "admin_auth: strong random failed, using fallback")
+        random_bytes = resty_random.bytes(length, false)
     end
 
-    return table.concat(token)
+    if not random_bytes then
+        ngx.log(ngx.ERR, "admin_auth: failed to generate random token")
+        return nil
+    end
+
+    -- Convert to URL-safe base64 and trim to desired length
+    local token = ngx.encode_base64(random_bytes)
+    -- Make URL-safe by replacing + and /
+    token = token:gsub("+", "A"):gsub("/", "B"):gsub("=", "")
+    return token:sub(1, length)
 end
 
--- Helper: Hash password with salt
-local function hash_password(password, salt)
+-- Helper: Hash password with salt (legacy format - for backwards compatibility)
+-- New passwords should use password_utils.hash_password() which returns PBKDF2 format
+local function hash_password_legacy(password, salt)
     local sha256 = resty_sha256:new()
     sha256:update(salt .. password .. salt)
     local digest = sha256:final()
@@ -73,7 +85,7 @@ local function get_session_token()
     return token
 end
 
--- Helper: Set session cookie
+-- Helper: Set session cookie (F09: auto-detect HTTPS for Secure flag)
 local function set_session_cookie(token, max_age)
     local cookie = SESSION_COOKIE_NAME .. "=" .. token
     cookie = cookie .. "; Path=/; HttpOnly; SameSite=Strict"
@@ -82,8 +94,12 @@ local function set_session_cookie(token, max_age)
         cookie = cookie .. "; Max-Age=" .. max_age
     end
 
-    -- In production, add Secure flag
-    -- cookie = cookie .. "; Secure"
+    -- F09: Auto-detect HTTPS and add Secure flag
+    local scheme = ngx.var.scheme
+    local forwarded_proto = ngx.var.http_x_forwarded_proto
+    if scheme == "https" or forwarded_proto == "https" then
+        cookie = cookie .. "; Secure"
+    end
 
     ngx.header["Set-Cookie"] = cookie
 end
@@ -201,9 +217,9 @@ function _M.handle_login()
         send_json(500, { success = false, error = "Invalid user data" })
     end
 
-    -- Verify password
-    local password_hash = hash_password(password, user.salt or "")
-    if password_hash ~= user.password_hash then
+    -- Verify password (F02: supports both PBKDF2 and legacy SHA256 formats)
+    local password_valid = password_utils.verify_password(password, user.password_hash, user.salt)
+    if not password_valid then
         close_redis(red)
         send_json(401, {
             success = false,
@@ -212,8 +228,30 @@ function _M.handle_login()
         })
     end
 
-    -- Create session
+    -- Check if password hash needs upgrade to PBKDF2 (F02: auto-upgrade on login)
+    local needs_upgrade = password_utils.needs_upgrade(user.password_hash)
+    if needs_upgrade then
+        local new_hash = password_utils.hash_password(password)
+        if new_hash then
+            user.password_hash = new_hash
+            user.salt = nil  -- Salt is now embedded in PBKDF2 hash
+            user.password_upgraded_at = ngx.time()
+            local ok, err = red:set(REDIS_PREFIX .. "users:" .. username, cjson.encode(user))
+            if ok then
+                ngx.log(ngx.INFO, "admin_auth: upgraded password hash for user ", username)
+            else
+                -- Log error but don't fail login - upgrade will be retried on next login
+                ngx.log(ngx.ERR, "admin_auth: failed to save upgraded password hash for user ", username, ": ", err)
+            end
+        end
+    end
+
+    -- Create session (F03: using cryptographic random)
     local session_token = generate_token(48)
+    if not session_token then
+        close_redis(red)
+        send_json(500, { success = false, error = "Failed to generate session token" })
+    end
     local session_data = {
         username = username,
         role = user.role or "admin",
@@ -369,9 +407,9 @@ function _M.handle_change_password()
         send_json(500, { success = false, error = "Invalid user data" })
     end
 
-    -- Verify current password
-    local current_hash = hash_password(current_password, user.salt or "")
-    if current_hash ~= user.password_hash then
+    -- Verify current password (F02: supports both PBKDF2 and legacy formats)
+    local password_valid = password_utils.verify_password(current_password, user.password_hash, user.salt)
+    if not password_valid then
         close_redis(red)
         send_json(401, {
             success = false,
@@ -380,12 +418,15 @@ function _M.handle_change_password()
         })
     end
 
-    -- Generate new salt and hash
-    local new_salt = generate_token(16)
-    local new_hash = hash_password(new_password, new_salt)
+    -- Generate new PBKDF2 hash (F02: always use secure PBKDF2 for new passwords)
+    local new_hash = password_utils.hash_password(new_password)
+    if not new_hash then
+        close_redis(red)
+        send_json(500, { success = false, error = "Failed to hash password" })
+    end
 
-    -- Update user
-    user.salt = new_salt
+    -- Update user (salt is now embedded in PBKDF2 hash format)
+    user.salt = nil
     user.password_hash = new_hash
     user.must_change_password = false
     user.password_changed_at = ngx.time()
@@ -414,8 +455,7 @@ end
 function _M.handle_request()
     local uri = ngx.var.uri
 
-    -- Seed random number generator
-    math.randomseed(ngx.time() + ngx.worker.pid())
+    -- Note: random seeding removed (F03) - now using cryptographic random via resty.random
 
     -- Route auth requests
     if uri == "/api/auth/login" then

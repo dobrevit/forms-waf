@@ -5,36 +5,34 @@ local _M = {}
 
 local cjson = require "cjson.safe"
 local utils = require "api_handlers.utils"
+local password_utils = require "password_utils"
 
 local USER_KEY_PREFIX = "waf:admin:users:"
 
--- Helper: Generate random salt
-local function generate_salt(length)
-    length = length or 16
-    local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    local salt = {}
-    for i = 1, length do
-        local rand = math.random(1, #chars)
-        table.insert(salt, chars:sub(rand, rand))
-    end
-    return table.concat(salt)
-end
-
--- Helper: Hash password with salt (same as admin_auth.lua)
-local function hash_password(password, salt)
-    local resty_sha256 = require "resty.sha256"
-    local resty_string = require "resty.string"
-    local sha256 = resty_sha256:new()
-    sha256:update(salt .. password .. salt)
-    local digest = sha256:final()
-    return resty_string.to_hex(digest)
-end
-
--- Helper: Generate temporary password
+-- Helper: Generate temporary password (F03: use cryptographic random)
 local function generate_temp_password()
+    local resty_random = require "resty.random"
+    local length = 12
+
+    -- Use cryptographic random
+    local random_bytes = resty_random.bytes(length, true)
+    if not random_bytes then
+        ngx.log(ngx.WARN, "users: strong random failed, using fallback")
+        random_bytes = resty_random.bytes(length, false)
+    end
+
+    if random_bytes then
+        -- Convert to URL-safe base64 and trim
+        local password = ngx.encode_base64(random_bytes)
+        password = password:gsub("+", "A"):gsub("/", "B"):gsub("=", "")
+        return password:sub(1, length)
+    end
+
+    -- Last resort fallback (should not happen)
+    ngx.log(ngx.ERR, "users: crypto random unavailable")
     local chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     local password = {}
-    for i = 1, 12 do
+    for i = 1, length do
         local rand = math.random(1, #chars)
         table.insert(password, chars:sub(rand, rand))
     end
@@ -124,9 +122,12 @@ function _M.create()
         must_change = data.must_change_password ~= false
     end
 
-    -- Hash password
-    local salt = generate_salt(16)
-    local password_hash = hash_password(password, salt)
+    -- Hash password using PBKDF2 (F02: secure password hashing)
+    local password_hash = password_utils.hash_password(password)
+    if not password_hash then
+        utils.close_redis(red)
+        return utils.error_response("Failed to hash password", 500)
+    end
 
     -- Validate role
     local role = data.role or "viewer"
@@ -141,11 +142,11 @@ function _M.create()
         vhost_scope = {"*"}
     end
 
-    -- Create user object
+    -- Create user object (F02: salt is embedded in PBKDF2 hash)
     local user = {
         username = data.username,
         password_hash = password_hash,
-        salt = salt,
+        salt = nil,  -- Salt is embedded in PBKDF2 hash format
         role = role,
         vhost_scope = vhost_scope,
         auth_provider = "local",
@@ -430,14 +431,17 @@ function _M.reset_password(username)
         return utils.error_response("Cannot reset password for SSO users", 400)
     end
 
-    -- Generate new temporary password
+    -- Generate new temporary password (F02/F03: secure random + PBKDF2)
     local temp_password = generate_temp_password()
-    local salt = generate_salt(16)
-    local password_hash = hash_password(temp_password, salt)
+    local password_hash = password_utils.hash_password(temp_password)
+    if not password_hash then
+        utils.close_redis(red)
+        return utils.error_response("Failed to hash password", 500)
+    end
 
-    -- Update user
+    -- Update user (salt is embedded in PBKDF2 hash)
     user.password_hash = password_hash
-    user.salt = salt
+    user.salt = nil  -- Salt is embedded in PBKDF2 hash format
     user.must_change_password = true
     user.password_changed_at = nil
     user.updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ")

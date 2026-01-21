@@ -79,6 +79,11 @@ local REDIS_HOST = os.getenv("REDIS_HOST") or "redis"
 local REDIS_PORT = tonumber(os.getenv("REDIS_PORT")) or 6379
 local REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or nil
 local REDIS_DB = tonumber(os.getenv("REDIS_DB")) or 0
+-- F10: Redis TLS support (requires TLS termination proxy like stunnel or envoy)
+-- Set to "true" to enable TLS logging/warnings
+-- Actual TLS is handled by external proxy (stunnel/envoy) pointing to Redis
+local REDIS_TLS = os.getenv("REDIS_TLS") == "true"
+local REDIS_TLS_WARNED = false
 
 -- Sync interval in seconds
 local SYNC_INTERVAL = tonumber(os.getenv("WAF_SYNC_INTERVAL")) or 30
@@ -133,7 +138,16 @@ local ip_whitelist = ngx.shared.ip_whitelist
 local ip_whitelist_cidr = ngx.shared.ip_whitelist_cidr
 
 -- Get Redis connection
+-- F10: TLS support note - lua-resty-redis doesn't have native TLS
+-- For TLS, deploy a TLS proxy (stunnel/envoy) between OpenResty and Redis
+-- Set REDIS_HOST to the proxy address (e.g., localhost:6380 for stunnel)
 local function get_redis_connection()
+    -- F10: Log TLS configuration note once
+    if REDIS_TLS and not REDIS_TLS_WARNED then
+        ngx.log(ngx.INFO, "redis_sync: REDIS_TLS=true - ensure TLS proxy (stunnel/envoy) is configured")
+        REDIS_TLS_WARNED = true
+    end
+
     local red = redis:new()
     red:set_timeout(2000) -- 2 second timeout
 

@@ -12,6 +12,21 @@ local sso_saml = require "sso_saml"
 local PROVIDER_KEY_PREFIX = "waf:auth:providers:config:"
 local ADMIN_COOKIE_NAME = os.getenv("WAF_ADMIN_COOKIE") or "waf_admin_session"
 
+-- F09: Helper to build session cookie with Secure flag for HTTPS
+local function build_session_cookie(session_id)
+    local cookie = ADMIN_COOKIE_NAME .. "=" .. session_id ..
+        "; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400"
+
+    -- Auto-detect HTTPS and add Secure flag
+    local scheme = ngx.var.scheme
+    local forwarded_proto = ngx.var.http_x_forwarded_proto
+    if scheme == "https" or forwarded_proto == "https" then
+        cookie = cookie .. "; Secure"
+    end
+
+    return cookie
+end
+
 -- GET /api/auth/providers - List available providers for login page (public)
 function _M.list_public()
     local providers, err = sso_oidc.list_providers()
@@ -504,8 +519,7 @@ function _M.initiate_oidc(provider_id)
 
     if result then
         -- Authentication successful - set cookie and redirect
-        ngx.header["Set-Cookie"] = ADMIN_COOKIE_NAME .. "=" .. result.session_id ..
-            "; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400"
+        ngx.header["Set-Cookie"] = build_session_cookie(result.session_id)
 
         -- Redirect to dashboard
         return ngx.redirect("/")
@@ -527,8 +541,7 @@ function _M.oidc_callback()
 
     if result then
         -- Authentication successful - set cookie and redirect
-        ngx.header["Set-Cookie"] = ADMIN_COOKIE_NAME .. "=" .. result.session_id ..
-            "; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400"
+        ngx.header["Set-Cookie"] = build_session_cookie(result.session_id)
 
         -- Redirect to dashboard
         return ngx.redirect("/")
@@ -550,8 +563,7 @@ function _M.initiate_saml(provider_id)
 
     if result then
         -- Authentication successful - set cookie and redirect
-        ngx.header["Set-Cookie"] = ADMIN_COOKIE_NAME .. "=" .. result.session_id ..
-            "; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400"
+        ngx.header["Set-Cookie"] = build_session_cookie(result.session_id)
 
         -- Redirect to dashboard
         return ngx.redirect("/")
@@ -587,8 +599,7 @@ function _M.authenticate_ldap(provider_id)
 
     if result then
         -- Authentication successful - set cookie
-        ngx.header["Set-Cookie"] = ADMIN_COOKIE_NAME .. "=" .. result.session_id ..
-            "; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400"
+        ngx.header["Set-Cookie"] = build_session_cookie(result.session_id)
 
         return utils.json_response({
             authenticated = true,

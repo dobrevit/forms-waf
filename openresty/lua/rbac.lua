@@ -4,8 +4,6 @@
 
 local cjson = require "cjson.safe"
 local redis = require "resty.redis"
-local resty_sha256 = require "resty.sha256"
-local resty_string = require "resty.string"
 
 local _M = {}
 
@@ -569,10 +567,10 @@ function _M.check_permission(session, method, path)
     local permission, resource_id, resource_type = _M.get_endpoint_permission(method, path)
 
     if not permission then
-        -- Allow endpoints without explicit permission mapping (be careful!)
-        -- In production, you might want to deny by default
-        ngx.log(ngx.WARN, "RBAC: No permission mapping for ", method, " ", path)
-        return true
+        -- F04: Security fix - deny access to unmapped endpoints by default
+        -- All API endpoints MUST have explicit permission mappings
+        ngx.log(ngx.WARN, "RBAC: No permission mapping for ", method, " ", path, " - access denied")
+        return false, "Endpoint not configured in RBAC policy"
     end
 
     -- Check if role has required permission
@@ -734,26 +732,25 @@ function _M.seed_roles()
     return true
 end
 
--- Helper: Hash password with salt (same algorithm as admin_auth.lua)
-local function hash_password(password, salt)
-    local sha256 = resty_sha256:new()
-    sha256:update(salt .. password .. salt)
-    local digest = sha256:final()
-    return resty_string.to_hex(digest)
-end
+-- Load password utilities for secure PBKDF2 hashing (F02)
+local password_utils = require "password_utils"
 
 -- Seed default admin user if not exists
--- Uses environment variables for salt and password
+-- Uses environment variables for password (F02, F11)
 -- Called on startup via init_worker_by_lua
 function _M.seed_default_admin()
-    local admin_salt = os.getenv("WAF_ADMIN_SALT")
-    local admin_password = os.getenv("WAF_ADMIN_PASSWORD") or "changeme"
+    local admin_password = os.getenv("WAF_ADMIN_PASSWORD")
 
-    -- Salt is required for security - fail if not provided
-    if not admin_salt or admin_salt == "" then
-        ngx.log(ngx.WARN, "RBAC: WAF_ADMIN_SALT not set, skipping default admin seeding")
-        ngx.log(ngx.WARN, "RBAC: Set WAF_ADMIN_SALT environment variable to enable default admin user")
-        return false, "WAF_ADMIN_SALT not set"
+    -- F11: Password is now required - no default "changeme"
+    if not admin_password or admin_password == "" then
+        ngx.log(ngx.WARN, "RBAC: WAF_ADMIN_PASSWORD not set, skipping default admin seeding")
+        ngx.log(ngx.WARN, "RBAC: Set WAF_ADMIN_PASSWORD environment variable to create default admin user")
+        return false, "WAF_ADMIN_PASSWORD not set"
+    end
+
+    -- Warn if using weak default password
+    if admin_password == "changeme" or admin_password == "admin" or admin_password == "password" then
+        ngx.log(ngx.WARN, "RBAC: Weak admin password detected - change it immediately!")
     end
 
     local red, err = get_redis()
@@ -770,16 +767,22 @@ function _M.seed_default_admin()
         return true, "exists"
     end
 
-    -- Create default admin user
-    local password_hash = hash_password(admin_password, admin_salt)
+    -- Create default admin user with PBKDF2 hash (F02)
+    local password_hash = password_utils.hash_password(admin_password)
+    if not password_hash then
+        close_redis(red)
+        ngx.log(ngx.ERR, "RBAC: Failed to hash admin password")
+        return false, "password hash failed"
+    end
+
     local admin_user = {
         username = "admin",
-        password_hash = password_hash,
-        salt = admin_salt,
+        password_hash = password_hash,  -- PBKDF2 format: pbkdf2:iterations:salt:hash
+        salt = nil,  -- Salt is embedded in PBKDF2 hash
         role = "admin",
         vhost_scope = {"*"},
         auth_provider = "local",
-        must_change_password = (admin_password == "changeme"),
+        must_change_password = false,
         created_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
     }
 
@@ -792,11 +795,7 @@ function _M.seed_default_admin()
         return false, err
     end
 
-    ngx.log(ngx.INFO, "RBAC: Default admin user created (username: admin)")
-    if admin_password == "changeme" then
-        ngx.log(ngx.WARN, "RBAC: Using default password 'changeme' - change it immediately!")
-    end
-
+    ngx.log(ngx.INFO, "RBAC: Default admin user created (username: admin) with PBKDF2 password hash")
     return true, "created"
 end
 

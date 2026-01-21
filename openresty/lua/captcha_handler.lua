@@ -6,6 +6,7 @@
 local cjson = require "cjson.safe"
 local captcha_providers = require "captcha_providers"
 local captcha_templates = require "captcha_templates"
+local trusted_proxies = require "trusted_proxies"
 
 local _M = {}
 
@@ -58,18 +59,26 @@ local function close_redis(red)
     end
 end
 
--- Generate secure random token
+-- Generate secure random token (F14: use cryptographic random, secure IP extraction)
 local function generate_token()
     local resty_random = require "resty.random"
     local str = require "resty.string"
 
-    local bytes = resty_random.bytes(32)
+    -- Always use strong random (true = blocking for entropy)
+    local bytes = resty_random.bytes(32, true)
+    if not bytes then
+        -- Try non-blocking fallback
+        bytes = resty_random.bytes(32, false)
+    end
+
     if bytes then
         return str.to_hex(bytes)
     end
 
-    -- Fallback to less secure method
-    return ngx.md5(ngx.now() .. ngx.var.remote_addr .. math.random())
+    -- Last resort fallback - use secure IP extraction
+    local client_ip = trusted_proxies.get_client_ip()
+    ngx.log(ngx.WARN, "captcha: crypto random unavailable, using fallback")
+    return ngx.md5(ngx.now() .. client_ip .. os.time())
 end
 
 -- HMAC signature for trust tokens
@@ -548,8 +557,8 @@ function _M.handle_verification()
         return _M.serve_error("Configuration error")
     end
 
-    -- Verify with provider
-    local client_ip = challenge.client_ip or ngx.var.remote_addr
+    -- Verify with provider (F14: use secure IP extraction as fallback)
+    local client_ip = challenge.client_ip or trusted_proxies.get_client_ip()
     local verified, verify_err = captcha_providers.verify(provider, captcha_response, client_ip)
 
     if not verified then
