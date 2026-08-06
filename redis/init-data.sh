@@ -110,7 +110,9 @@ echo "Loaded IP whitelist"
 # fresh deployments, the PBKDF2 path never ran, and the deployed password was
 # "changeme" with a salt published in this repository.
 #
-# Set WAF_ADMIN_PASSWORD (and WAF_ADMIN_SALT) on the OpenResty container instead.
+# Set WAF_ADMIN_PASSWORD on the OpenResty container instead. WAF_ADMIN_SALT is NOT
+# used for this: hash_password() generates a random per-password salt and embeds it
+# in the PBKDF2 hash (pbkdf2:iterations:salt:hash).
 
 echo "Admin user will be seeded by OpenResty on startup (see rbac.lua)"
 

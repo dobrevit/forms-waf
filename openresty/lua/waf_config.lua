@@ -47,7 +47,11 @@ local DEFAULT_ROUTING = {
     haproxy_upstream = os.getenv("HAPROXY_UPSTREAM") or "haproxy:8080",
     haproxy_upstream_ssl = os.getenv("HAPROXY_UPSTREAM_SSL") or "haproxy:8443",
     upstream_ssl = env_bool("UPSTREAM_SSL", false),
-    haproxy_timeout = 30,
+    -- HAPROXY_TIMEOUT is a declared env var (nginx.conf) and redis_sync used to
+    -- read it when seeding Redis. Once redis_sync started sourcing its defaults
+    -- from here, hardcoding 30 silently made the variable ineffective on fresh
+    -- deployments.
+    haproxy_timeout = tonumber(os.getenv("HAPROXY_TIMEOUT")) or 30,
 }
 
 -- Canonical routing defaults.
