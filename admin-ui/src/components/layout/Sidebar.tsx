@@ -23,6 +23,7 @@ import {
   Activity,
   Server,
   Fingerprint,
+  MessageSquare,
   Workflow,
   Target,
   Archive,
@@ -75,6 +76,7 @@ const navigation = [
     name: 'Operations',
     children: [
       { name: 'Webhooks', href: '/operations/webhooks', icon: Bell },
+      { name: 'Slack Notifications', href: '/operations/slack', icon: MessageSquare },
       { name: 'Bulk Import/Export', href: '/operations/bulk', icon: FileJson },
     ],
   },

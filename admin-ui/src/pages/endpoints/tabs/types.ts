@@ -1,4 +1,5 @@
-import type { Endpoint, Vhost, Thresholds, CaptchaProvider, FingerprintProfile, DefenseProfile, LearnedField, AttackSignature } from '@/api/types'
+import type { Endpoint, Vhost, Thresholds, CaptchaProvider, CaptchaGlobalConfig, FingerprintProfile, DefenseProfile, AttackSignature } from '@/api/types'
+import type { LearnedField } from '@/api/client'
 
 export interface EndpointTabProps {
   formData: Partial<Endpoint>
@@ -18,11 +19,7 @@ export interface RateLimitingTabProps extends EndpointTabProps {}
 
 export interface CaptchaTabProps extends EndpointTabProps {
   captchaProviders: CaptchaProvider[]
-  globalCaptchaConfig?: {
-    enabled: boolean
-    default_provider?: string
-    trust_duration?: number
-  }
+  globalCaptchaConfig?: CaptchaGlobalConfig
 }
 
 export interface FingerprintingTabProps extends EndpointTabProps {

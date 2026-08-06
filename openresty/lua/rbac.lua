@@ -36,6 +36,7 @@ local DEFAULT_ROLES = {
             bulk = {"import", "export", "clear"},
             captcha = {"create", "read", "update", "delete", "enable", "disable", "test"},
             webhooks = {"read", "update", "test"},
+            slack = {"read", "update", "test", "reset"},
             geoip = {"read", "update", "reload"},
             reputation = {"read", "update"},
             timing = {"read", "update"},
@@ -66,6 +67,7 @@ local DEFAULT_ROLES = {
             bulk = {"import", "export"},
             captcha = {"read"},
             webhooks = {"read"},
+            slack = {"read"},
             geoip = {"read"},
             reputation = {"read"},
             timing = {"read"},
@@ -93,6 +95,7 @@ local DEFAULT_ROLES = {
             metrics = {"read"},
             captcha = {"read"},
             webhooks = {"read"},
+            slack = {"read"},
             geoip = {"read"},
             reputation = {"read"},
             timing = {"read"},
@@ -176,6 +179,14 @@ local ENDPOINT_PERMISSIONS = {
     ["PUT:/webhooks/config"] = {resource = "webhooks", action = "update"},
     ["POST:/webhooks/test"] = {resource = "webhooks", action = "test"},
     ["GET:/webhooks/stats"] = {resource = "webhooks", action = "read"},
+
+    -- Slack notifications
+    ["GET:/slack/config"] = {resource = "slack", action = "read"},
+    ["PUT:/slack/config"] = {resource = "slack", action = "update"},
+    ["POST:/slack/test"] = {resource = "slack", action = "test"},
+    ["GET:/slack/attacks"] = {resource = "slack", action = "read"},
+    ["GET:/slack/stats"] = {resource = "slack", action = "read"},
+    ["POST:/slack/stats/reset"] = {resource = "slack", action = "reset"},
 
     -- Bulk operations
     ["GET:/bulk/export/keywords"] = {resource = "bulk", action = "export"},

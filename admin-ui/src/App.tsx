@@ -15,6 +15,7 @@ import { IpAllowList } from '@/pages/config/IpAllowList'
 import { CaptchaProviders } from '@/pages/captcha/CaptchaProviders'
 import { CaptchaSettings } from '@/pages/captcha/CaptchaSettings'
 import { WebhookSettings } from '@/pages/webhooks/WebhookSettings'
+import { SlackSettings } from '@/pages/webhooks/SlackSettings'
 import { BulkOperations } from '@/pages/bulk/BulkOperations'
 import TimingConfig from '@/pages/security/TimingConfig'
 import GeoIPConfig from '@/pages/security/GeoIPConfig'
@@ -74,6 +75,7 @@ export default function App() {
                 <Route path="/captcha/providers" element={<CaptchaProviders />} />
                 <Route path="/captcha/settings" element={<CaptchaSettings />} />
                 <Route path="/operations/webhooks" element={<WebhookSettings />} />
+                <Route path="/operations/slack" element={<SlackSettings />} />
                 <Route path="/operations/bulk" element={<BulkOperations />} />
                 <Route path="/security/timing" element={<TimingConfig />} />
                 <Route path="/security/geoip" element={<GeoIPConfig />} />

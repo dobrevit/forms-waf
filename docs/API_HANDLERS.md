@@ -66,6 +66,7 @@ return _M
 | captcha | captcha.lua | /captcha/* | CAPTCHA providers/settings |
 | behavioral | behavioral.lua | /behavioral/* | ML tracking |
 | webhooks | webhooks.lua | /webhooks/* | Event notifications |
+| slack | slack.lua | /slack/* | Slack notifications |
 | geoip | geoip.lua | /geoip/* | Geographic restrictions |
 | reputation | reputation.lua | /reputation/* | IP reputation |
 | bulk | bulk.lua | /bulk/* | Import/export operations |
@@ -242,6 +243,21 @@ Webhook configuration.
 | PUT | /webhooks/config | Update webhook configuration |
 | POST | /webhooks/test | Send test webhook |
 
+### slack.lua
+
+Slack notification configuration with attack lifecycle tracking.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /slack/config | Get Slack configuration |
+| PUT | /slack/config | Update Slack configuration |
+| POST | /slack/test | Send test notification |
+| GET | /slack/attacks | List active attack streams |
+| GET | /slack/stats | Get notification statistics |
+| POST | /slack/stats/reset | Reset notification statistics |
+
+See [Slack Notifications Guide](SLACK_NOTIFICATIONS.md) for details.
+
 ### geoip.lua
 
 Geographic restriction configuration.
@@ -336,6 +352,7 @@ Each endpoint requires specific permissions. See [RBAC Guide](RBAC.md) for full 
 | bulk | import, export, clear |
 | captcha | read, update |
 | security | read, update |
+| slack | read, update, test |
 
 ---
 

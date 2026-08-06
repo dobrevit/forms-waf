@@ -21,11 +21,11 @@ export default function TimingConfig() {
     enabled: false,
     cookie_name: '_waf_timing',
     cookie_ttl: 3600,
-    min_time_seconds: 2,
-    suspicious_time_seconds: 5,
-    no_cookie_score: 30,
-    too_fast_score: 40,
-    suspicious_score: 20,
+    min_time_block: 2,
+    min_time_flag: 5,
+    score_no_cookie: 30,
+    score_too_fast: 40,
+    score_suspicious: 20,
   })
 
   useEffect(() => {
@@ -153,8 +153,8 @@ export default function TimingConfig() {
                 <Input
                   id="min_time"
                   type="number"
-                  value={config.min_time_seconds || 2}
-                  onChange={(e) => setConfig({ ...config, min_time_seconds: parseInt(e.target.value) || 2 })}
+                  value={config.min_time_block || 2}
+                  onChange={(e) => setConfig({ ...config, min_time_block: parseInt(e.target.value) || 2 })}
                 />
                 <p className="text-xs text-muted-foreground">
                   Submissions faster than this are flagged as "too fast"
@@ -165,8 +165,8 @@ export default function TimingConfig() {
                 <Input
                   id="suspicious_time"
                   type="number"
-                  value={config.suspicious_time_seconds || 5}
-                  onChange={(e) => setConfig({ ...config, suspicious_time_seconds: parseInt(e.target.value) || 5 })}
+                  value={config.min_time_flag || 5}
+                  onChange={(e) => setConfig({ ...config, min_time_flag: parseInt(e.target.value) || 5 })}
                 />
                 <p className="text-xs text-muted-foreground">
                   Submissions between min and this are "suspicious"
@@ -183,36 +183,36 @@ export default function TimingConfig() {
 
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="too_fast_score">Too Fast Score</Label>
+                <Label htmlFor="score_too_fast">Too Fast Score</Label>
                 <Input
-                  id="too_fast_score"
+                  id="score_too_fast"
                   type="number"
-                  value={config.too_fast_score || 40}
-                  onChange={(e) => setConfig({ ...config, too_fast_score: parseInt(e.target.value) || 40 })}
+                  value={config.score_too_fast || 40}
+                  onChange={(e) => setConfig({ ...config, score_too_fast: parseInt(e.target.value) || 40 })}
                 />
                 <p className="text-xs text-muted-foreground">
                   Added when submission is faster than minimum time
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="suspicious_score">Suspicious Score</Label>
+                <Label htmlFor="score_suspicious">Suspicious Score</Label>
                 <Input
-                  id="suspicious_score"
+                  id="score_suspicious"
                   type="number"
-                  value={config.suspicious_score || 20}
-                  onChange={(e) => setConfig({ ...config, suspicious_score: parseInt(e.target.value) || 20 })}
+                  value={config.score_suspicious || 20}
+                  onChange={(e) => setConfig({ ...config, score_suspicious: parseInt(e.target.value) || 20 })}
                 />
                 <p className="text-xs text-muted-foreground">
                   Added when submission is in suspicious range
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="no_cookie_score">No Cookie Score</Label>
+                <Label htmlFor="score_no_cookie">No Cookie Score</Label>
                 <Input
-                  id="no_cookie_score"
+                  id="score_no_cookie"
                   type="number"
-                  value={config.no_cookie_score || 30}
-                  onChange={(e) => setConfig({ ...config, no_cookie_score: parseInt(e.target.value) || 30 })}
+                  value={config.score_no_cookie || 30}
+                  onChange={(e) => setConfig({ ...config, score_no_cookie: parseInt(e.target.value) || 30 })}
                 />
                 <p className="text-xs text-muted-foreground">
                   Added when timing cookie is missing (direct POST)

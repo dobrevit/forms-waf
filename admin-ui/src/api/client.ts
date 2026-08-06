@@ -1,4 +1,15 @@
-import type { ApiResponse, GlobalRouting } from './types'
+import type {
+  ApiResponse,
+  GlobalRouting,
+  Thresholds,
+  Vhost,
+  Endpoint,
+  SlackConfig,
+  SlackConfigResponse,
+  SlackAttacksResponse,
+  SlackStatsResponse,
+  SlackTestResponse,
+} from './types'
 
 const API_BASE = '/api'
 
@@ -95,7 +106,7 @@ export const usersApi = {
     request<{ user: User }>(`/users/${encodeURIComponent(username)}`),
 
   create: (data: CreateUserRequest) =>
-    request<{ created: boolean; user: User }>('/users', {
+    request<{ created: boolean; user: User; temporary_password?: string }>('/users', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -112,7 +123,7 @@ export const usersApi = {
     }),
 
   resetPassword: (username: string, newPassword: string) =>
-    request<{ reset: boolean; username: string }>(`/users/${encodeURIComponent(username)}/reset-password`, {
+    request<{ reset: boolean; username: string; temporary_password?: string }>(`/users/${encodeURIComponent(username)}/reset-password`, {
       method: 'POST',
       body: JSON.stringify({ new_password: newPassword }),
     }),
@@ -242,8 +253,29 @@ export const authProvidersApi = {
 }
 
 // Status API
+export interface WafStatus {
+  redis_host: string
+  redis_port: number
+  redis_connected: boolean
+  sync_interval: number
+  blocked_hashes_count: number
+  whitelisted_ips_count: number
+  endpoints_count: number
+  vhosts_count: number
+  vhost_endpoints_count?: number
+  global_endpoints_count?: number
+  filter_stats?: Record<string, string>
+  endpoint_stats?: Record<string, number>
+  vhost_stats?: Record<string, number>
+  config?: {
+    thresholds?: Thresholds
+    routing?: GlobalRouting
+    defaults?: { thresholds?: Thresholds; routing?: GlobalRouting }
+  }
+}
+
 export const statusApi = {
-  get: () => request<ApiResponse<unknown>>('/status'),
+  get: () => request<WafStatus>('/status'),
 }
 
 // Vhost Timing Configuration
@@ -271,16 +303,16 @@ export interface VhostTimingResponse {
 export const vhostsApi = {
   list: () => request<ApiResponse<{ vhosts: unknown[] }>>('/vhosts'),
 
-  get: (id: string) => request<ApiResponse<unknown>>(`/vhosts/${id}`),
+  get: (id: string) => request<ApiResponse<unknown> & { vhost?: Vhost }>(`/vhosts/${id}`),
 
   create: (data: unknown) =>
-    request<ApiResponse<unknown>>('/vhosts', {
+    request<ApiResponse<unknown> & { vhost?: Vhost }>('/vhosts', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   update: (id: string, data: unknown) =>
-    request<ApiResponse<unknown>>(`/vhosts/${id}`, {
+    request<ApiResponse<unknown> & { vhost?: Vhost }>(`/vhosts/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
@@ -325,16 +357,16 @@ export const endpointsApi = {
     return request<ApiResponse<{ endpoints: unknown[]; global_count?: number }>>(`/endpoints${params}`)
   },
 
-  get: (id: string) => request<ApiResponse<unknown>>(`/endpoints/${id}`),
+  get: (id: string) => request<ApiResponse<unknown> & { endpoint?: Endpoint }>(`/endpoints/${id}`),
 
   create: (data: unknown) =>
-    request<ApiResponse<unknown>>('/endpoints', {
+    request<ApiResponse<unknown> & { endpoint?: Endpoint }>('/endpoints', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   update: (id: string, data: unknown) =>
-    request<ApiResponse<unknown>>(`/endpoints/${id}`, {
+    request<ApiResponse<unknown> & { endpoint?: Endpoint }>(`/endpoints/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
@@ -568,6 +600,34 @@ export const webhooksApi = {
     request<{ stats: WebhookStats }>('/webhooks/stats'),
 }
 
+// Slack Notifications API
+export const slackApi = {
+  getConfig: () =>
+    request<SlackConfigResponse>('/slack/config'),
+
+  updateConfig: (data: Partial<SlackConfig>) =>
+    request<{ updated: boolean; config: SlackConfig }>('/slack/config', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  test: () =>
+    request<SlackTestResponse>('/slack/test', {
+      method: 'POST',
+    }),
+
+  getAttacks: () =>
+    request<SlackAttacksResponse>('/slack/attacks'),
+
+  getStats: () =>
+    request<SlackStatsResponse>('/slack/stats'),
+
+  resetStats: () =>
+    request<{ reset: boolean; message: string }>('/slack/stats/reset', {
+      method: 'POST',
+    }),
+}
+
 // Bulk Operations API - Import/Export
 export interface BulkExportData {
   keywords?: string[]
@@ -692,18 +752,18 @@ export interface IPReputationConfig {
   cache_ttl?: number
   cache_negative_ttl?: number
   abuseipdb?: {
-    enabled: boolean
+    enabled?: boolean
     api_key?: string
     min_confidence?: number
     max_age_days?: number
     score_multiplier?: number
   }
   local_blocklist?: {
-    enabled: boolean
+    enabled?: boolean
     redis_key?: string
   }
   webhook?: {
-    enabled: boolean
+    enabled?: boolean
     url?: string
     timeout?: number
     headers?: Record<string, string>

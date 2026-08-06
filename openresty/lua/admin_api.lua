@@ -18,6 +18,7 @@ local whitelist_handler = require "api_handlers.whitelist"
 local keywords_handler = require "api_handlers.keywords"
 local config_handler = require "api_handlers.config"
 local webhooks_handler = require "api_handlers.webhooks"
+local slack_handler = require "api_handlers.slack"
 local geoip_handler = require "api_handlers.geoip"
 local reputation_handler = require "api_handlers.reputation"
 local bulk_handler = require "api_handlers.bulk"
@@ -66,6 +67,7 @@ register_handlers(whitelist_handler)
 register_handlers(keywords_handler)
 register_handlers(config_handler)
 register_handlers(webhooks_handler)
+register_handlers(slack_handler)
 register_handlers(geoip_handler)
 register_handlers(reputation_handler)
 register_handlers(bulk_handler)

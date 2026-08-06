@@ -16,7 +16,6 @@ export function RoutingConfig() {
 
   const [values, setValues] = useState<GlobalRouting>({
     haproxy_upstream: 'haproxy:8080',
-    haproxy_ssl: false,
     upstream_ssl: false,
     haproxy_timeout: 30,
   })
@@ -30,7 +29,6 @@ export function RoutingConfig() {
     if (data?.routing) {
       setValues({
         haproxy_upstream: data.routing.haproxy_upstream || data.defaults?.haproxy_upstream || 'haproxy:8080',
-        haproxy_ssl: data.routing.haproxy_ssl ?? false,
         upstream_ssl: data.routing.upstream_ssl ?? false,
         haproxy_timeout: data.routing.haproxy_timeout ?? data.defaults?.haproxy_timeout ?? 30,
       })
@@ -140,24 +138,9 @@ export function RoutingConfig() {
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between rounded-lg border p-3">
               <div className="space-y-0.5">
-                <Label htmlFor="haproxy_ssl">HAProxy SSL</Label>
+                <Label htmlFor="upstream_ssl">Upstream SSL</Label>
                 <p className="text-xs text-muted-foreground">
-                  Use HTTPS when connecting to HAProxy upstream
-                </p>
-              </div>
-              <Switch
-                id="haproxy_ssl"
-                checked={values.haproxy_ssl}
-                onCheckedChange={(checked) =>
-                  setValues({ ...values, haproxy_ssl: checked })
-                }
-              />
-            </div>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div className="space-y-0.5">
-                <Label htmlFor="upstream_ssl">Direct Upstream SSL</Label>
-                <p className="text-xs text-muted-foreground">
-                  Use HTTPS when connecting to direct upstream servers (non-HAProxy)
+                  Use HTTPS for the upstream connection (routes via the SSL upstream address)
                 </p>
               </div>
               <Switch
@@ -168,7 +151,7 @@ export function RoutingConfig() {
                 }
               />
             </div>
-            {(values.haproxy_ssl || values.upstream_ssl) && (
+            {values.upstream_ssl && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                 <p className="text-sm text-amber-700">
                   <strong>Note:</strong> Ensure your upstream servers have valid SSL certificates

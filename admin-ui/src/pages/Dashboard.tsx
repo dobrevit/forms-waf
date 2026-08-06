@@ -85,7 +85,7 @@ export function Dashboard() {
     queryFn: configApi.getThresholds,
   })
 
-  const status = statusData as Record<string, unknown> | undefined
+  const status = statusData
   const thresholds = (thresholdsData as { thresholds: Record<string, unknown> } | undefined)?.thresholds
   const debugEnabled = thresholds?.expose_waf_headers === true
   const rawVhosts = (vhostsData as { vhosts: unknown[] } | undefined)?.vhosts

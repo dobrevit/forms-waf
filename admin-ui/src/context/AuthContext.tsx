@@ -75,6 +75,7 @@ interface AuthContextType {
   login: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
+  checkAuth: () => Promise<void>
   // Permission helpers
   hasPermission: (resource: keyof RolePermissions, action: string) => boolean
   hasVhostAccess: (vhostId: string) => boolean
@@ -169,6 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         logout,
         changePassword,
+        checkAuth: verifySession,
         hasPermission,
         hasVhostAccess,
         permissions,

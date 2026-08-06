@@ -40,8 +40,7 @@ export function VhostList() {
     canDeleteVhost,
     canEnableVhost,
     canDisableVhost,
-    hasVhostAccess,
-    isReadOnly
+    hasVhostAccess
   } = usePermissions()
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -224,7 +223,7 @@ export function VhostList() {
               Test
             </Button>
           </div>
-          {testResult && (
+          {testResult != null && (
             <div className="mt-4 rounded-md bg-muted p-4">
               <pre className="text-sm">{JSON.stringify(testResult, null, 2)}</pre>
             </div>

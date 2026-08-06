@@ -9,8 +9,6 @@ import {
   ExternalLink,
   Heart,
   Scale,
-  Mail,
-  Globe,
 } from 'lucide-react'
 
 const VERSION = '1.0.0'

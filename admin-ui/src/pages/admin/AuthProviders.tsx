@@ -52,7 +52,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Search, Pencil, Trash2, KeyRound, Shield, Play, CheckCircle, XCircle, Loader2 } from 'lucide-react'
 

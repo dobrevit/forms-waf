@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { ArrowLeft, Save, Plus, X, Server, BookOpen, Trash2, Info, Check, Timer, Activity, Fingerprint, Shield, GripVertical, ArrowUp, ArrowDown } from 'lucide-react'
-import type { Vhost, BehavioralFlow, FingerprintProfile, DefenseProfile, DefenseProfileAttachmentItem, DefenseAggregation, DefenseScoreAggregation } from '@/api/types'
+import type { Vhost, BehavioralFlow, DefenseProfile, DefenseProfileAttachmentItem, DefenseAggregation, DefenseScoreAggregation } from '@/api/types'
 import { Slider } from '@/components/ui/slider'
 import { Badge } from '@/components/ui/badge'
 
@@ -44,7 +44,8 @@ const defaultVhost: Partial<Vhost> = {
     inherit_global: true,
     additional_blocked: [],
     additional_flagged: [],
-    exclusions: [],
+    excluded_blocked: [],
+    excluded_flagged: [],
   },
   timing: {
     enabled: false,
@@ -172,7 +173,8 @@ export function VhostForm() {
           ...vhost.keywords,
           additional_blocked: Array.isArray(vhost.keywords.additional_blocked) ? vhost.keywords.additional_blocked : [],
           additional_flagged: Array.isArray(vhost.keywords.additional_flagged) ? vhost.keywords.additional_flagged : [],
-          exclusions: Array.isArray(vhost.keywords.exclusions) ? vhost.keywords.exclusions : [],
+          excluded_blocked: Array.isArray(vhost.keywords.excluded_blocked) ? vhost.keywords.excluded_blocked : [],
+          excluded_flagged: Array.isArray(vhost.keywords.excluded_flagged) ? vhost.keywords.excluded_flagged : [],
         } : defaultVhost.keywords,
         timing: vhost.timing ? {
           ...vhost.timing,
@@ -321,32 +323,59 @@ export function VhostForm() {
     })
   }
 
+  // The backend stores exclusions split per list (excluded_blocked / excluded_flagged);
+  // the single "Exclusions" control here excludes a keyword from both.
   const addKeyword = (type: 'blocked' | 'flagged' | 'exclusions') => {
     const value = type === 'blocked' ? newBlockedKeyword : type === 'flagged' ? newFlaggedKeyword : newExclusion
     const setter = type === 'blocked' ? setNewBlockedKeyword : type === 'flagged' ? setNewFlaggedKeyword : setNewExclusion
-    const key = type === 'blocked' ? 'additional_blocked' : type === 'flagged' ? 'additional_flagged' : 'exclusions'
+    if (!value) return
 
-    if (value && !formData.keywords?.[key]?.includes(value)) {
+    const base = {
+      ...formData.keywords,
+      inherit_global: formData.keywords?.inherit_global ?? true,
+    }
+
+    if (type === 'exclusions') {
+      if (base.excluded_blocked?.includes(value)) return
       setFormData({
         ...formData,
         keywords: {
-          ...formData.keywords,
-          inherit_global: formData.keywords?.inherit_global ?? true,
-          [key]: [...(formData.keywords?.[key] || []), value],
+          ...base,
+          excluded_blocked: [...(base.excluded_blocked || []), value],
+          excluded_flagged: [...(base.excluded_flagged || []), value],
         },
       })
-      setter('')
+    } else {
+      const key: 'additional_blocked' | 'additional_flagged' =
+        type === 'blocked' ? 'additional_blocked' : 'additional_flagged'
+      const current = base[key] || []
+      if (current.includes(value)) return
+      setFormData({ ...formData, keywords: { ...base, [key]: [...current, value] } })
     }
+    setter('')
   }
 
   const removeKeyword = (type: 'additional_blocked' | 'additional_flagged' | 'exclusions', keyword: string) => {
+    const base = {
+      ...formData.keywords,
+      inherit_global: formData.keywords?.inherit_global ?? true,
+    }
+
+    if (type === 'exclusions') {
+      setFormData({
+        ...formData,
+        keywords: {
+          ...base,
+          excluded_blocked: base.excluded_blocked?.filter((k) => k !== keyword),
+          excluded_flagged: base.excluded_flagged?.filter((k) => k !== keyword),
+        },
+      })
+      return
+    }
+
     setFormData({
       ...formData,
-      keywords: {
-        ...formData.keywords,
-        inherit_global: formData.keywords?.inherit_global ?? true,
-        [type]: formData.keywords?.[type]?.filter((k) => k !== keyword),
-      },
+      keywords: { ...base, [type]: base[type]?.filter((k) => k !== keyword) },
     })
   }
 
@@ -929,7 +958,7 @@ export function VhostForm() {
                     </Button>
                   </div>
                   <div className="flex flex-wrap gap-2 mt-2">
-                    {(Array.isArray(formData.keywords?.exclusions) ? formData.keywords.exclusions : []).map((kw) => (
+                    {(Array.isArray(formData.keywords?.excluded_blocked) ? formData.keywords.excluded_blocked : []).map((kw) => (
                       <div
                         key={kw}
                         className="flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-sm"
