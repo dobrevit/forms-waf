@@ -1,13 +1,19 @@
 # Build stage
-FROM node:22-alpine AS builder
+# node:24-alpine ships npm >= 11, which is REQUIRED for the min-release-age
+# setting in .npmrc. node:22-alpine ships npm 10.x and silently IGNORES it.
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json ./
+# .npmrc must land before the install so its supply-chain settings apply:
+#   ignore-scripts=true   -> no package lifecycle scripts execute
+#   min-release-age=7     -> refuse versions published in the last 7 days
+COPY .npmrc package.json package-lock.json ./
 
-# Install dependencies (using npm install since we may not have package-lock.json)
-RUN npm install
+# npm ci installs the vetted lockfile exactly and fails if package.json and the
+# lockfile disagree. Do NOT switch back to `npm install`: that re-resolves the
+# semver ranges at build time and silently pulls whatever was published since.
+RUN npm ci
 
 # Copy source files
 COPY . .
