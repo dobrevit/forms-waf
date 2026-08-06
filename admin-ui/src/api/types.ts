@@ -12,6 +12,7 @@ export type AuthProvider = 'local' | 'oidc' | 'saml' | 'ldap'
 export interface User {
   username: string
   role: UserRole
+  enabled?: boolean
   vhost_scope: string[]  // ["*"] for global access, or specific vhost IDs
   auth_provider: AuthProvider
   display_name?: string
@@ -32,6 +33,7 @@ export interface RolePermissions {
   bulk?: string[]
   captcha?: string[]
   webhooks?: string[]
+  slack?: string[]
   geoip?: string[]
   reputation?: string[]
   timing?: string[]
@@ -1146,3 +1148,69 @@ export interface BackupEntitiesResponse {
 export interface BackupExportResponse extends Backup {}
 
 export interface BackupValidateResponse extends BackupValidationResult {}
+
+// ==================== Slack Notifications ====================
+
+// Slack severity thresholds configuration
+export interface SlackSeverityThresholds {
+  high_event_count: number  // Events count above which attack is high severity
+  high_event_rate: number   // Events per minute above which attack is high severity
+}
+
+// Slack notification configuration
+export interface SlackConfig {
+  enabled: boolean
+  webhook_url: string
+  channel?: string                      // Optional channel override (e.g., "#security-alerts")
+  update_interval: number               // Seconds between ongoing attack updates (60-1800)
+  resolution_threshold: number          // Seconds of no activity to consider attack resolved (120-3600)
+  events: string[]                      // Event types to notify on
+  mention_users?: string[]              // Slack user IDs to @mention (e.g., ["U123ABC"])
+  mention_on_high_severity?: boolean    // Only @mention for high severity attacks
+  severity_thresholds?: SlackSeverityThresholds
+}
+
+// Active attack stream state
+export interface SlackAttackStream {
+  attack_key: string
+  attack_type: string
+  source_ip_prefix: string
+  target_vhost: string
+  target_endpoint: string
+  first_seen: number
+  last_seen: number
+  event_count: number
+  last_notification: number
+  notification_count: number
+  status: 'active' | 'resolved'
+  representative_event?: Record<string, unknown>
+}
+
+// Slack notification statistics
+export interface SlackStats {
+  total_notifications_sent: number
+  attacks_detected_today: number
+  attacks_resolved_today: number
+  active_attacks_count: number
+}
+
+// API response types
+export interface SlackConfigResponse {
+  config: SlackConfig
+  defaults: SlackConfig
+}
+
+export interface SlackAttacksResponse {
+  attacks: SlackAttackStream[]
+  count: number
+}
+
+export interface SlackStatsResponse {
+  stats: SlackStats
+}
+
+export interface SlackTestResponse {
+  success: boolean
+  message: string
+  error?: string
+}

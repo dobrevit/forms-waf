@@ -1102,6 +1102,22 @@ local function sync_webhooks(red)
     end
 end
 
+-- Sync Slack notification configuration
+local function sync_slack(red)
+    local config_str = red:get("waf:slack:config")
+
+    if config_str and config_str ~= ngx.null then
+        local ok, slack_notifications = pcall(require, "slack_notifications")
+        if ok and slack_notifications then
+            local config = cjson.decode(config_str)
+            if config then
+                slack_notifications.update_config(config)
+                ngx.log(ngx.DEBUG, "Synced Slack notification configuration")
+            end
+        end
+    end
+end
+
 -- Main sync function
 local function do_sync()
     local red, err = get_redis_connection()
@@ -1138,6 +1154,9 @@ local function do_sync()
 
     -- Sync webhook configuration
     sync_webhooks(red)
+
+    -- Sync Slack notification configuration
+    sync_slack(red)
 
     close_redis(red)
 

@@ -10,6 +10,18 @@ local http_utils = require "http_utils"
 local cjson = require "cjson.safe"
 local trusted_proxies = require "trusted_proxies"
 
+-- Lazy load slack_notifications to avoid circular dependency
+local slack_notifications = nil
+local function get_slack_notifications()
+    if not slack_notifications then
+        local ok, mod = pcall(require, "slack_notifications")
+        if ok then
+            slack_notifications = mod
+        end
+    end
+    return slack_notifications
+end
+
 -- Shared dictionary for webhook queue and config
 local webhook_cache = ngx.shared.keyword_cache  -- Reuse existing cache
 
@@ -96,6 +108,17 @@ function _M.queue_event(event_type, event_data)
         if not ok then
             ngx.log(ngx.ERR, "Failed to schedule webhook flush: ", err)
         end
+    end
+
+    -- Also trigger Slack notifications (async, with deduplication)
+    local slack = get_slack_notifications()
+    if slack and slack.is_enabled() then
+        ngx.timer.at(0, function()
+            local sok, serr = pcall(slack.process_event, event_type, event_data or {})
+            if not sok then
+                ngx.log(ngx.ERR, "Slack notification failed: ", serr)
+            end
+        end)
     end
 
     return true
