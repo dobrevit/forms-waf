@@ -5,7 +5,6 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -41,7 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Search, Pencil, Trash2, User, KeyRound, Shield, Copy, Eye, EyeOff } from 'lucide-react'
 import type { User as UserType, UserRole } from '@/api/types'

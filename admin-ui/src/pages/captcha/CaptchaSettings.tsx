@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { captchaApi } from '@/api/client'
-import type { CaptchaGlobalConfig, CaptchaProvider } from '@/api/types'
+import type { CaptchaGlobalConfig } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -93,7 +93,6 @@ export function CaptchaSettings() {
 
   const providers = providersData?.providers || []
   const enabledProviders = providers.filter((p) => p.enabled)
-  const config = configData?.config
   const defaults = configData?.defaults
 
   if (configLoading) {

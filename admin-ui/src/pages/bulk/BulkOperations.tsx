@@ -35,19 +35,19 @@ export function BulkOperations() {
   } | null>(null)
 
   // Export queries
-  const { data: keywordsData, refetch: refetchKeywords } = useQuery({
+  const { refetch: refetchKeywords } = useQuery({
     queryKey: ['bulk', 'keywords'],
     queryFn: bulkApi.exportKeywords,
     enabled: false,
   })
 
-  const { data: ipsData, refetch: refetchIps } = useQuery({
+  const { refetch: refetchIps } = useQuery({
     queryKey: ['bulk', 'ips'],
     queryFn: bulkApi.exportIps,
     enabled: false,
   })
 
-  const { data: hashesData, refetch: refetchHashes } = useQuery({
+  const { refetch: refetchHashes } = useQuery({
     queryKey: ['bulk', 'hashes'],
     queryFn: bulkApi.exportHashes,
     enabled: false,

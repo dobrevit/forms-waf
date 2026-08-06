@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Shield, Save, Search, X, Plus, Trash2, AlertTriangle, CheckCircle } from 'lucide-react'
+import { Loader2, Shield, Save, Search, Plus, Trash2, AlertTriangle, CheckCircle } from 'lucide-react'
 import { reputationApi, type IPReputationConfig, type IPReputationStatus, type IPReputationCheckResult } from '@/api/client'
 import {
   Alert,

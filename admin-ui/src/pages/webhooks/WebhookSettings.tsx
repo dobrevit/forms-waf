@@ -391,7 +391,7 @@ export function WebhookSettings() {
 
                   {Object.keys(formData.headers || {}).length > 0 ? (
                     <div className="space-y-2">
-                      {Object.entries(formData.headers || {}).map(([key, value]) => (
+                      {Object.entries(formData.headers || {}).map(([key]) => (
                         <div
                           key={key}
                           className="flex items-center justify-between rounded-md bg-secondary px-3 py-2 text-sm"

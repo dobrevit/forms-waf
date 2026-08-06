@@ -47,8 +47,7 @@ export function EndpointList() {
     canDeleteEndpoint,
     canEnableEndpoint,
     canDisableEndpoint,
-    hasVhostAccess,
-    isReadOnly
+    hasVhostAccess
   } = usePermissions()
   const [search, setSearch] = useState('')
   const [vhostFilter, setVhostFilter] = useState<string>('all')
@@ -275,7 +274,7 @@ export function EndpointList() {
               Test
             </Button>
           </div>
-          {testResult && (
+          {testResult != null && (
             <div className="mt-4 rounded-md bg-muted p-4">
               <pre className="text-sm">{JSON.stringify(testResult, null, 2)}</pre>
             </div>

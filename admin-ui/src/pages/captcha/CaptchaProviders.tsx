@@ -50,7 +50,6 @@ import {
   TestTube,
   Loader2,
   CheckCircle,
-  XCircle,
 } from 'lucide-react'
 
 const PROVIDER_TYPES: { value: CaptchaProviderType; label: string; description: string }[] = [
@@ -158,8 +157,13 @@ export function CaptchaProviders() {
   })
 
   const toggleMutation = useMutation({
-    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      enabled ? captchaApi.enableProvider(id) : captchaApi.disableProvider(id),
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }): Promise<void> => {
+      if (enabled) {
+        await captchaApi.enableProvider(id)
+      } else {
+        await captchaApi.disableProvider(id)
+      }
+    },
     onSuccess: (_, { enabled }) => {
       queryClient.invalidateQueries({ queryKey: ['captcha', 'providers'] })
       toast({ title: `Provider ${enabled ? 'enabled' : 'disabled'}` })
