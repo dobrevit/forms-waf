@@ -391,7 +391,7 @@ The WAF automatically seeds a default admin user on startup when environment var
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `WAF_ADMIN_SALT` | Yes | - | 32+ character random salt for password hashing |
+| `WAF_ADMIN_SALT` | No | - | **Unused.** Superseded by PBKDF2 (F02), which generates and embeds a random per-password salt. Retained only for backward compatibility with existing deployments. |
 | `WAF_ADMIN_PASSWORD` | No | changeme | Initial admin password |
 
 **Helm Configuration:**
