@@ -48,6 +48,22 @@ _M.EVENT_TYPES = {
     FINGERPRINT_FLOOD = "fingerprint_flood",
 }
 
+-- R-12: which of the above are actually emitted today. rate_limit_triggered,
+-- high_spam_score and fingerprint_flood are declared and offered in the UI but
+-- nothing calls their notify_* helpers, so subscribing to them yields silence
+-- with no diagnostic. Keep them valid for forward compatibility, but advertise
+-- accurately. Update this set when an emitter is added.
+_M.EMITTED_EVENT_TYPES = {
+    request_blocked = true,
+    captcha_triggered = true,
+    honeypot_triggered = true,
+    disposable_email = true,
+}
+
+function _M.is_event_emitted(event_type)
+    return _M.EMITTED_EVENT_TYPES[event_type] == true
+end
+
 -- Local event queue (batched before sending)
 local event_queue = {}
 local last_flush_time = ngx.now()
@@ -64,6 +80,15 @@ end
 -- Queue an event for webhook notification
 -- Events are batched and sent periodically to reduce overhead
 function _M.queue_event(event_type, event_data)
+    -- R-01: Slack is dispatched FIRST and independently. It previously sat at the
+    -- end of this function, behind three early returns, so it inherited the
+    -- webhook enable flag and event filter, and went silent when the webhook
+    -- queue overflowed -- i.e. precisely during the flood it exists to report.
+    local slack = get_slack_notifications()
+    if slack then
+        slack.dispatch_async(event_type, event_data or {})
+    end
+
     local config = get_webhook_config()
     if not config or not config.enabled then
         return false, "Webhooks not enabled"
@@ -108,17 +133,6 @@ function _M.queue_event(event_type, event_data)
         if not ok then
             ngx.log(ngx.ERR, "Failed to schedule webhook flush: ", err)
         end
-    end
-
-    -- Also trigger Slack notifications (async, with deduplication)
-    local slack = get_slack_notifications()
-    if slack and slack.is_enabled() then
-        ngx.timer.at(0, function()
-            local sok, serr = pcall(slack.process_event, event_type, event_data or {})
-            if not sok then
-                ngx.log(ngx.ERR, "Slack notification failed: ", serr)
-            end
-        end)
     end
 
     return true

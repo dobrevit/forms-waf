@@ -1160,7 +1160,10 @@ export interface SlackSeverityThresholds {
 // Slack notification configuration
 export interface SlackConfig {
   enabled: boolean
+  // Returned masked as "***" when set (the URL is a bearer credential). Submit
+  // the mask unchanged to keep the stored value, or a new https:// URL to replace it.
   webhook_url: string
+  webhook_url_set?: boolean
   channel?: string                      // Optional channel override (e.g., "#security-alerts")
   update_interval: number               // Seconds between ongoing attack updates (60-1800)
   resolution_threshold: number          // Seconds of no activity to consider attack resolved (120-3600)
@@ -1198,6 +1201,8 @@ export interface SlackStats {
 export interface SlackConfigResponse {
   config: SlackConfig
   defaults: SlackConfig
+  emitted_events?: string[]      // event types that actually have an emitter
+  unavailable_events?: string[]  // declared but never fired by this build
 }
 
 export interface SlackAttacksResponse {

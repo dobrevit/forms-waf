@@ -81,7 +81,7 @@ Different attack types are tracked independently:
 | Setting | Description | Default | Range |
 |---------|-------------|---------|-------|
 | `enabled` | Enable/disable Slack notifications | `false` | - |
-| `webhook_url` | Slack incoming webhook URL | - | Required |
+| `webhook_url` | Slack incoming webhook URL (**must be `https://`**) | - | Required |
 | `channel` | Channel override (legacy webhooks only) | - | Optional |
 | `update_interval` | Seconds between ongoing attack updates | `300` | 60-1800 |
 | `resolution_threshold` | Seconds without events before attack is resolved | `600` | 120-3600 |
@@ -91,15 +91,21 @@ Different attack types are tracked independently:
 
 ### Event Types
 
-| Event Type | Description |
-|------------|-------------|
-| `request_blocked` | Request blocked by WAF rules |
-| `rate_limit_triggered` | IP or hash rate limit exceeded |
-| `high_spam_score` | Spam score above threshold |
-| `captcha_triggered` | CAPTCHA challenge issued |
-| `honeypot_triggered` | Honeypot field filled |
-| `disposable_email` | Disposable email detected |
-| `fingerprint_flood` | Fingerprint-based rate limit |
+| Event Type | Description | Status |
+|------------|-------------|--------|
+| `request_blocked` | Request blocked by WAF rules | Emitted |
+| `captcha_triggered` | CAPTCHA challenge issued | Emitted |
+| `honeypot_triggered` | Honeypot field filled | Emitted |
+| `disposable_email` | Disposable email detected | Emitted |
+| `rate_limit_triggered` | IP or hash rate limit exceeded | **Not emitted yet** |
+| `high_spam_score` | Spam score above threshold | **Not emitted yet** |
+| `fingerprint_flood` | Fingerprint-based rate limit | **Not emitted yet** |
+
+The three marked **Not emitted yet** are accepted by the API for forward
+compatibility, but nothing in the WAF currently raises them — subscribing to them
+alone produces no alerts. `GET /api/slack/config` reports the authoritative lists
+as `emitted_events` and `unavailable_events`, and the default configuration
+enables only the emitted ones.
 
 ### Channel Override
 
@@ -514,13 +520,34 @@ Modern Slack incoming webhooks cannot override the channel. Options:
 - Configure appropriate `high_event_count` and `high_event_rate` thresholds
 - Avoid @mentioning for every alert to prevent alert fatigue
 
+### Security and Operational Notes
+
+- **The webhook URL is a credential.** Anyone holding it can post into your
+  security channel, so `GET /api/slack/config` returns it masked as `***` with a
+  separate `webhook_url_set` boolean. Submit the mask unchanged to keep the
+  stored value, or a new `https://` URL to replace it. Plain `http://` is
+  rejected — it would leak the token and every attack detail in cleartext.
+- **Message content is escaped.** Host headers, request paths and field names are
+  attacker-controlled, so `<`, `>`, `&` and backticks are neutralised before a
+  payload is built. Without this a crafted request path could ping `@channel` or
+  render a spoofed link inside an alert.
+- **Notifications are rate limited** to 20/minute globally, independent of
+  deduplication, and at most 500 concurrent attacks are tracked. A circuit
+  breaker pauses sending for 5 minutes after 5 consecutive failures, and at most
+  32 notifications may be in flight at once.
+- **Resolution checking and the daily stats reset are cluster singletons**, run
+  via `instance_coordinator` leader election. In a multi-replica deployment only
+  the leader sends resolution messages.
+
 ### Combining with Webhooks
 
 Slack notifications complement (don't replace) standard webhooks:
 - **Slack**: Human-readable alerts for security team
 - **Webhooks**: Machine-readable events for SIEM/SOAR integration
 
-Both can be enabled simultaneously.
+Both can be enabled simultaneously, and they are fully independent: Slack is
+dispatched before any webhook-specific check, so enabling Slack while leaving
+webhooks disabled works, and a full webhook queue does not suppress Slack alerts.
 
 ---
 

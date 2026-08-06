@@ -42,12 +42,15 @@ local DEFAULT_CONFIG = {
     channel = "",
     update_interval = 300,      -- 5 minutes
     resolution_threshold = 600, -- 10 minutes
+    -- R-12: only event types that are actually emitted today. Previously this
+    -- shipped with rate_limit_triggered, high_spam_score and fingerprint_flood
+    -- enabled by default, none of which have an emitter, so a default install
+    -- advertised alerts it could never send.
     events = {
         "request_blocked",
-        "rate_limit_triggered",
-        "high_spam_score",
+        "captcha_triggered",
         "honeypot_triggered",
-        "fingerprint_flood",
+        "disposable_email",
     },
     mention_users = {},
     mention_on_high_severity = false,
@@ -120,12 +123,32 @@ local function close_redis(red)
     end
 end
 
--- Get Slack configuration from cache or Redis
-local function get_slack_config()
+-- Sentinel stored in the shared dict to remember "no config in Redis".
+-- Without it, an unconfigured Slack meant a fresh Redis connection on every
+-- single call, forever (R-04).
+local NEGATIVE_CACHE = "\0none"
+local NEGATIVE_CACHE_TTL = 30
+
+-- Get Slack configuration.
+--
+-- R-04: `allow_redis` MUST be false anywhere reachable from the request path.
+-- The repository invariant is that nothing in the request path reads Redis;
+-- config is populated into the shared dict by redis_sync and update_config.
+-- Timer context (process_event, resolution checker) may pass true.
+local function get_slack_config(allow_redis)
     -- Try cache first
     local cached = config_cache:get("slack:config")
     if cached then
+        if cached == NEGATIVE_CACHE then
+            return nil
+        end
         return cjson.decode(cached)
+    end
+
+    if not allow_redis then
+        -- Cache miss in the request path: treat as "not configured" rather than
+        -- blocking on Redis. redis_sync repopulates within WAF_SYNC_INTERVAL.
+        return nil
     end
 
     -- Fallback to Redis
@@ -139,6 +162,7 @@ local function get_slack_config()
     close_redis(red)
 
     if not config_str or config_str == ngx.null then
+        config_cache:set("slack:config", NEGATIVE_CACHE, NEGATIVE_CACHE_TTL)
         return nil
     end
 
@@ -152,9 +176,11 @@ local function get_slack_config()
 end
 
 -- Check if Slack notifications are enabled
+-- R-04: called synchronously from webhooks.queue_event in the access phase,
+-- so this must never reach Redis.
 function _M.is_enabled()
-    local config = get_slack_config()
-    return config and config.enabled and config.webhook_url and config.webhook_url ~= ""
+    local config = get_slack_config(false)
+    return config and config.enabled and config.webhook_url and config.webhook_url ~= "" or false
 end
 
 -- Update configuration from external source (called by redis_sync)
@@ -162,6 +188,100 @@ function _M.update_config(config_data)
     if config_data then
         config_cache:set("slack:config", cjson.encode(config_data), 60)
     end
+end
+
+-- R-03: a failing Slack endpoint previously caused an immediate retry on every
+-- event, because the attempt clock only advanced on success. Combined with one
+-- timer per blocked request that exhausts lua_max_running_timers (default 256)
+-- and starves redis_sync / instance_coordinator.
+local FAILURE_KEY = "slack:consecutive_failures"
+local BREAKER_KEY = "slack:breaker_until"
+local BREAKER_THRESHOLD = 5
+local BREAKER_COOLDOWN = 300      -- seconds to stay open
+local INFLIGHT_KEY = "slack:inflight"
+local MAX_INFLIGHT = 32           -- concurrent Slack timers
+
+-- R-02: a hard ceiling on notifications per minute, independent of dedup.
+-- Slack incoming webhooks rate-limit at roughly 1 msg/s, so without this the WAF
+-- can denial-of-service its own alerting channel.
+local NOTIFY_RATE_KEY = "slack:notify_rate:"
+local MAX_NOTIFICATIONS_PER_MIN = 20
+-- Ceiling on tracked concurrent attacks, so waf:slack:active_attacks cannot grow
+-- without bound.
+local MAX_ACTIVE_ATTACKS = 500
+
+local function notification_budget_available()
+    local window = math.floor(ngx.time() / 60)
+    local count = config_cache:incr(NOTIFY_RATE_KEY .. window, 1, 0, 120)
+    if count == nil then
+        return true   -- shared dict unavailable: fail open rather than go silent
+    end
+    if count == MAX_NOTIFICATIONS_PER_MIN + 1 then
+        ngx.log(ngx.WARN, "slack_notifications: notification rate limit reached (",
+                MAX_NOTIFICATIONS_PER_MIN, "/min); suppressing further sends this minute")
+    end
+    return count <= MAX_NOTIFICATIONS_PER_MIN
+end
+
+local function breaker_is_open()
+    local until_ts = config_cache:get(BREAKER_KEY)
+    return until_ts ~= nil and until_ts > ngx.time()
+end
+
+local function record_send_result(success)
+    if success then
+        config_cache:set(FAILURE_KEY, 0)
+        config_cache:delete(BREAKER_KEY)
+        return
+    end
+
+    local failures = config_cache:incr(FAILURE_KEY, 1, 0, 3600) or 1
+    if failures >= BREAKER_THRESHOLD then
+        config_cache:set(BREAKER_KEY, ngx.time() + BREAKER_COOLDOWN, BREAKER_COOLDOWN + 60)
+        ngx.log(ngx.ERR, "slack_notifications: circuit breaker opened after ",
+                failures, " consecutive failures; pausing sends for ",
+                BREAKER_COOLDOWN, "s")
+    end
+end
+
+-- Schedule a notification without blocking the caller.
+-- R-01: called directly by webhooks.queue_event *before* any webhook-specific
+-- early return, so Slack no longer inherits the webhook enable flag, event
+-- filter or queue-full condition.
+function _M.dispatch_async(event_type, event_data)
+    if not _M.is_enabled() then
+        return false, "slack not enabled"
+    end
+
+    -- R-03: bound concurrent timers. init_ttl makes the counter self-healing if
+    -- a worker dies mid-flight.
+    local inflight = config_cache:incr(INFLIGHT_KEY, 1, 0, 60)
+    if inflight and inflight > MAX_INFLIGHT then
+        config_cache:incr(INFLIGHT_KEY, -1, 0, 60)
+        ngx.log(ngx.WARN, "slack_notifications: ", MAX_INFLIGHT,
+                " notifications already in flight, dropping event: ", event_type)
+        return false, "in-flight cap reached"
+    end
+
+    local ok, err = ngx.timer.at(0, function(premature)
+        if premature then
+            config_cache:incr(INFLIGHT_KEY, -1, 0, 60)
+            return
+        end
+        local pok, perr = pcall(_M.process_event, event_type, event_data or {})
+        config_cache:incr(INFLIGHT_KEY, -1, 0, 60)
+        if not pok then
+            ngx.log(ngx.ERR, "slack_notifications: process_event failed: ", perr)
+        end
+    end)
+
+    if not ok then
+        config_cache:incr(INFLIGHT_KEY, -1, 0, 60)
+        ngx.log(ngx.ERR, "slack_notifications: failed to schedule notification: ", err)
+        return false, err
+    end
+
+    return true
 end
 
 -- Generate IP prefix from full IP (anonymize last octet)
@@ -220,13 +340,30 @@ local function get_attack_type(event_type, event_data)
     end
 end
 
+-- R-02: event_data.host is ngx.var.http_host and event_data.path is
+-- ngx.var.uri -- both fully attacker-controlled. Feeding them raw into the dedup
+-- key let an attacker mint a distinct "attack" per request (/a1, /a2, ... or a
+-- varying Host), each of which is brand new and therefore notifies immediately.
+--
+-- Only the WAF-resolved identifiers are trusted here: vhost_id and endpoint_id
+-- come from the configured vhost/endpoint sets, so their cardinality is bounded
+-- by configuration rather than by the attacker. When the request did not resolve
+-- to a configured endpoint the exact path carries no grouping value anyway, so
+-- it collapses to a single bucket.
+local function resolved_component(value, fallback)
+    if type(value) == "string" and value ~= "" then
+        return value
+    end
+    return fallback
+end
+
 -- Generate unique attack key
 function _M.generate_attack_key(event_type, event_data)
     local ip = event_data.client_ip or "unknown"
     local ip_prefix = get_ip_prefix(ip)
     local attack_type = get_attack_type(event_type, event_data)
-    local vhost = event_data.vhost_id or event_data.host or "global"
-    local endpoint = event_data.endpoint_id or event_data.path or "/"
+    local vhost = resolved_component(event_data.vhost_id, "unresolved-vhost")
+    local endpoint = resolved_component(event_data.endpoint_id, "unresolved-endpoint")
 
     -- Create hash of these components
     local sha256 = resty_sha256:new()
@@ -279,6 +416,30 @@ local function format_duration(start_time, end_time)
     end
 end
 
+-- R-14: Slack parses <...> control sequences in message text and attachment
+-- fields, so `<!channel>` pings everyone and `<https://evil|Slack Security>`
+-- renders an attacker-chosen link inside what looks like an official WAF alert.
+-- target_vhost is ngx.var.http_host, target_endpoint is ngx.var.uri, and
+-- honeypot field names / spam reasons are attacker-influenced, so every one of
+-- them must be escaped and length-capped before it reaches a payload.
+-- Escaping per Slack's documented rules: & first, then < and >.
+local function slack_escape(value, max_len)
+    if value == nil then
+        return ""
+    end
+    value = tostring(value)
+    value = value:gsub("&", "&amp;")
+    value = value:gsub("<", "&lt;")
+    value = value:gsub(">", "&gt;")
+    -- Backticks would otherwise break out of the code spans used below.
+    value = value:gsub("`", "'")
+    max_len = max_len or 128
+    if #value > max_len then
+        value = value:sub(1, max_len) .. "..."
+    end
+    return value
+end
+
 -- Format detection details from event data
 local function format_detection_details(event_data)
     local details = {}
@@ -286,7 +447,7 @@ local function format_detection_details(event_data)
     if event_data.spam_flags and #event_data.spam_flags > 0 then
         local flags = {}
         for _, flag in ipairs(event_data.spam_flags) do
-            table.insert(flags, "`" .. flag .. "`")
+            table.insert(flags, "`" .. slack_escape(flag, 64) .. "`")
         end
         table.insert(details, "*Spam Flags:* " .. table.concat(flags, ", "))
     end
@@ -296,11 +457,11 @@ local function format_detection_details(event_data)
     end
 
     if event_data.reason then
-        table.insert(details, "*Reason:* " .. event_data.reason)
+        table.insert(details, "*Reason:* " .. slack_escape(event_data.reason))
     end
 
     if event_data.honeypot_field then
-        table.insert(details, "*Honeypot Field:* `" .. event_data.honeypot_field .. "`")
+        table.insert(details, "*Honeypot Field:* `" .. slack_escape(event_data.honeypot_field, 64) .. "`")
     end
 
     if event_data.rate_type then
@@ -370,13 +531,13 @@ local function build_fallback_text(message_type, state)
     return string.format("%s: %s on %s%s - %d events",
         action,
         get_attack_type_display(state.attack_type),
-        state.target_vhost or "unknown",
-        state.target_endpoint or "",
+        slack_escape(state.target_vhost or "unknown"),
+        slack_escape(state.target_endpoint or ""),
         state.event_count or 1)
 end
 
 -- Build footer text
-local function build_footer(message_type, state)
+local function build_footer(message_type, state, config)
     if message_type == "attack_started" then
         return string.format("Attack ID: %s | WAF Appliance", state.attack_key)
     elseif message_type == "attack_ongoing" then
@@ -384,7 +545,7 @@ local function build_footer(message_type, state)
             state.attack_key,
             os.date("%Y-%m-%d %H:%M", state.first_seen))
     else
-        local config = get_slack_config() or DEFAULT_CONFIG
+        config = config or DEFAULT_CONFIG
         return string.format("Attack ID: %s | No new events for %d minutes",
             state.attack_key,
             math.floor((config.resolution_threshold or 600) / 60))
@@ -414,7 +575,7 @@ function _M.format_slack_attachment(message_type, state)
     -- Target (short field)
     table.insert(fields, {
         title = "Target",
-        value = (state.target_vhost or "unknown") .. (state.target_endpoint or ""),
+        value = slack_escape((state.target_vhost or "unknown") .. (state.target_endpoint or ""), 256),
         short = true,
     })
 
@@ -422,7 +583,7 @@ function _M.format_slack_attachment(message_type, state)
         -- Source IP (short field)
         table.insert(fields, {
             title = "Source IP",
-            value = state.source_ip_prefix or "unknown",
+            value = slack_escape(state.source_ip_prefix or "unknown", 64),
             short = true,
         })
 
@@ -485,7 +646,7 @@ function _M.format_slack_attachment(message_type, state)
         color = COLORS[message_type],
         pretext = PRETEXT[message_type],
         fields = fields,
-        footer = build_footer(message_type, state),
+        footer = build_footer(message_type, state, config),
         ts = state.last_seen or ngx.time(),
     }
 end
@@ -581,7 +742,7 @@ end
 
 -- Main function to process an event
 function _M.process_event(event_type, event_data)
-    local config = get_slack_config()
+    local config = get_slack_config(true)
     if not config or not config.enabled then
         return false, "Slack notifications not enabled"
     end
@@ -614,16 +775,41 @@ function _M.process_event(event_type, event_data)
         return false, err
     end
 
+    -- Calculate TTL (2x resolution threshold for cleanup)
+    local resolution_threshold = config.resolution_threshold or DEFAULT_CONFIG.resolution_threshold
+    local ttl = resolution_threshold * 2
+    local now = ngx.time()
+    local count_key = KEYS.attack_prefix .. attack_key .. ":count"
+
     -- Get existing attack state
     local state = get_attack_state(red, attack_key)
+
+    -- R-05: a resolved record is terminal. check_resolved_attacks keeps it around
+    -- for history, and the old code then treated a recurrence as "ongoing" -- no
+    -- re-add to the active set, status stuck at "resolved", duration and rate
+    -- computed from the previous run's first_seen, and no second resolution ever
+    -- sent. Start a clean record instead.
+    if state and state.status == "resolved" then
+        state = nil
+        red:del(count_key)
+    end
+
+    -- R-09: the event count is maintained with INCR rather than read-modify-write
+    -- on the JSON blob, so concurrent workers and pods cannot lose events (which
+    -- under-reported Attack Rate and suppressed the high-severity mention).
+    local event_count = red:incr(count_key)
+    if type(event_count) ~= "number" then
+        event_count = 1
+    end
+    red:expire(count_key, ttl)
 
     -- Check if we should notify
     local notify, message_type = should_notify(state, config)
 
-    local now = ngx.time()
-
     if not state then
-        -- New attack
+        -- R-09: claim creation atomically. Without this, two concurrent events
+        -- for the same key both saw nil and both sent "Attack Detected".
+        -- Only the worker whose SETNX succeeds announces the new attack.
         state = {
             attack_key = attack_key,
             attack_type = get_attack_type(event_type, event_data),
@@ -632,32 +818,70 @@ function _M.process_event(event_type, event_data)
             target_endpoint = event_data.endpoint_id or event_data.path,
             first_seen = now,
             last_seen = now,
-            event_count = 1,
+            event_count = event_count,
             last_notification = 0,
             notification_count = 0,
             status = "active",
             representative_event = event_data,
         }
 
-        -- Add to active attacks set
-        red:sadd(KEYS.active_attacks, attack_key)
+        local claimed = red:setnx(KEYS.attack_prefix .. attack_key, cjson.encode(state))
+        if claimed ~= 1 then
+            -- Another worker created it first: fall back to its record and treat
+            -- this as an update rather than a second "attack started".
+            local existing = get_attack_state(red, attack_key)
+            if existing then
+                state = existing
+                state.last_seen = now
+                state.event_count = event_count
+                notify, message_type = should_notify(state, config)
+            end
+        else
+            red:expire(KEYS.attack_prefix .. attack_key, ttl)
+
+            -- R-02: bound the tracked set. Without a ceiling an attacker who can
+            -- vary the key can grow waf:slack:active_attacks without limit.
+            local active = red:scard(KEYS.active_attacks)
+            if type(active) == "number" and active >= MAX_ACTIVE_ATTACKS then
+                ngx.log(ngx.WARN, "slack_notifications: active attack cap (",
+                        MAX_ACTIVE_ATTACKS, ") reached; not tracking new attack ", attack_key)
+                notify = false
+            else
+                red:sadd(KEYS.active_attacks, attack_key)
+            end
+        end
     else
         -- Update existing attack
         state.last_seen = now
-        state.event_count = (state.event_count or 0) + 1
+        state.event_count = event_count
     end
 
-    -- Calculate TTL (2x resolution threshold for cleanup)
-    local resolution_threshold = config.resolution_threshold or DEFAULT_CONFIG.resolution_threshold
-    local ttl = resolution_threshold * 2
+    if notify and not notification_budget_available() then
+        -- R-02: over budget for this minute. Advance the attempt clock so the
+        -- next window is not immediately consumed by a backlog.
+        notify = false
+        state.last_notification = now
+    end
+
+    if notify and breaker_is_open() then
+        -- R-03: skip the send while the breaker is open, but still advance the
+        -- attempt clock below so we do not spin once it closes.
+        notify = false
+        state.last_notification = now
+    end
 
     if notify then
+        -- R-03: advance the attempt clock before sending. Previously this only
+        -- happened on success, so a failing endpoint retried on every single
+        -- event with no backoff.
+        state.last_notification = now
+
         -- Build and send notification
         local payload = build_slack_payload(config, message_type, state)
         local success, send_err = send_to_slack(config, payload)
+        record_send_result(success)
 
         if success then
-            state.last_notification = now
             state.notification_count = (state.notification_count or 0) + 1
 
             -- Increment stats
@@ -680,10 +904,12 @@ end
 
 -- Check for resolved attacks (called by timer)
 function _M.check_resolved_attacks()
-    local config = get_slack_config()
-    if not config or not config.enabled then
-        return
-    end
+    local config = get_slack_config(true)
+    -- R-02: when Slack is disabled the old code returned here, so
+    -- waf:slack:active_attacks was never pruned and grew without bound. Keep
+    -- pruning expired entries; only sending is gated on `enabled`.
+    local sending_enabled = (config ~= nil and config.enabled == true)
+    config = config or DEFAULT_CONFIG
 
     local red, err = get_redis_connection()
     if not red then
@@ -710,9 +936,13 @@ function _M.check_resolved_attacks()
                 -- Attack is resolved
                 state.status = "resolved"
 
-                -- Send resolution notification
-                local payload = build_slack_payload(config, "attack_resolved", state)
-                local success, send_err = send_to_slack(config, payload)
+                local success = false
+                local send_err = nil
+                if sending_enabled and not breaker_is_open() and notification_budget_available() then
+                    local payload = build_slack_payload(config, "attack_resolved", state)
+                    success, send_err = send_to_slack(config, payload)
+                    record_send_result(success)
+                end
 
                 if success then
                     -- Increment stats
@@ -724,6 +954,8 @@ function _M.check_resolved_attacks()
 
                 -- Remove from active attacks
                 red:srem(KEYS.active_attacks, attack_key)
+                -- R-09: the INCR counter lives in its own key; expire it with the attack.
+                red:del(KEYS.attack_prefix .. attack_key .. ":count")
 
                 -- Update state with resolved status (keep for a bit longer for history)
                 save_attack_state(red, attack_key, state, resolution_threshold)
@@ -731,6 +963,7 @@ function _M.check_resolved_attacks()
         else
             -- State expired, remove from active set
             red:srem(KEYS.active_attacks, attack_key)
+            red:del(KEYS.attack_prefix .. attack_key .. ":count")
         end
     end
 
@@ -739,12 +972,35 @@ end
 
 -- Start the resolution checker timer (called once on worker init)
 function _M.start_resolution_checker()
-    local config = get_slack_config() or DEFAULT_CONFIG
+    local config = get_slack_config(true) or DEFAULT_CONFIG
     local check_interval = math.floor((config.resolution_threshold or DEFAULT_CONFIG.resolution_threshold) / 2)
     -- Minimum check interval of 30 seconds
     if check_interval < 30 then
         check_interval = 30
     end
+
+    -- R-08: resolution checking and the daily reset are cluster singletons. The
+    -- previous `ngx.worker.id() == 0` guard is once per *pod*, so at replicas=3
+    -- one resolution produced three Slack messages and incremented
+    -- attacks_resolved_today three times. instance_coordinator already provides
+    -- SET NX PX leader election plus a task registry (redis_sync uses the same).
+    local ok, coordinator = pcall(require, "instance_coordinator")
+    if ok and coordinator and coordinator.register_for_leader_task then
+        coordinator.register_for_leader_task("slack_resolution_check", function()
+            _M.check_resolved_attacks()
+        end, check_interval, 30)
+
+        coordinator.register_for_leader_task("slack_daily_stats_reset", function()
+            _M.reset_daily_stats_if_new_day()
+        end, 300, 60)
+
+        ngx.log(ngx.INFO, "slack_notifications: registered leader tasks (resolution check every ",
+                check_interval, "s)")
+        return
+    end
+
+    ngx.log(ngx.WARN, "slack_notifications: instance_coordinator unavailable; ",
+            "running resolution checker unguarded (safe only for single-instance deployments)")
 
     local handler
     handler = function(premature)
@@ -805,7 +1061,13 @@ function _M.get_stats()
     end
 
     local stats = red:hgetall(KEYS.stats)
+    -- R-15: do the SCARD on the connection we already hold rather than opening
+    -- a second one after closing this.
+    local active_count = red:scard(KEYS.active_attacks)
     close_redis(red)
+    if type(active_count) ~= "number" then
+        active_count = 0
+    end
 
     if not stats or type(stats) ~= "table" then
         return {
@@ -822,17 +1084,45 @@ function _M.get_stats()
         result[stats[i]] = tonumber(stats[i+1]) or 0
     end
 
-    -- Add active attacks count
-    local red2, _ = get_redis_connection()
-    if red2 then
-        result.active_attacks_count = red2:scard(KEYS.active_attacks) or 0
-        close_redis(red2)
-    end
-
-    return result
+    -- R-13: hgetall returns an empty table on a fresh install, which passes the
+    -- type guard above, so the response used to omit keys the UI declares as
+    -- required numbers and the dashboard cards rendered blank. Always return a
+    -- fully populated object.
+    return {
+        total_notifications_sent = result.total_notifications_sent or 0,
+        attacks_detected_today = result.attacks_detected_today or 0,
+        attacks_resolved_today = result.attacks_resolved_today or 0,
+        active_attacks_count = active_count,
+    }
 end
 
--- Reset daily stats (can be called by a daily cron timer)
+-- R-13: reset_daily_stats had no scheduled caller -- only the manual endpoint --
+-- so attacks_detected_today / attacks_resolved_today accumulated forever while
+-- the UI labelled them "Attacks Today" / "Resolved Today". Registered as a
+-- leader task so it runs once per cluster.
+function _M.reset_daily_stats_if_new_day()
+    local red, err = get_redis_connection()
+    if not red then
+        return false, err
+    end
+
+    local today = os.date("!%Y-%m-%d")
+    local stored = red:hget(KEYS.stats, "stats_date")
+    if stored and stored ~= ngx.null and stored == today then
+        close_redis(red)
+        return true, "no change"
+    end
+
+    red:hset(KEYS.stats, "attacks_detected_today", 0)
+    red:hset(KEYS.stats, "attacks_resolved_today", 0)
+    red:hset(KEYS.stats, "stats_date", today)
+    close_redis(red)
+
+    ngx.log(ngx.INFO, "slack_notifications: daily stats reset for ", today)
+    return true
+end
+
+-- Reset daily stats (manual endpoint, and used by the daily leader task)
 function _M.reset_daily_stats()
     local red, err = get_redis_connection()
     if not red then
@@ -848,7 +1138,7 @@ end
 
 -- Send a test notification
 function _M.send_test()
-    local config = get_slack_config()
+    local config = get_slack_config(true)
     if not config then
         return false, "Slack notifications not configured"
     end

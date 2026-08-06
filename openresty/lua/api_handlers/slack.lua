@@ -39,6 +39,20 @@ local DEFAULT_CONFIG = {
 -- An empty Lua table encodes as a JSON object ({}), but the Admin UI treats these
 -- fields as arrays (attacks.map(...), mention_users.includes(...)) and throws on an
 -- object. Force array encoding for every list-valued field we emit.
+-- R-06: the webhook URL is a bearer credential — anyone holding it can post
+-- into the security channel. `slack:read` is granted to operator and viewer, so
+-- it must never be returned verbatim. Mirrors the convention in
+-- api_handlers/captcha.lua, which masks secret_key and accepts MASK on write to
+-- preserve the stored value.
+local URL_MASK = "***"
+
+local function mask_webhook_url(url)
+    if not url or url == "" then
+        return ""
+    end
+    return URL_MASK
+end
+
 local function as_array(t)
     if type(t) ~= "table" then
         return setmetatable({}, cjson.array_mt)
@@ -88,9 +102,30 @@ _M.handlers["GET:/slack/config"] = function()
     config.events = as_array(config.events)
     config.mention_users = as_array(config.mention_users)
 
+    -- R-06: never return the credential itself; `webhook_url_set` preserves the
+    -- "is it configured?" signal the UI needs.
+    config.webhook_url_set = (config.webhook_url or "") ~= ""
+    config.webhook_url = mask_webhook_url(config.webhook_url)
+
+    -- R-12: tell the UI which event types actually have an emitter so it can
+    -- render the rest as unavailable rather than silently offering them.
+    local webhooks = require "webhooks"
+    local emitted, not_emitted = {}, {}
+    for event_type, _ in pairs(VALID_EVENTS) do
+        if webhooks.is_event_emitted and webhooks.is_event_emitted(event_type) then
+            table.insert(emitted, event_type)
+        else
+            table.insert(not_emitted, event_type)
+        end
+    end
+    table.sort(emitted)
+    table.sort(not_emitted)
+
     return utils.json_response({
         config = config,
         defaults = DEFAULT_CONFIG,
+        emitted_events = as_array(emitted),
+        unavailable_events = as_array(not_emitted),
     })
 end
 
@@ -109,12 +144,22 @@ _M.handlers["PUT:/slack/config"] = function()
         return utils.error_response("Redis connection failed: " .. err)
     end
 
-    -- Validate webhook URL if provided and enabled
-    if data.webhook_url and data.webhook_url ~= "" then
-        if not data.webhook_url:match("^https://hooks%.slack%.com/") and
-           not data.webhook_url:match("^https?://") then
+    -- Validate webhook URL if provided and enabled.
+    -- R-10: the previous check was `not slack_host and not https?://`, which is
+    -- never true for any well-formed URL — the Slack-host pattern was dead code
+    -- and plain http:// was accepted, sending the webhook token and every attack
+    -- detail in cleartext.
+    -- HTTPS is required. The host is deliberately not pinned to hooks.slack.com
+    -- so Slack-compatible receivers (Mattermost, Rocket.Chat) keep working;
+    -- outbound SSRF protection is applied at send time by http_utils (F15).
+    if data.webhook_url and data.webhook_url ~= "" and data.webhook_url ~= URL_MASK then
+        if not data.webhook_url:match("^https://") then
             utils.close_redis(red)
-            return utils.error_response("Invalid webhook URL format - must be a valid Slack webhook URL")
+            return utils.error_response("Invalid webhook URL - must start with https:// (cleartext http:// would leak the webhook token and attack details)")
+        end
+        if #data.webhook_url > 1024 then
+            utils.close_redis(red)
+            return utils.error_response("webhook_url too long (max 1024 characters)")
         end
     end
 
@@ -145,16 +190,34 @@ _M.handlers["PUT:/slack/config"] = function()
     end
 
     -- Validate events if provided
+    -- R-11: a non-array value previously skipped validation entirely and was then
+    -- coerced to an empty array by as_array(), silently disabling every event
+    -- while returning 200.
+    if data.events ~= nil and type(data.events) ~= "table" then
+        utils.close_redis(red)
+        return utils.error_response("events must be an array of event type strings")
+    end
     if data.events and type(data.events) == "table" then
         for _, event in ipairs(data.events) do
             if not VALID_EVENTS[event] and event ~= "*" then
                 utils.close_redis(red)
                 return utils.error_response("Invalid event type: " .. event)
             end
+            -- R-12: accepted, but say so rather than failing silently later.
+            local webhooks = require "webhooks"
+            if webhooks.is_event_emitted and not webhooks.is_event_emitted(event) and event ~= "*" then
+                ngx.log(ngx.WARN, "slack: event type '", event,
+                        "' is enabled but has no emitter in this build; it will never fire")
+            end
         end
     end
 
     -- Validate mention_users format (should be Slack user IDs)
+    -- R-11: same silent-wipe applies here.
+    if data.mention_users ~= nil and type(data.mention_users) ~= "table" then
+        utils.close_redis(red)
+        return utils.error_response("mention_users must be an array of Slack user IDs")
+    end
     if data.mention_users and type(data.mention_users) == "table" then
         for i, user_id in ipairs(data.mention_users) do
             if type(user_id) ~= "string" or not user_id:match("^U[A-Z0-9]+$") then
@@ -182,10 +245,23 @@ _M.handlers["PUT:/slack/config"] = function()
         end
     end
 
+    -- R-06: GET returns the URL masked, so the UI submits URL_MASK back on save.
+    -- Treat that as "unchanged" and keep the stored credential.
+    local existing_config = {}
+    local existing_str = red:get(SLACK_KEYS.config)
+    if existing_str and existing_str ~= ngx.null then
+        existing_config = cjson.decode(existing_str) or {}
+    end
+
+    local webhook_url = data.webhook_url
+    if webhook_url == nil or webhook_url == URL_MASK then
+        webhook_url = existing_config.webhook_url or ""
+    end
+
     -- Build config object
     local config = {
         enabled = data.enabled == true,
-        webhook_url = data.webhook_url or "",
+        webhook_url = webhook_url,
         channel = data.channel or "",
         update_interval = tonumber(data.update_interval) or DEFAULT_CONFIG.update_interval,
         resolution_threshold = tonumber(data.resolution_threshold) or DEFAULT_CONFIG.resolution_threshold,
@@ -213,7 +289,14 @@ _M.handlers["PUT:/slack/config"] = function()
     -- Trigger sync
     redis_sync.sync_now()
 
-    return utils.json_response({updated = true, config = config})
+    local response_config = {}
+    for k, v in pairs(config) do
+        response_config[k] = v
+    end
+    response_config.webhook_url_set = (config.webhook_url or "") ~= ""
+    response_config.webhook_url = mask_webhook_url(config.webhook_url)
+
+    return utils.json_response({updated = true, config = response_config})
 end
 
 -- POST /slack/test - Send test notification to Slack

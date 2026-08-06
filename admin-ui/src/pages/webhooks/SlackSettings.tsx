@@ -11,6 +11,9 @@ import { useToast } from '@/components/ui/use-toast'
 import { Slack, Save, TestTube, Plus, X, Info, CheckCircle, XCircle, Shield, Clock, AlertTriangle } from 'lucide-react'
 import { Slider } from '@/components/ui/slider'
 
+// R-12: these event types are declared by the backend but have no emitter yet,
+// so subscribing to them produces silence. The API reports the authoritative
+// list in `unavailable_events`; this is the display fallback.
 const AVAILABLE_EVENTS = [
   { id: 'request_blocked', label: 'Request Blocked', description: 'When a request is blocked by the WAF' },
   { id: 'rate_limit_triggered', label: 'Rate Limit Triggered', description: 'When rate limiting blocks a request' },
@@ -254,7 +257,14 @@ export function SlackSettings() {
               {formData.enabled && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="webhook_url">Slack Webhook URL</Label>
+                    <Label htmlFor="webhook_url">
+                      Slack Webhook URL
+                      {data?.config?.webhook_url_set && (
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                          (a URL is configured — leave as *** to keep it)
+                        </span>
+                      )}
+                    </Label>
                     <Input
                       id="webhook_url"
                       type="url"

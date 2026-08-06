@@ -10,6 +10,7 @@ local redis = require "resty.redis"
 local REDIS_HOST = os.getenv("REDIS_HOST") or "redis"
 local REDIS_PORT = tonumber(os.getenv("REDIS_PORT")) or 6379
 local REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or nil
+local REDIS_DB = tonumber(os.getenv("REDIS_DB")) or 0
 
 -- Get Redis connection
 function _M.get_redis()
@@ -26,6 +27,18 @@ function _M.get_redis()
         if not res then
             red:close()
             return nil, err
+        end
+    end
+
+    -- R-07: honour REDIS_DB. redis_sync.lua and the feature modules all SELECT
+    -- the configured database; without this the Admin API reads and writes DB 0
+    -- while the request path uses REDIS_DB, so every write appears to succeed
+    -- and is then invisible to the WAF.
+    if REDIS_DB and REDIS_DB > 0 then
+        local res, err = red:select(REDIS_DB)
+        if not res then
+            red:close()
+            return nil, "Redis select failed: " .. (err or "unknown")
         end
     end
 
