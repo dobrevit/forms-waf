@@ -88,11 +88,13 @@ local REDIS_TLS_WARNED = false
 -- Sync interval in seconds
 local SYNC_INTERVAL = tonumber(os.getenv("WAF_SYNC_INTERVAL")) or 30
 
--- HAProxy routing defaults from environment
-local HAPROXY_UPSTREAM = os.getenv("HAPROXY_UPSTREAM") or "haproxy:80"
-local HAPROXY_UPSTREAM_SSL = os.getenv("HAPROXY_UPSTREAM_SSL") or "haproxy:443"
-local UPSTREAM_SSL = os.getenv("UPSTREAM_SSL") or "false"
-local HAPROXY_TIMEOUT = os.getenv("HAPROXY_TIMEOUT") or "30"
+-- HAProxy routing defaults.
+-- Sourced from waf_config so there is exactly one definition. This module used
+-- to hardcode "haproxy:80" / "haproxy:443" while waf_config used the correct
+-- "haproxy:8080" / "haproxy:8443". Because initialize_defaults() seeds Redis
+-- from *this* copy, a fresh deployment persisted the wrong ports and every
+-- proxied request failed with 502 (HAProxy binds *:8080).
+local waf_config = require "waf_config"
 
 -- Redis keys
 local KEYS = {
@@ -291,12 +293,7 @@ local function sync_routing(red)
     end
 
     -- Start with env variable defaults
-    local routing = {
-        haproxy_upstream = HAPROXY_UPSTREAM,
-        haproxy_upstream_ssl = HAPROXY_UPSTREAM_SSL,
-        upstream_ssl = UPSTREAM_SSL == "true",
-        haproxy_timeout = tonumber(HAPROXY_TIMEOUT) or 30,
-    }
+    local routing = waf_config.get_default_routing()
 
     -- Override with Redis values if present
     if type(config) == "table" and #config > 0 then
@@ -1479,12 +1476,7 @@ local DEFAULT_THRESHOLDS = {
     expose_waf_headers = false,
 }
 
-local DEFAULT_ROUTING = {
-    haproxy_upstream = HAPROXY_UPSTREAM,
-    haproxy_upstream_ssl = HAPROXY_UPSTREAM_SSL,
-    upstream_ssl = UPSTREAM_SSL == "true",
-    haproxy_timeout = tonumber(HAPROXY_TIMEOUT) or 30,
-}
+local DEFAULT_ROUTING = waf_config.get_default_routing()
 
 local DEFAULT_VHOST = {
     id = "_default",

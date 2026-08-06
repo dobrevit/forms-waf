@@ -760,7 +760,10 @@ function _M.seed_default_admin()
     end
 
     -- Warn if using weak default password
-    if admin_password == "changeme" or admin_password == "admin" or admin_password == "password" then
+    local weak_password = (admin_password == "changeme"
+        or admin_password == "admin"
+        or admin_password == "password")
+    if weak_password then
         ngx.log(ngx.WARN, "RBAC: Weak admin password detected - change it immediately!")
     end
 
@@ -793,7 +796,9 @@ function _M.seed_default_admin()
         role = "admin",
         vhost_scope = {"*"},
         auth_provider = "local",
-        must_change_password = false,
+        -- Force a change when seeded with a known-weak default, so a deployment
+        -- that accepts the docker-compose fallback cannot sit on it unnoticed.
+        must_change_password = weak_password,
         created_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
     }
 
