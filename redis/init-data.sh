@@ -96,47 +96,24 @@ echo "Loaded IP whitelist"
 # Admin User Configuration
 # ============================================================================
 
-echo "Loading admin user configuration..."
+# ============================================================================
+# Admin User
+# ============================================================================
+# NOTE: the admin user is seeded by OpenResty/Lua on startup (rbac.seed_default_admin
+# in openresty/lua/rbac.lua), for the same reason RBAC roles are: one owner, no
+# duplication.
+#
+# This script used to SET waf:admin:users:admin with a hardcoded
+# SHA256(salt + "changeme" + salt) hash and a public salt. Because rbac.lua skips
+# seeding when the user already exists, whichever of the two ran first decided the
+# admin credential -- so WAF_ADMIN_PASSWORD was silently ignored on roughly half of
+# fresh deployments, the PBKDF2 path never ran, and the deployed password was
+# "changeme" with a salt published in this repository.
+#
+# Set WAF_ADMIN_PASSWORD (and WAF_ADMIN_SALT) on the OpenResty container instead.
 
-# Default admin user
-# Password: changeme (SHA-256 hashed with salt)
-# IMPORTANT: Change this password on first login!
-# The hash is: SHA256(salt + "changeme" + salt) where salt = "waf_admin_salt_v1"
-# Pre-computed: echo -n "waf_admin_salt_v1changemewaf_admin_salt_v1" | sha256sum
-ADMIN_USER='{
-  "username": "admin",
-  "password_hash": "6e5f4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e",
-  "salt": "waf_admin_salt_v1",
-  "role": "admin",
-  "must_change_password": true,
-  "created_at": "2024-01-01T00:00:00Z"
-}'
+echo "Admin user will be seeded by OpenResty on startup (see rbac.lua)"
 
-# We need to compute the actual hash - using shell
-ADMIN_SALT="waf_admin_salt_v1"
-ADMIN_PASSWORD="changeme"
-# Note: In production, use a proper password hashing library like bcrypt
-# This SHA-256 approach is simplified for the init script
-ADMIN_HASH=$(echo -n "${ADMIN_SALT}${ADMIN_PASSWORD}${ADMIN_SALT}" | sha256sum | cut -d' ' -f1)
-
-ADMIN_USER_JSON=$(cat <<EOF
-{
-  "username": "admin",
-  "password_hash": "${ADMIN_HASH}",
-  "salt": "${ADMIN_SALT}",
-  "role": "admin",
-  "vhost_scope": ["*"],
-  "auth_provider": "local",
-  "must_change_password": true,
-  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
-)
-
-redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SET "waf:admin:users:admin" "$ADMIN_USER_JSON"
-
-echo "Loaded default admin user (username: admin, password: changeme)"
-echo "WARNING: Change the default password on first login!"
 
 # ============================================================================
 # RBAC Role Definitions
@@ -549,5 +526,5 @@ redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ZRANGE waf:vhosts:hosts:wildcard 0 -
 echo ""
 echo "=== Admin UI Access ==="
 echo "URL: http://localhost:8082"
-echo "Default credentials: admin / changeme"
-echo "WARNING: Change password on first login!"
+echo "Username: admin (seeded by OpenResty from WAF_ADMIN_PASSWORD)"
+echo "WARNING: if WAF_ADMIN_PASSWORD is left at its default, change it on first login!"

@@ -50,6 +50,20 @@ local DEFAULT_ROUTING = {
     haproxy_timeout = 30,
 }
 
+-- Canonical routing defaults.
+-- These are the single source of truth: redis_sync seeds Redis from them, and
+-- previously kept its own copy that disagreed (haproxy:80 / haproxy:443 vs the
+-- correct 8080 / 8443), so whichever component initialised Redis first decided
+-- whether the WAF could reach HAProxy at all.
+function _M.get_default_routing()
+    return {
+        haproxy_upstream = DEFAULT_ROUTING.haproxy_upstream,
+        haproxy_upstream_ssl = DEFAULT_ROUTING.haproxy_upstream_ssl,
+        upstream_ssl = DEFAULT_ROUTING.upstream_ssl,
+        haproxy_timeout = DEFAULT_ROUTING.haproxy_timeout,
+    }
+end
+
 -- Get thresholds (from Redis cache or defaults)
 function _M.get_thresholds()
     local cached = config_cache:get("thresholds")
