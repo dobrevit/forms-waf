@@ -1,0 +1,26 @@
+# Test-only image. Deliberately separate from Dockerfile so the production image
+# gains no test tooling and its build is unaffected.
+#
+# Based on the same OpenResty release as production, because the tests must run
+# on the interpreter that serves traffic: LuaJIT accepts goto/::continue:: (Lua
+# 5.2 syntax) that several modules use and PUC Lua 5.1 rejects.
+FROM openresty/openresty:1.27.1.2-alpine
+
+USER root
+
+# busted's luasystem dependency compiles against Lua headers. The image ships
+# LuaJIT's headers at a non-default path, so point luarocks at them -- the same
+# treatment the production Dockerfile gives lua-iconv.
+RUN apk add --no-cache luarocks5.1 build-base musl-dev && \
+    luarocks-5.1 install busted \
+        LUA_INCDIR=/usr/local/openresty/luajit/include/luajit-2.1 && \
+    apk del build-base musl-dev
+
+# Lua sources and specs are mounted at run time so a change does not require a
+# rebuild.
+WORKDIR /app
+ENV LUA_PATH="/app/lua/?.lua;/app/spec/?.lua;/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;/usr/local/openresty/lualib/?.lua;;"
+ENV LUA_CPATH="/usr/local/lib/lua/5.1/?.so;/usr/local/openresty/lualib/?.so;;"
+
+ENTRYPOINT ["/usr/local/bin/busted"]
+CMD ["--verbose", "/app/spec"]
