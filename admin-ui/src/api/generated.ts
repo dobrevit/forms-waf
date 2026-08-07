@@ -195,6 +195,121 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/shadow/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What monitoring mode would have blocked */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Aggregate view over the retained window */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShadowSummary"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/shadow/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Individual would-block decisions */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Recent decisions, newest first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            decisions: components["schemas"]["ShadowDecision"][];
+                            count: number;
+                            limit?: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/shadow/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pre-flight impact of promoting a scope to blocking */
+        get: {
+            parameters: {
+                query: {
+                    vhost_id: string;
+                    endpoint_id?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description What promoting this scope would have blocked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShadowImpact"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/keywords/blocked": {
         parameters: {
             query?: never;
@@ -373,6 +488,52 @@ export interface components {
                 high_event_count?: number;
                 high_event_rate?: number;
             };
+        };
+        ShadowDecision: {
+            /** @description Unix time the decision was made */
+            ts: number;
+            vhost_id: string;
+            endpoint_id: string;
+            client_ip?: string;
+            host?: string;
+            path?: string;
+            method?: string;
+            score: number;
+            blocked_by?: string[];
+            flags?: string[];
+        };
+        ShadowCount: {
+            name: string;
+            count: number;
+        };
+        ShadowSummary: {
+            would_block_total: number;
+            /** @description Records lost to the recorder's buffer cap. Non-zero means the sample is incomplete and the counts understate reality. */
+            dropped_total: number;
+            retained_decisions: number;
+            top_rules: components["schemas"]["ShadowCount"][];
+            /** @description Detection-level attribution; this is what identifies a rule to suppress. */
+            top_flags: components["schemas"]["ShadowCount"][];
+            scopes: {
+                vhost_id: string;
+                endpoint_id: string;
+                would_block_count: number;
+            }[];
+        };
+        ShadowImpact: {
+            vhost_id: string;
+            endpoint_id?: string;
+            would_block_count: number;
+            unique_client_ips: number;
+            average_score: number;
+            window_start?: number;
+            window_end?: number;
+            /** @description True when records were dropped, so this understates the impact. */
+            sample_incomplete: boolean;
+            dropped_total?: number;
+            top_rules?: components["schemas"]["ShadowCount"][];
+            top_flags?: components["schemas"]["ShadowCount"][];
+            affected_endpoints?: components["schemas"]["ShadowCount"][];
         };
         WafStatus: {
             redis_host?: string;

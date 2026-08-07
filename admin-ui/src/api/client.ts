@@ -1409,3 +1409,98 @@ export const backupApi = {
     return backup
   },
 }
+
+// ---------------------------------------------------------------------------
+// Shadow mode
+//
+// What monitoring mode *would* have blocked. The point of these is to let an
+// operator see the consequences of a rule set before it starts rejecting real
+// traffic, then promote it once the sample looks right.
+// ---------------------------------------------------------------------------
+
+export interface ShadowCount {
+  name: string
+  count: number
+}
+
+export interface ShadowDecision {
+  ts: number
+  vhost_id: string
+  endpoint_id: string
+  client_ip?: string
+  host?: string
+  path?: string
+  method?: string
+  score: number
+  blocked_by?: string[]
+  flags?: string[]
+}
+
+export interface ShadowScope {
+  vhost_id: string
+  endpoint_id: string
+  would_block_count: number
+}
+
+export interface ShadowSummary {
+  would_block_total: number
+  // Non-zero means the recorder's buffer overflowed and every count below
+  // understates reality.
+  dropped_total: number
+  retained_decisions: number
+  top_rules: ShadowCount[]
+  top_flags: ShadowCount[]
+  scopes: ShadowScope[]
+}
+
+export interface ShadowImpact {
+  vhost_id: string
+  endpoint_id?: string
+  would_block_count: number
+  unique_client_ips: number
+  average_score: number
+  window_start?: number
+  window_end?: number
+  sample_incomplete: boolean
+  dropped_total?: number
+  top_rules: ShadowCount[]
+  top_flags: ShadowCount[]
+  affected_endpoints: ShadowCount[]
+}
+
+export interface ShadowPromoteResponse {
+  promoted: boolean
+  vhost_id: string
+  mode?: string
+  previous_mode?: string
+  message?: string
+}
+
+export const shadowApi = {
+  summary: () => request<ShadowSummary>('/shadow/summary'),
+
+  decisions: (params?: { limit?: number; vhost_id?: string; endpoint_id?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.vhost_id) q.set('vhost_id', params.vhost_id)
+    if (params?.endpoint_id) q.set('endpoint_id', params.endpoint_id)
+    const qs = q.toString()
+    return request<{ decisions: ShadowDecision[]; count: number; limit?: number }>(
+      `/shadow/decisions${qs ? `?${qs}` : ''}`
+    )
+  },
+
+  impact: (vhostId: string, endpointId?: string) => {
+    const q = new URLSearchParams({ vhost_id: vhostId })
+    if (endpointId) q.set('endpoint_id', endpointId)
+    return request<ShadowImpact>(`/shadow/impact?${q.toString()}`)
+  },
+
+  promote: (vhostId: string) =>
+    request<ShadowPromoteResponse>('/shadow/promote', {
+      method: 'POST',
+      body: JSON.stringify({ vhost_id: vhostId }),
+    }),
+
+  clear: () => request<{ cleared: boolean }>('/shadow/decisions', { method: 'DELETE' }),
+}
