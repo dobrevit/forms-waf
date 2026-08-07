@@ -410,6 +410,27 @@ fi
 # Tests defense lines execution with attack signature pattern matching
 # The wp-login endpoint uses defense lines with builtin_wordpress_login and builtin_credential_stuffing signatures
 
+# A real Chrome request is more than a User-Agent string. The WAF's
+# fake-modern-browser check flags a request that claims to be Chrome 120 while
+# omitting the client hints and Sec-Fetch headers Chrome always sends -- which is
+# correct bot detection, and exactly what a -A flag alone looks like. Tests that
+# describe themselves as "legitimate browser" must therefore send a browser's
+# headers, or they assert the opposite of what they claim.
+BROWSER_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+BROWSER_HEADERS=(
+    -H "Accept-Language: en-GB,en;q=0.9"
+    -H "Accept-Encoding: gzip, deflate, br"
+    -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+    -H 'sec-ch-ua: "Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
+    -H 'sec-ch-ua-mobile: ?0'
+    -H 'sec-ch-ua-platform: "Windows"'
+    -H 'Sec-Fetch-Site: same-origin'
+    -H 'Sec-Fetch-Mode: navigate'
+    -H 'Sec-Fetch-User: ?1'
+    -H 'Sec-Fetch-Dest: document'
+    -H 'Upgrade-Insecure-Requests: 1'
+)
+
 log_info "Testing WordPress login endpoint with defense lines..."
 
 # Check if wp-login endpoint exists
@@ -419,7 +440,7 @@ log_info "Testing WordPress login endpoint with defense lines..."
 # the suite could not tell "not configured" from "configured and blocking me".
 # A 403 is equally good evidence that the endpoint exists and is enforcing.
 WP_RESPONSE=$(curl -s -w '\n%{http_code}' -X POST "$BASE_URL/wp-login.php" \
-    -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+    -A "$BROWSER_UA" "${BROWSER_HEADERS[@]}" \
     -d "log=testuser&pwd=testpass")
 WP_PROBE_STATUS=$(echo "$WP_RESPONSE" | tail -1)
 
@@ -431,7 +452,7 @@ if echo "$WP_RESPONSE" | grep -q '"endpoint":"wp-login"' || [ "$WP_PROBE_STATUS"
 
     # Test 1: Normal request with legitimate browser should pass
     test_form_request "WP Login - Legitimate browser request" "200" "/wp-login.php" \
-        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+        -A "$BROWSER_UA" "${BROWSER_HEADERS[@]}" \
         -d "log=legituser" -d "pwd=SecureP@ss123!" -d "wp-submit=Log+In"
 
     sleep 1
