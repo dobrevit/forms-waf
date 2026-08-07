@@ -25,6 +25,10 @@ local DEFAULT_ENDPOINT_CONFIG = {
         excluded_flagged = {}
     },
     patterns = {
+        -- On by default: this drives the link analysis and script-tag detection
+        -- the README advertises. It was absent here and in the no-endpoint-config
+        -- branch below, so pattern_scan skipped for every request.
+        enabled = true,
         inherit_global = true,
         disabled = {},
         custom = {}
@@ -152,6 +156,10 @@ end
 -- Merge pattern configuration
 local function merge_patterns(global_patterns, endpoint_patterns)
     local result = {
+        -- `enabled` gates the pattern_scan defense. It was absent from this
+        -- table, so config.patterns.enabled was always nil and pattern_scan
+        -- skipped on every request regardless of endpoint configuration.
+        enabled = true,
         inherit_global = true,
         disabled = {},
         custom = {}
@@ -161,6 +169,11 @@ local function merge_patterns(global_patterns, endpoint_patterns)
         return result
     end
 
+    if endpoint_patterns.enabled ~= nil then
+        result.enabled = endpoint_patterns.enabled == true
+    else
+        result.enabled = true   -- inherit the default rather than silently disabling
+    end
     result.inherit_global = endpoint_patterns.inherit_global ~= false
 
     -- Support canonical name (disabled) and legacy (disabled_patterns)
@@ -347,6 +360,7 @@ function _M.resolve(endpoint_config)
                 excluded_flagged = {}
             },
             patterns = {
+                enabled = true,
                 inherit_global = true,
                 disabled = {},
                 custom = {}
@@ -358,7 +372,8 @@ function _M.resolve(endpoint_config)
             fields = deep_copy(DEFAULT_ENDPOINT_CONFIG.fields),
             actions = deep_copy(DEFAULT_ENDPOINT_CONFIG.actions),
             fingerprint_profiles = nil,  -- No profile attachment - use defaults
-            defense_profiles = nil  -- No profile attachment - use defaults (will fall back to legacy)
+            defense_profiles = nil,  -- No profile attachment - use defaults (will fall back to legacy)
+            defense_lines = nil  -- No defense lines without an endpoint config
         }
     end
 
@@ -385,6 +400,17 @@ function _M.resolve(endpoint_config)
         security = endpoint_config.security,  -- Pass through security settings (honeypot, disposable email, etc.)
         fingerprint_profiles = endpoint_config.fingerprint_profiles,  -- Pass through fingerprint profile attachment
         defense_profiles = endpoint_config.defense_profiles,  -- Pass through defense profile attachment
+        -- Defense lines were missing from this table, so an endpoint configured
+        -- with defense_lines had them silently dropped during resolution:
+        -- defense_profile_multi_executor reads them from
+        -- request_context.endpoint_config, which is this resolved table, so it
+        -- always saw nil and skipped the whole feature. The seeded wp-login
+        -- endpoint (builtin_strict + two attack signatures) never enforced
+        -- anything as a result.
+        --
+        -- NOTE: this table is an explicit allowlist. Any new endpoint config key
+        -- must be added here or it will not reach the request path.
+        defense_lines = endpoint_config.defense_lines,
         metadata = endpoint_config.metadata
     }
 

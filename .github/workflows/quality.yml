@@ -1,0 +1,154 @@
+name: Quality Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# R-18: the repository previously had only build-push.yml, which builds and
+# pushes images and runs no tests, linter, type check or dependency audit. Seven
+# months of dependency drift (14 advisories) and 74 accumulated type errors went
+# undetected as a direct result.
+
+jobs:
+  admin-ui:
+    name: Admin UI (typecheck, lint, audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      # node 24 for npm >= 11, which is required for min-release-age in .npmrc.
+      # On node 22 (npm 10.x) that setting is silently ignored.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+
+      # npm ci honours .npmrc (ignore-scripts, min-release-age) and installs the
+      # committed lockfile exactly.
+      - name: Install
+        run: npm ci
+
+      # docs/openapi.yaml is the source of truth for the API types. If the spec
+      # changed without regenerating, or generated.ts was hand-edited, fail here
+      # rather than letting the drift reach a page.
+      - name: API types are in sync with the spec
+        run: |
+          npm run generate:api
+          if ! git diff --quiet -- src/api/generated.ts; then
+            echo "src/api/generated.ts is out of date. Run 'npm run generate:api' and commit the result."
+            git diff -- src/api/generated.ts
+            exit 1
+          fi
+
+      # Also enforces src/api/contract.assert.ts, which fails compilation if a
+      # hand-written type declares a field the specification does not.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # Fails on high/critical advisories except those with a justified,
+      # time-boxed entry in .audit-allowlist.json. Entries expire, so an accepted
+      # risk resurfaces rather than becoming permanent.
+      - name: Audit gate
+        run: npm run audit:gate
+
+  lua:
+    name: Lua syntax, lint and config contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runtime is LuaJIT, which supports goto/::continue:: (a Lua 5.2
+      # feature). Checking with PUC luac5.1 rejects valid code, and checking with
+      # luac5.4 accepts code LuaJIT might not -- neither matches production. Use
+      # the interpreter the WAF actually runs on, taken from the image itself.
+      - name: Build the OpenResty image
+        run: docker build -t forms-waf-openresty:ci ./openresty
+
+      - name: Syntax check every module with the runtime interpreter
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD/openresty/lua:/lua:ro" forms-waf-openresty:ci -c '
+            fail=0
+            for f in $(find /lua -name "*.lua"); do
+              if ! /usr/local/openresty/luajit/bin/luajit -bl "$f" /dev/null >/dev/null 2>&1; then
+                echo "SYNTAX FAIL: ${f#/lua/}"
+                /usr/local/openresty/luajit/bin/luajit -bl "$f" /dev/null 2>&1 | head -2
+                fail=1
+              fi
+            done
+            exit $fail'
+
+      # --std luajit so goto and the LuaJIT globals are understood. Warnings do
+      # not fail the build yet; this code has never been linted.
+      - name: Luacheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y luarocks
+          sudo luarocks install luacheck
+          luacheck openresty/lua --std luajit --globals ngx --no-unused-args --codes || true
+
+      # Guards the seam between config_resolver and the defense mechanisms, where
+      # six shipped features were silently inert.
+      - name: Config contract
+        run: |
+          docker run --rm --entrypoint /usr/local/openresty/luajit/bin/luajit \
+            -v "$PWD/openresty/tests:/tests:ro" forms-waf-openresty:ci \
+            /tests/config_contract_spec.lua
+
+  integration:
+    name: WAF integration suite
+    runs-on: ubuntu-latest
+    # Blocking. Cold-start result is 42 passed / 2 known gaps (R-27) / 0 failed,
+    # stable across consecutive runs.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start the stack
+        env:
+          WAF_ADMIN_SALT: ci_salt_at_least_32_characters_long_for_tests
+          WAF_ADMIN_PASSWORD: ci-test-password-not-a-secret
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://localhost:8082/health && break
+            sleep 2
+          done
+          # A healthy admin port does not mean config has reached the workers:
+          # redis_sync populates the shared dicts on a 10s timer, and starting
+          # the suite before that lands produces spurious failures.
+          sleep 15
+
+      # Credentials let the harness raise ip_rate_limit and fingerprint_rate_limit
+      # for the run; without them the suite's own request volume trips them and
+      # reports spurious failures.
+      - name: Run integration suite
+        env:
+          WAF_ADMIN_USER: admin
+          WAF_ADMIN_PASS: ci-test-password-not-a-secret
+        run: ./scripts/test-waf.sh http://localhost:8080 http://localhost:8082
+
+      # Proves the specification describes the server that is actually running.
+      # Without this the spec drifts exactly as the hand-written client did.
+      - name: API contract matches the running server
+        env:
+          WAF_ADMIN_USER: admin
+          WAF_ADMIN_PASS: ci-test-password-not-a-secret
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/check-api-contract.py http://localhost:8082 "$WAF_ADMIN_USER" "$WAF_ADMIN_PASS"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

@@ -212,15 +212,34 @@ executor.register_defense("honeypot", function(request_context, node_config)
     local config = get_config(request_context)
     local form_data = get_form_data(request_context)
 
-    -- Check if honeypot is enabled
-    if not config.honeypot or not config.honeypot.enabled then
+    -- Canonical config shape, as documented in config_resolver.lua and
+    -- vhost_resolver.get_honeypot_fields():
+    --     fields.honeypot           -> array of field names
+    --     security.honeypot_action  -> "block" | anything else means score
+    --     security.honeypot_score   -> number
+    --
+    -- This mechanism previously read config.honeypot.{enabled,field_names,
+    -- action,score}, a shape config_resolver never emits. config.honeypot was
+    -- therefore always nil and every request returned skipped/"honeypot_disabled",
+    -- so endpoint-configured honeypot fields never triggered at all.
+    -- The legacy shape is still accepted so any deployment that worked around
+    -- this keeps functioning.
+    local legacy = config.honeypot
+    if legacy and legacy.enabled == false then
         return executor.result_score(0, {}, {skipped = true, reason = "honeypot_disabled"})
     end
 
-    -- Get honeypot field names
-    local field_names = config.honeypot.field_names or {"website", "url", "homepage", "fax"}
-    local action = node_config.action or config.honeypot.action or "block"
-    local score = node_config.score or config.honeypot.score or 50
+    local field_names = (config.fields and config.fields.honeypot)
+        or (legacy and legacy.field_names)
+    if type(field_names) ~= "table" or #field_names == 0 then
+        return executor.result_score(0, {}, {skipped = true, reason = "no_honeypot_fields"})
+    end
+
+    local security = config.security or {}
+    local action = node_config.action or security.honeypot_action
+        or (legacy and legacy.action) or "block"
+    local score = node_config.score or security.honeypot_score
+        or (legacy and legacy.score) or 50
 
     -- Check if any honeypot field is filled
     for _, field_name in ipairs(field_names) do
@@ -573,11 +592,34 @@ executor.register_defense("pattern_scan", function(request_context, node_config)
         return executor.result_score(0, {}, {skipped = true, reason = "patterns_disabled"})
     end
 
-    local pattern_scanner = require "pattern_scanner"
-    local result = pattern_scanner.scan(form_data, config.patterns)
+    -- R-27: this required a "pattern_scanner" module that has never existed in
+    -- this tree, so the node could only ever fail. The implementation was already
+    -- present as keyword_filter.pattern_scan, which walks the same DEFAULT_PATTERNS
+    -- table (suspicious TLDs, URL shorteners, excessive links, script tags).
+    local keyword_filter = require "keyword_filter"
+    local ignore_fields = (config.fields and config.fields.ignore) or {}
+    local result = keyword_filter.pattern_scan(form_data, ignore_fields)
 
-    return executor.result_score(result.score or 0, result.flags or {}, {
-        matches = result.matches
+    -- Honour patterns.disabled: an operator can switch off individual pattern
+    -- flags without disabling the whole mechanism.
+    local disabled = config.patterns.disabled or {}
+    local score, flags = 0, {}
+    for _, flag in ipairs(result.flags or {}) do
+        -- flags are emitted as "name" or "name:detail"
+        local base = flag:match("^([^:]+)") or flag
+        if not disabled[base] and not disabled[flag] then
+            table.insert(flags, flag)
+        end
+    end
+
+    -- Only keep the score when at least one flag survived the disabled filter.
+    if #flags > 0 then
+        score = result.score or 0
+    end
+
+    return executor.result_score(score, flags, {
+        patterns_matched = #flags,
+        filtered = #(result.flags or {}) - #flags,
     })
 end)
 
@@ -589,17 +631,36 @@ executor.register_defense("disposable_email", function(request_context, node_con
     local config = get_config(request_context)
     local form_data = get_form_data(request_context)
 
-    -- Check if disposable email detection is enabled
-    if not config.disposable_email or not config.disposable_email.enabled then
+    -- Canonical shape, matching vhost_resolver.get_security_settings():
+    --     security.check_disposable_email   boolean
+    --     security.disposable_email_action  "block" | anything else means score
+    --     security.disposable_email_score   number
+    --
+    -- This previously read config.disposable_email.enabled, which
+    -- config_resolver never emits, so the check was skipped on every request.
+    -- Same defect as the honeypot mechanism. The old shape is still honoured.
+    local legacy = config.disposable_email
+    local security = config.security or {}
+    local enabled = security.check_disposable_email
+    if enabled == nil and legacy then
+        enabled = legacy.enabled
+    end
+
+    if not enabled then
         return executor.result_score(0, {}, {skipped = true, reason = "disposable_email_disabled"})
     end
 
-    local action = node_config.action or config.disposable_email.action or "flag"
-    local score = node_config.score or config.disposable_email.score or 30
+    local action = node_config.action or security.disposable_email_action
+        or (legacy and legacy.action) or "flag"
+    local score = node_config.score or security.disposable_email_score
+        or (legacy and legacy.score) or 30
 
     -- Find email fields
-    local email_fields = config.disposable_email.fields or {"email", "e-mail", "mail"}
-    local disposable_checker = require "disposable_email"
+    local email_fields = (legacy and legacy.fields) or {"email", "e-mail", "mail"}
+    -- The module is disposable_domains; requiring "disposable_email" (the event
+    -- name) raised on every request that reached this point. Same defect class as
+    -- pattern_scan's missing "pattern_scanner".
+    local disposable_checker = require "disposable_domains"
 
     for _, field_name in ipairs(email_fields) do
         local email = form_data[field_name]

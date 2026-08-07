@@ -1,5 +1,6 @@
 import * as React from "react"
 import * as CollapsiblePrimitive from "@radix-ui/react-collapsible"
+import { cn } from "@/lib/utils"
 
 const Collapsible = CollapsiblePrimitive.Root
 
@@ -9,9 +10,14 @@ const CollapsibleContent = React.forwardRef<
   React.ElementRef<typeof CollapsiblePrimitive.CollapsibleContent>,
   React.ComponentPropsWithoutRef<typeof CollapsiblePrimitive.CollapsibleContent>
 >(({ className, children, ...props }, ref) => (
+  // R-22: className was destructured and then discarded, so any class passed by a
+  // caller was silently dropped. Merge it instead.
   <CollapsiblePrimitive.CollapsibleContent
     ref={ref}
-    className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down"
+    className={cn(
+      "overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down",
+      className
+    )}
     {...props}
   >
     {children}
