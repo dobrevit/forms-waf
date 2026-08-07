@@ -1504,3 +1504,47 @@ export const shadowApi = {
 
   clear: () => request<{ cleared: boolean }>('/shadow/decisions', { method: 'DELETE' }),
 }
+
+// ---------------------------------------------------------------------------
+// Rule suppressions
+//
+// The counterpart to shadow mode: shadow names the rule that would have
+// blocked, a suppression says that rule is wrong for this scope.
+// ---------------------------------------------------------------------------
+
+export type SuppressionScope = 'global' | 'vhost' | 'endpoint'
+
+export interface Suppression {
+  id: string
+  scope_type: SuppressionScope
+  scope_id?: string
+  flag: string
+  reason?: string
+  created_at?: number
+  created_by?: string
+}
+
+export interface NewSuppression {
+  flag: string
+  scope_type?: SuppressionScope
+  scope_id?: string
+  reason?: string
+}
+
+export const suppressionsApi = {
+  list: () =>
+    request<{ suppressions: Suppression[]; count: number; max?: number }>('/suppressions'),
+
+  create: (body: NewSuppression) =>
+    request<{ suppression: Suppression; created: boolean }>('/suppressions', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  remove: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/suppressions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  clear: () => request<{ cleared: boolean }>('/suppressions', { method: 'DELETE' }),
+}

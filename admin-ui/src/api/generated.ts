@@ -195,6 +195,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/suppressions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Detections that no longer count, and where */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Every suppression currently in force */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            suppressions: components["schemas"]["Suppression"][];
+                            count: number;
+                            /** @description Ceiling on entries; this list is walked on every defense node. */
+                            max?: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Stop a detection counting for one scope */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            suppression?: components["schemas"]["Suppression"];
+                            created?: boolean;
+                        };
+                    };
+                };
+                /** @description Invalid input. Includes a global "*", which would disable all detection and is refused deliberately. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        /** Remove every suppression */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Cleared */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/shadow/summary": {
         parameters: {
             query?: never;
@@ -488,6 +577,19 @@ export interface components {
                 high_event_count?: number;
                 high_event_rate?: number;
             };
+        };
+        Suppression: {
+            /** @description Digest of scope and flag, so adding the same one twice is idempotent. */
+            id: string;
+            /** @enum {string} */
+            scope_type: "global" | "vhost" | "endpoint";
+            /** @description Absent for global scope; the vhost or endpoint id otherwise. */
+            scope_id?: string;
+            /** @description Exact detection flag, or a trailing "*" to cover a family (kw:*). */
+            flag: string;
+            reason?: string;
+            created_at?: number;
+            created_by?: string;
         };
         ShadowDecision: {
             /** @description Unix time the decision was made */

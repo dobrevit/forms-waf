@@ -113,6 +113,24 @@ components:
             high_event_count: { type: integer }
             high_event_rate:  { type: integer }
 
+    Suppression:
+      type: object
+      required: [id, scope_type, flag]
+      properties:
+        id:
+          type: string
+          description: Digest of scope and flag, so adding the same one twice is idempotent.
+        scope_type: { type: string, enum: [global, vhost, endpoint] }
+        scope_id:
+          type: string
+          description: Absent for global scope; the vhost or endpoint id otherwise.
+        flag:
+          type: string
+          description: Exact detection flag, or a trailing "*" to cover a family (kw:*).
+        reason:     { type: string }
+        created_at: { type: integer }
+        created_by: { type: string }
+
     ShadowDecision:
       type: object
       required: [ts, vhost_id, endpoint_id, score]
@@ -263,6 +281,47 @@ paths:
                   defaults: { $ref: "#/components/schemas/SlackConfig" }
                   emitted_events:     { type: array, items: { type: string } }
                   unavailable_events: { type: array, items: { type: string } }
+
+  /suppressions:
+    get:
+      summary: Detections that no longer count, and where
+      responses:
+        "200":
+          description: Every suppression currently in force
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [suppressions, count]
+                properties:
+                  suppressions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Suppression" }
+                  count: { type: integer }
+                  max:
+                    type: integer
+                    description: Ceiling on entries; this list is walked on every defense node.
+    post:
+      summary: Stop a detection counting for one scope
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  suppression: { $ref: "#/components/schemas/Suppression" }
+                  created: { type: boolean }
+        "400":
+          description: >
+            Invalid input. Includes a global "*", which would disable all
+            detection and is refused deliberately.
+    delete:
+      summary: Remove every suppression
+      responses:
+        "200":
+          description: Cleared
 
   /shadow/summary:
     get:

@@ -423,6 +423,21 @@ local function execute_defense_node(node, request_context)
         return _M.result_score(0, {"defense_error:" .. defense_name}, {error = result})
     end
 
+    -- Every mechanism returns through here, which is why suppression hooks in at
+    -- this point rather than in each mechanism. A suppression an operator added
+    -- after seeing a false positive in the shadow view takes effect here.
+    local suppressions = require "suppressions"
+    local _, removed = suppressions.apply(result, request_context.vhost_id,
+                                          request_context.endpoint_id)
+    if removed then
+        -- Logged, not silent: a detection that stops counting is exactly the
+        -- thing an operator needs to be able to find later when asking why
+        -- something got through.
+        ngx.log(ngx.INFO, "SUPPRESSED: ", defense_name, " flags=",
+                table.concat(removed, ","), " vhost=", tostring(request_context.vhost_id),
+                " endpoint=", tostring(request_context.endpoint_id))
+    end
+
     return result
 end
 

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { shadowApi } from '@/api/client'
 import type { ShadowCount, ShadowImpact, ShadowScope } from '@/api/client'
@@ -33,6 +34,7 @@ import {
   Trash2,
   ArrowUpCircle,
   Fingerprint,
+  BellOff,
 } from 'lucide-react'
 
 function formatWhen(ts: number): string {
@@ -45,10 +47,29 @@ function formatWhen(ts: number): string {
 }
 
 /**
+ * Recorded flags are profile-prefixed (`legacy:kw:viagra`) because a decision can
+ * come from any profile, but a suppression matches the flag the mechanism itself
+ * emits (`kw:viagra`). Strip the profile segment so the suppression form is
+ * prefilled with something that will actually match.
+ */
+function detectionFlag(recorded: string): string {
+  const firstColon = recorded.indexOf(':')
+  return firstColon === -1 ? recorded : recorded.slice(firstColon + 1)
+}
+
+/**
  * A count bar. The relative width is what makes a list of flags readable at a
  * glance -- "which rule is responsible for most of this" is the whole question.
  */
-function CountBars({ items, empty }: { items: ShadowCount[]; empty: string }) {
+function CountBars({
+  items,
+  empty,
+  suppressScope,
+}: {
+  items: ShadowCount[]
+  empty: string
+  suppressScope?: string
+}) {
   if (!items?.length) {
     return <p className="text-sm text-muted-foreground">{empty}</p>
   }
@@ -59,7 +80,25 @@ function CountBars({ items, empty }: { items: ShadowCount[]; empty: string }) {
         <div key={item.name} className="space-y-1">
           <div className="flex items-baseline justify-between gap-4">
             <code className="text-xs font-medium break-all">{item.name}</code>
-            <span className="text-sm tabular-nums text-muted-foreground">{item.count}</span>
+            <span className="flex items-center gap-2">
+              <span className="text-sm tabular-nums text-muted-foreground">{item.count}</span>
+              {suppressScope && (
+                <Button
+                  asChild
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  title={`Stop ${detectionFlag(item.name)} counting for ${suppressScope}`}
+                >
+                  <Link
+                    to={`/security/suppressions?flag=${encodeURIComponent(detectionFlag(item.name))}&scope_type=vhost&scope_id=${encodeURIComponent(suppressScope)}`}
+                  >
+                    <BellOff className="mr-1 h-3 w-3" />
+                    Suppress
+                  </Link>
+                </Button>
+              )}
+            </span>
           </div>
           <div className="h-1.5 w-full rounded-full bg-muted">
             <div
@@ -132,6 +171,13 @@ export default function ShadowMode() {
   }
 
   const incomplete = (summary?.dropped_total ?? 0) > 0
+
+  // The summary spans every scope, so a flag in it cannot always be attributed
+  // to one vhost. Offer the suppress shortcut only when every recorded decision
+  // came from the same vhost -- otherwise the prefilled scope would be a guess,
+  // and a suppression applied to the wrong vhost is a hole, not an annoyance.
+  const scopeVhosts = new Set((summary?.scopes ?? []).map((s) => s.vhost_id))
+  const singleVhost = scopeVhosts.size === 1 ? [...scopeVhosts][0] : undefined
 
   return (
     <div className="space-y-6">
@@ -227,6 +273,7 @@ export default function ShadowMode() {
             <CountBars
               items={summary?.top_flags ?? []}
               empty="Nothing recorded yet. Put a vhost in monitoring mode and send traffic."
+              suppressScope={singleVhost}
             />
           </CardContent>
         </Card>
@@ -397,7 +444,11 @@ export default function ShadowMode() {
                 {!!pending?.top_flags?.length && (
                   <div>
                     <p className="mb-2 text-sm font-medium">Mostly from</p>
-                    <CountBars items={pending.top_flags.slice(0, 5)} empty="" />
+                    <CountBars
+                      items={pending.top_flags.slice(0, 5)}
+                      empty=""
+                      suppressScope={pending.vhost_id}
+                    />
                   </div>
                 )}
                 {!!pending?.affected_endpoints?.length && (

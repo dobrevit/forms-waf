@@ -24,6 +24,7 @@ import {
   Server,
   Fingerprint,
   EyeOff,
+  BellOff,
   MessageSquare,
   Workflow,
   Target,
@@ -52,6 +53,7 @@ const navigation = [
     name: 'Security',
     children: [
       { name: 'Shadow Mode', href: '/security/shadow', icon: EyeOff },
+      { name: 'Suppressions', href: '/security/suppressions', icon: BellOff },
       { name: 'Form Timing', href: '/security/timing', icon: Clock },
       { name: 'Defense Profiles', href: '/security/defense-profiles', icon: Workflow },
       { name: 'Attack Signatures', href: '/security/attack-signatures', icon: Target },
