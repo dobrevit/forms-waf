@@ -305,9 +305,15 @@ local function sync_suppressions(red)
     if type(entries) == "table" then
         for i = 1, #entries, 2 do
             local decoded = cjson.decode(entries[i + 1])
-            if decoded then
+            -- Objects only. cjson.decode happily returns a number or a string for
+            -- valid-but-wrong JSON, and both are truthy; assigning .id to one
+            -- raises here, and letting one through would arm the same failure in
+            -- the request path.
+            if type(decoded) == "table" then
                 decoded.id = decoded.id or entries[i]
                 list[#list + 1] = decoded
+            else
+                ngx.log(ngx.WARN, "Ignoring malformed suppression: ", tostring(entries[i]))
             end
         end
     end

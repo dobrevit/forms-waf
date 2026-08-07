@@ -86,6 +86,23 @@ describe("suppressions", function()
             assert.same({ "honeypot:filled", "kw:casino", "kw:viagra" }, patterns)
         end)
 
+        it("skips a malformed entry rather than taking the request down", function()
+            -- This runs outside the pcall that wraps the mechanism, so an error
+            -- here does not degrade to a neutral result -- it propagates into
+            -- request handling. Anything written straight into the Redis hash
+            -- that is not a JSON object arrives here as a number or a string.
+            local cjson = require "cjson.safe"
+            ngx.shared.suppression_cache:set("suppressions",
+                cjson.encode({ 42, "a string", { flag = "kw:viagra", scope_type = "global" } }))
+
+            local patterns
+            local ok = pcall(function()
+                patterns = suppressions.active_patterns("v", "e")
+            end)
+            assert.is_true(ok, "a malformed entry must not raise in the request path")
+            assert.same({ "kw:viagra" }, patterns, "the valid entry still applies")
+        end)
+
         it("ignores an unknown scope type instead of applying it", function()
             install({ { flag = "kw:viagra", scope_type = "everywhere-ish" } })
             assert.same({}, suppressions.active_patterns("v", "e"))

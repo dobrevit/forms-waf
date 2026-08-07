@@ -38,7 +38,7 @@ local function read_all(red)
     if type(raw) == "table" then
         for i = 1, #raw, 2 do
             local decoded = cjson.decode(raw[i + 1])
-            if decoded then
+            if type(decoded) == "table" then
                 decoded.id = decoded.id or raw[i]
                 out[#out + 1] = decoded
             end
@@ -116,6 +116,21 @@ _M.handlers["POST:/suppressions"] = function()
     local red, conn_err = utils.get_redis()
     if not red then
         return utils.error_response("Redis connection failed: " .. (conn_err or "unknown"))
+    end
+
+    -- A typo in scope_id would be accepted and then simply never match anything,
+    -- which is the failure mode this codebase keeps being bitten by: config that
+    -- looks applied and is inert. Cheaper to refuse it than to debug it later.
+    if scope_type ~= "global" then
+        local scope_key = (scope_type == "vhost" and "waf:vhosts:config:" or "waf:endpoints:config:")
+            .. scope_id
+        local exists = red:exists(scope_key)
+        if exists == 0 then
+            utils.close_redis(red)
+            return utils.error_response(
+                "No " .. scope_type .. " with id '" .. scope_id ..
+                "'. A suppression on a scope that does not exist would never apply.", 400)
+        end
     end
 
     local existing = read_all(red)

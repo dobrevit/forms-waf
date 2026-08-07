@@ -103,7 +103,12 @@ end
 function _M.active_patterns(vhost_id, endpoint_id)
     local patterns = {}
     for _, entry in ipairs(_M.get_all()) do
-        if entry.flag and applies_to_scope(entry, vhost_id, endpoint_id) then
+        -- Type-guarded because this runs in the request path, outside the pcall
+        -- that wraps the mechanism itself. A single malformed entry -- anything
+        -- written straight into the Redis hash that is not a JSON object --
+        -- would otherwise raise on entry.flag and take the request down with it.
+        if type(entry) == "table" and entry.flag
+                and applies_to_scope(entry, vhost_id, endpoint_id) then
             patterns[#patterns + 1] = entry.flag
         end
     end

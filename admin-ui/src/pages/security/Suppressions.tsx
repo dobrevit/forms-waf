@@ -46,9 +46,15 @@ export default function Suppressions() {
   // to retype a flag you were just looking at is how a good idea gets abandoned.
   const [searchParams] = useSearchParams()
   const [flag, setFlag] = useState(searchParams.get('flag') ?? '')
-  const [scopeType, setScopeType] = useState<SuppressionScope>(
-    (searchParams.get('scope_type') as SuppressionScope | null) ?? 'vhost'
-  )
+  // Validated rather than cast: a stale or hand-edited link carrying
+  // ?scope_type=foo would put the form into a state no Select option matches,
+  // leaving a control that looks set and submits something else.
+  const [scopeType, setScopeType] = useState<SuppressionScope>(() => {
+    const fromUrl = searchParams.get('scope_type')
+    return fromUrl === 'global' || fromUrl === 'vhost' || fromUrl === 'endpoint'
+      ? fromUrl
+      : 'vhost'
+  })
   const [scopeId, setScopeId] = useState(searchParams.get('scope_id') ?? '')
   const [reason, setReason] = useState('')
 
