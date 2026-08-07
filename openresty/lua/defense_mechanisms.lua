@@ -212,15 +212,34 @@ executor.register_defense("honeypot", function(request_context, node_config)
     local config = get_config(request_context)
     local form_data = get_form_data(request_context)
 
-    -- Check if honeypot is enabled
-    if not config.honeypot or not config.honeypot.enabled then
+    -- Canonical config shape, as documented in config_resolver.lua and
+    -- vhost_resolver.get_honeypot_fields():
+    --     fields.honeypot           -> array of field names
+    --     security.honeypot_action  -> "block" | anything else means score
+    --     security.honeypot_score   -> number
+    --
+    -- This mechanism previously read config.honeypot.{enabled,field_names,
+    -- action,score}, a shape config_resolver never emits. config.honeypot was
+    -- therefore always nil and every request returned skipped/"honeypot_disabled",
+    -- so endpoint-configured honeypot fields never triggered at all.
+    -- The legacy shape is still accepted so any deployment that worked around
+    -- this keeps functioning.
+    local legacy = config.honeypot
+    if legacy and legacy.enabled == false then
         return executor.result_score(0, {}, {skipped = true, reason = "honeypot_disabled"})
     end
 
-    -- Get honeypot field names
-    local field_names = config.honeypot.field_names or {"website", "url", "homepage", "fax"}
-    local action = node_config.action or config.honeypot.action or "block"
-    local score = node_config.score or config.honeypot.score or 50
+    local field_names = (config.fields and config.fields.honeypot)
+        or (legacy and legacy.field_names)
+    if type(field_names) ~= "table" or #field_names == 0 then
+        return executor.result_score(0, {}, {skipped = true, reason = "no_honeypot_fields"})
+    end
+
+    local security = config.security or {}
+    local action = node_config.action or security.honeypot_action
+        or (legacy and legacy.action) or "block"
+    local score = node_config.score or security.honeypot_score
+        or (legacy and legacy.score) or 50
 
     -- Check if any honeypot field is filled
     for _, field_name in ipairs(field_names) do

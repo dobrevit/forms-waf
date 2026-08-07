@@ -73,14 +73,8 @@ jobs:
   integration:
     name: WAF integration suite
     runs-on: ubuntu-latest
-    # KNOWN LIMITATION: not yet blocking, but down to a single failure.
-    # 41 passed / 2 known gaps (R-27) / 1 failed on a cold stack.
-    # The remaining failure is "WP Login - Honeypot triggered": the honeypot
-    # defense reads config.honeypot.{enabled,field_names}, while the resolver
-    # produces fields.honeypot and security.honeypot_*, so config.honeypot is
-    # always nil and the check is skipped as "honeypot_disabled". Make this
-    # blocking once that is fixed.
-    continue-on-error: true
+    # Blocking. Cold-start result is 42 passed / 2 known gaps (R-27) / 0 failed,
+    # stable across consecutive runs.
     steps:
       - uses: actions/checkout@v4
 
@@ -94,7 +88,10 @@ jobs:
             curl -sf -o /dev/null http://localhost:8082/health && break
             sleep 2
           done
-          sleep 5
+          # A healthy admin port does not mean config has reached the workers:
+          # redis_sync populates the shared dicts on a 10s timer, and starting
+          # the suite before that lands produces spurious failures.
+          sleep 15
 
       # Credentials let the harness raise ip_rate_limit and fingerprint_rate_limit
       # for the run; without them the suite's own request volume trips them and
