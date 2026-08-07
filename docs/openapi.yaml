@@ -113,6 +113,73 @@ components:
             high_event_count: { type: integer }
             high_event_rate:  { type: integer }
 
+    ShadowDecision:
+      type: object
+      required: [ts, vhost_id, endpoint_id, score]
+      properties:
+        ts:          { type: integer, description: Unix time the decision was made }
+        vhost_id:    { type: string }
+        endpoint_id: { type: string }
+        client_ip:   { type: string }
+        host:        { type: string }
+        path:        { type: string }
+        method:      { type: string }
+        score:       { type: integer }
+        blocked_by:  { type: array, items: { type: string } }
+        flags:       { type: array, items: { type: string } }
+
+    ShadowCount:
+      type: object
+      required: [name, count]
+      properties:
+        name:  { type: string }
+        count: { type: integer }
+
+    ShadowSummary:
+      type: object
+      required: [would_block_total, dropped_total, retained_decisions, top_rules, top_flags, scopes]
+      properties:
+        would_block_total: { type: integer }
+        dropped_total:
+          type: integer
+          description: >
+            Records lost to the recorder's buffer cap. Non-zero means the sample
+            is incomplete and the counts understate reality.
+        retained_decisions: { type: integer }
+        top_rules: { type: array, items: { $ref: "#/components/schemas/ShadowCount" } }
+        top_flags:
+          type: array
+          description: Detection-level attribution; this is what identifies a rule to suppress.
+          items: { $ref: "#/components/schemas/ShadowCount" }
+        scopes:
+          type: array
+          items:
+            type: object
+            required: [vhost_id, endpoint_id, would_block_count]
+            properties:
+              vhost_id:          { type: string }
+              endpoint_id:       { type: string }
+              would_block_count: { type: integer }
+
+    ShadowImpact:
+      type: object
+      required: [vhost_id, would_block_count, unique_client_ips, average_score, sample_incomplete]
+      properties:
+        vhost_id:          { type: string }
+        endpoint_id:       { type: string }
+        would_block_count: { type: integer }
+        unique_client_ips: { type: integer }
+        average_score:     { type: integer }
+        window_start:      { type: integer }
+        window_end:        { type: integer }
+        sample_incomplete:
+          type: boolean
+          description: True when records were dropped, so this understates the impact.
+        dropped_total:     { type: integer }
+        top_rules:          { type: array, items: { $ref: "#/components/schemas/ShadowCount" } }
+        top_flags:          { type: array, items: { $ref: "#/components/schemas/ShadowCount" } }
+        affected_endpoints: { type: array, items: { $ref: "#/components/schemas/ShadowCount" } }
+
     WafStatus:
       type: object
       required: [redis_connected, blocked_hashes_count, whitelisted_ips_count, endpoints_count, vhosts_count]
@@ -196,6 +263,54 @@ paths:
                   defaults: { $ref: "#/components/schemas/SlackConfig" }
                   emitted_events:     { type: array, items: { type: string } }
                   unavailable_events: { type: array, items: { type: string } }
+
+  /shadow/summary:
+    get:
+      summary: What monitoring mode would have blocked
+      responses:
+        "200":
+          description: Aggregate view over the retained window
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShadowSummary" }
+
+  /shadow/decisions:
+    get:
+      summary: Individual would-block decisions
+      responses:
+        "200":
+          description: Recent decisions, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decisions, count]
+                properties:
+                  decisions:
+                    type: array
+                    items: { $ref: "#/components/schemas/ShadowDecision" }
+                  count: { type: integer }
+                  limit: { type: integer }
+
+  /shadow/impact:
+    get:
+      summary: Pre-flight impact of promoting a scope to blocking
+      x-contract-example-query: "vhost_id=_default"
+      parameters:
+        - name: vhost_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: endpoint_id
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: What promoting this scope would have blocked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShadowImpact" }
 
   /keywords/blocked:
     get:

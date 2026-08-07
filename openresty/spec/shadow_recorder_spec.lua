@@ -114,6 +114,27 @@ describe("shadow_recorder", function()
         assert.equals(1, red.calls.hincrby["waf:shadow:endpoints/example-com|signup"])
     end)
 
+    it("counts detection flags, which are what name the rule to suppress", function()
+        recorder.record(a_decision({ flags = { "legacy:kw:viagra", "legacy:fp_flag:bot" } }))
+        recorder.record(a_decision({ flags = { "legacy:kw:viagra" } }))
+        local red = fake_redis()
+        recorder.flush(red)
+        -- "legacy" as a rule name tells an operator nothing; the flag does.
+        assert.equals(2, red.calls.hincrby["waf:shadow:flags/legacy:kw:viagra"])
+        assert.equals(1, red.calls.hincrby["waf:shadow:flags/legacy:fp_flag:bot"])
+    end)
+
+    it("clips a flag, since part of it comes from the request", function()
+        recorder.record(a_decision({ flags = { "legacy:kw:" .. string.rep("A", 900) } }))
+        local red = fake_redis()
+        recorder.flush(red)
+        for field in pairs(red.calls.hincrby) do
+            if field:find("^waf:shadow:flags/") then
+                assert.is_true(#field < 300, "an unclipped flag would let one request bloat the hash")
+            end
+        end
+    end)
+
     it("clips attacker-controlled values so one request cannot bloat storage", function()
         recorder.record(a_decision({ path = string.rep("A", 5000) }))
         local red = fake_redis()

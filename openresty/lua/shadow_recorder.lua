@@ -29,7 +29,8 @@ local shadow_cache = ngx.shared.shadow_cache
 -- Redis keys
 local KEYS = {
     decisions = "waf:shadow:decisions",              -- capped list of recent records
-    rules     = "waf:shadow:rules",                  -- HASH rule -> count
+    rules     = "waf:shadow:rules",                  -- HASH profile/rule -> count
+    flags     = "waf:shadow:flags",                  -- HASH detection flag -> count
     endpoints = "waf:shadow:endpoints",              -- HASH vhost|endpoint -> count
     stats     = "waf:shadow:stats",                  -- HASH totals
 }
@@ -148,6 +149,14 @@ function _M.flush(red)
                 for _, rule in ipairs(decoded.blocked_by or {}) do
                     red:hincrby(KEYS.rules, clip(rule, MAX_FLAG_LENGTH), 1)
                 end
+
+                -- blocked_by names the profile ("legacy"), which tells an
+                -- operator nothing about what to suppress. The flags carry the
+                -- actual reason -- kw:viagra, fp_flag:suspicious-bot -- so count
+                -- those too; they are what the diff view is for.
+                for _, flag in ipairs(decoded.flags or {}) do
+                    red:hincrby(KEYS.flags, clip(flag, MAX_FLAG_LENGTH), 1)
+                end
                 flushed = flushed + 1
             end
             shadow_cache:delete(key)
@@ -158,6 +167,7 @@ function _M.flush(red)
         red:ltrim(KEYS.decisions, 0, MAX_DECISIONS - 1)
         red:expire(KEYS.decisions, DECISION_TTL)
         red:expire(KEYS.rules, DECISION_TTL)
+        red:expire(KEYS.flags, DECISION_TTL)
         red:expire(KEYS.endpoints, DECISION_TTL)
         red:expire(KEYS.stats, DECISION_TTL)
     end

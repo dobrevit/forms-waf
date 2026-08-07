@@ -117,6 +117,12 @@ def main():
         if "get" not in methods:
             continue
         url = f"{ADMIN_URL}{base}{path}"
+        # Some endpoints require a query parameter. The spec carries an example
+        # under x-contract-example-query so this can exercise them rather than
+        # skipping the ones most likely to drift.
+        example_query = methods["get"].get("x-contract-example-query")
+        if example_query:
+            url = f"{url}?{example_query}"
         try:
             status, raw, _ = request(url, cookie=cookie)
         except urllib.error.HTTPError as exc:

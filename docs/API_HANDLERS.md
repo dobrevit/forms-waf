@@ -335,6 +335,24 @@ local ok, err = utils.validate_required(data, {"field1", "field2"})
 
 ---
 
+### Shadow Mode (`api_handlers/shadow.lua`)
+
+What monitoring mode *would* have blocked, so a rule set can be proven before it
+starts rejecting traffic. `shadow_recorder.lua` buffers decisions in a shared
+dict; `redis_sync` drains them.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /shadow/summary | Would-block totals, top rules, top flags, per-scope counts |
+| GET | /shadow/decisions | Individual decisions, newest first (`limit`, `vhost_id`, `endpoint_id`) |
+| GET | /shadow/impact | Pre-flight impact of promoting one scope (`vhost_id` required) |
+| POST | /shadow/promote | Switch a vhost from monitoring to blocking |
+| DELETE | /shadow/decisions | Discard the recorded sample |
+
+`dropped_total` is non-zero when the recorder's buffer overflowed; the sample is
+then incomplete and every count understates reality. `sample_incomplete` on the
+impact response carries the same warning.
+
 ## RBAC Permission Mapping
 
 Each endpoint requires specific permissions. See [RBAC Guide](RBAC.md) for full details.
@@ -353,6 +371,7 @@ Each endpoint requires specific permissions. See [RBAC Guide](RBAC.md) for full 
 | captcha | read, update |
 | security | read, update |
 | slack | read, update, test |
+| shadow | read, promote, delete |
 
 ---
 
