@@ -15,11 +15,28 @@ local function new_shared_dict()
         get = function(_, k) return store[k] end,
         set = function(_, k, v, exp) store[k] = v; ttl[k] = exp; return true end,
         add = function(_, k, v, exp)
-            if store[k] ~= nil then return false, "exists" end
+            if store[k] ~= nil then return false, "exists" end  -- matches the real API's falsy + reason
             store[k] = v; ttl[k] = exp; return true
         end,
-        incr = function(_, k, n, init, _)
-            store[k] = (store[k] or init or 0) + n
+        -- Mirrors ngx.shared.DICT:incr(key, value, init?, init_ttl?).
+        -- The real API is stricter than it looks, and a stub that is more
+        -- permissive than production lets a test pass on code that fails live:
+        --   absent key, no init      -> nil, "not found"
+        --   absent key, with init    -> init + value
+        --   existing non-numeric     -> nil, "not a number"
+        incr = function(_, k, n, init, init_ttl)
+            local current = store[k]
+            if current == nil then
+                if init == nil then
+                    return nil, "not found"
+                end
+                current = init
+                if init_ttl then ttl[k] = init_ttl end
+            end
+            if type(current) ~= "number" then
+                return nil, "not a number"
+            end
+            store[k] = current + n
             return store[k]
         end,
         delete = function(_, k) store[k] = nil end,

@@ -20,7 +20,10 @@
     is the bug we are guarding against.
 ]]
 
-package.path = "/etc/nginx/lua/?.lua;/usr/local/openresty/lualib/?.lua;" .. package.path
+-- Lua lives at /etc/nginx/lua in the production image and /app/lua in the test
+-- image; accept either, and let WAF_LUA_PATH override for anything else.
+package.path = (os.getenv("WAF_LUA_PATH") or "/etc/nginx/lua/?.lua;/app/lua/?.lua")
+    .. ";/usr/local/openresty/lualib/?.lua;" .. package.path
 package.cpath = "/usr/local/openresty/lualib/?.so;" .. package.cpath
 
 -- Minimal ngx surface. Mechanisms only need logging, time and shared dicts here.
@@ -29,7 +32,18 @@ local function new_dict()
     return {
         get = function(_, k) return store[k] end,
         set = function(_, k, v) store[k] = v; return true end,
-        incr = function(_, k, n, init) store[k] = (store[k] or init or 0) + n; return store[k] end,
+        -- Same contract as ngx.shared.DICT:incr -- see openresty/spec/spec_helper.lua.
+        -- A stub looser than the real API can pass code that returns nil live.
+        incr = function(_, k, n, init)
+            local cur = store[k]
+            if cur == nil then
+                if init == nil then return nil, "not found" end
+                cur = init
+            end
+            if type(cur) ~= "number" then return nil, "not a number" end
+            store[k] = cur + n
+            return store[k]
+        end,
         delete = function(_, k) store[k] = nil end,
         get_keys = function() return {} end,
     }
