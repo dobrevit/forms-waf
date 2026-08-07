@@ -19,7 +19,7 @@ try {
   report = JSON.parse(err.stdout)
 }
 
-const allowlist = JSON.parse(readFileSync(new URL('../.audit-allowlist.json', import.meta.url)))
+const allowlist = JSON.parse(readFileSync(new URL('../.audit-allowlist.json', import.meta.url), 'utf8'))
 const today = new Date().toISOString().slice(0, 10)
 
 const allowed = new Map()

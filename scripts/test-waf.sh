@@ -60,9 +60,16 @@ cleanup() {
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1 || true
     fi
     if [ -n "$ORIGINAL_WP_RPM" ] && command -v python3 >/dev/null 2>&1; then
+        # Restoring matters: the harness raised this endpoint's brute-force
+        # control to 100000/min. Previously the PUT was issued unconditionally
+        # with `|| true`, so if the GET or the transform failed the body was
+        # empty, the API rejected it, the failure was swallowed and the endpoint
+        # was left wide open. Harmless on a throwaway CI stack; not harmless
+        # against a persistent environment. Only send a payload we actually
+        # built, and say so loudly if the limit could not be put back.
         WP_CFG=$(curl -s -b "$SETUP_COOKIE_JAR" "$ADMIN_URL/api/endpoints/wp-login" 2>/dev/null)
         WP_TMP=$(mktemp)
-        printf '%s' "$WP_CFG" | ORIGINAL_WP_RPM="$ORIGINAL_WP_RPM" python3 -c "
+        if printf '%s' "$WP_CFG" | ORIGINAL_WP_RPM="$ORIGINAL_WP_RPM" python3 -c "
 import sys, os, json
 cfg = json.load(sys.stdin)['endpoint']
 rl = cfg.setdefault('rate_limiting', {})
@@ -70,10 +77,23 @@ rl['enabled'] = True
 rl['requests_per_minute'] = int(os.environ['ORIGINAL_WP_RPM'])
 rl['requests_per_day'] = 100
 sys.stdout.write(json.dumps(cfg))
-" > "$WP_TMP" 2>/dev/null
-        curl -s -b "$SETUP_COOKIE_JAR" -X PUT "$ADMIN_URL/api/endpoints/wp-login" \
-            -H 'Content-Type: application/json' --data-binary @"$WP_TMP" >/dev/null 2>&1 || true
-        curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1 || true
+" > "$WP_TMP" 2>/dev/null && [ -s "$WP_TMP" ]; then
+            restore_status=$(curl -s -o /dev/null -w '%{http_code}' \
+                -b "$SETUP_COOKIE_JAR" -X PUT "$ADMIN_URL/api/endpoints/wp-login" \
+                -H 'Content-Type: application/json' --data-binary @"$WP_TMP" 2>/dev/null)
+            if [ "$restore_status" = "200" ]; then
+                curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1 || true
+            else
+                echo ""
+                echo "WARNING: could not restore the wp-login rate limit (HTTP ${restore_status:-no response})."
+                echo "         It may still be raised to 100000/min. Restore it to ${ORIGINAL_WP_RPM}/min manually."
+            fi
+        else
+            echo ""
+            echo "WARNING: could not rebuild the wp-login endpoint config, so its rate limit"
+            echo "         was not restored. It may still be raised to 100000/min."
+            echo "         Restore it to ${ORIGINAL_WP_RPM}/min manually."
+        fi
         rm -f "$WP_TMP"
     fi
     rm -f "$COOKIE_JAR" "$ADMIN_COOKIE_JAR" "$SETUP_COOKIE_JAR"
