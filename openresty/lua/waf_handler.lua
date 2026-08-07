@@ -49,6 +49,24 @@ local LOG_HMAC_KEY = os.getenv("WAF_LOG_HMAC_KEY")
 
 local collect_trace
 
+-- Append to whichever trace a result carries. Scores added outside the profile
+-- executor -- vhost keywords here, defense lines in the multi-executor -- have
+-- to land in the trace too, or the detail view shows a total that its own
+-- breakdown does not account for.
+local function add_trace_entry(profile_result, entry)
+    if type(profile_result) ~= "table" then return end
+
+    if type(profile_result.trace) == "table" then
+        table.insert(profile_result.trace, entry)
+        return
+    end
+
+    -- Multi-profile result: no top-level trace, so carry these in a list the
+    -- flattener folds in alongside the per-profile ones.
+    profile_result.extra_trace = profile_result.extra_trace or {}
+    table.insert(profile_result.extra_trace, entry)
+end
+
 -- Keep a would-block decision so "what happens if I switch this to blocking?"
 -- becomes a query rather than a log grep.
 --
@@ -87,7 +105,7 @@ collect_trace = function(profile_result)
     end
 
     local results = profile_result.profile_results
-    if type(results) ~= "table" then return nil end
+    if type(results) ~= "table" then return profile_result.extra_trace end
 
     local flat = {}
     for profile_id, r in pairs(results) do
@@ -99,6 +117,9 @@ collect_trace = function(profile_result)
                 end
             end
         end
+    end
+    for _, entry in ipairs(profile_result.extra_trace or {}) do
+        flat[#flat + 1] = entry
     end
     return flat
 end
@@ -686,6 +707,12 @@ function _M.process_request()
                         profile_result.action = "block"
                         profile_result.blocked_by = profile_result.blocked_by or {}
                         table.insert(profile_result.blocked_by, "additional_keyword")
+                        add_trace_entry(profile_result, {
+                            defense = "additional_keyword",
+                            score = 0,
+                            blocked = true,
+                            flags = { "vhost:add_block:" .. kw },
+                        })
                         ngx.log(ngx.INFO, "ADDITIONAL_KEYWORD_BLOCK: keyword=", kw)
                     end
                 end
@@ -699,6 +726,11 @@ function _M.process_request()
                         checked_flagged[kw_lower] = true
                         profile_result.score = (profile_result.score or 0) + kw_score
                         table.insert(profile_result.flags, "vhost:add_flag:" .. kw)
+                        add_trace_entry(profile_result, {
+                            defense = "additional_keyword",
+                            score = kw_score,
+                            flags = { "vhost:add_flag:" .. kw },
+                        })
                     end
                 end
             end

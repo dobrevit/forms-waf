@@ -113,6 +113,70 @@ components:
             high_event_count: { type: integer }
             high_event_rate:  { type: integer }
 
+    DecisionTraceEntry:
+      type: object
+      properties:
+        node:    { type: string }
+        defense: { type: string, description: The mechanism, e.g. keyword_filter }
+        profile: { type: string }
+        score:   { type: integer, description: What this mechanism contributed }
+        blocked: { type: boolean }
+        flags:   { type: array, items: { type: string } }
+        suppressed:
+          type: array
+          items: { type: string }
+          description: >
+            Detections this mechanism raised that a suppression removed. Present
+            so "fired but suppressed" is distinguishable from "never fired".
+
+    DecisionRetention:
+      type: object
+      properties:
+        enabled:     { type: boolean }
+        max_records: { type: integer }
+        ttl_seconds: { type: integer }
+        min_score:
+          type: integer
+          description: Allowed requests below this score are not recorded.
+
+    Decision:
+      type: object
+      required: [ts, vhost_id, endpoint_id, action, score]
+      properties:
+        ts:          { type: integer }
+        request_id:  { type: string, description: Matches the X-WAF-Request-Id response header }
+        vhost_id:    { type: string }
+        endpoint_id: { type: string }
+        client_ip:   { type: string }
+        host:        { type: string }
+        path:        { type: string }
+        method:      { type: string }
+        user_agent:  { type: string }
+        action:
+          type: string
+          enum: [blocked, allowed, challenged, tarpit, would_block]
+          description: >
+            What happened, taken from the response rather than from what the
+            pipeline intended: monitoring mode records would_block with status 200.
+        status:       { type: integer }
+        mode:         { type: string }
+        score:        { type: integer }
+        block_reason: { type: string }
+        blocked_by:   { type: array, items: { type: string } }
+        flags:        { type: array, items: { type: string } }
+        trace:
+          type: array
+          items: { $ref: "#/components/schemas/DecisionTraceEntry" }
+        traced_score:
+          type: integer
+          description: Sum of the trace entries.
+        unattributed_score:
+          type: integer
+          description: >
+            score minus traced_score. Should be 0. Non-zero means some scoring
+            path is not represented in the trace, so the breakdown is incomplete
+            -- reported rather than assumed, because that has happened.
+
     Suppression:
       type: object
       required: [id, scope_type, flag]
@@ -290,6 +354,81 @@ paths:
                   defaults: { $ref: "#/components/schemas/SlackConfig" }
                   emitted_events:     { type: array, items: { type: string } }
                   unavailable_events: { type: array, items: { type: string } }
+
+  /decisions:
+    get:
+      summary: Search the enforcement decision log
+      parameters:
+        - { name: vhost_id,    in: query, schema: { type: string } }
+        - { name: endpoint_id, in: query, schema: { type: string } }
+        - { name: client_ip,   in: query, schema: { type: string } }
+        - name: action
+          in: query
+          schema: { type: string, enum: [blocked, allowed, challenged, tarpit, would_block] }
+        - { name: flag,      in: query, schema: { type: string } }
+        - { name: path,      in: query, schema: { type: string, description: Substring match } }
+        - { name: min_score, in: query, schema: { type: integer } }
+        - { name: since,     in: query, schema: { type: integer, description: Unix time } }
+        - { name: until,     in: query, schema: { type: integer, description: Unix time } }
+        - { name: limit,     in: query, schema: { type: integer, default: 50, maximum: 500 } }
+      responses:
+        "200":
+          description: Matching decisions, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decisions, count]
+                properties:
+                  decisions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Decision" }
+                  count:   { type: integer }
+                  limit:   { type: integer }
+                  scanned: { type: integer }
+                  dropped_total:
+                    type: integer
+                    description: Non-zero means the buffer overflowed and the log has holes.
+                  recorded_total: { type: integer }
+                  retention: { $ref: "#/components/schemas/DecisionRetention" }
+    delete:
+      summary: Discard the decision log
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cleared]
+                properties:
+                  cleared: { type: boolean }
+
+  /decisions/{request_id}:
+    get:
+      summary: Explain one decision
+      x-contract-skip: >
+        request_id is ephemeral, so there is no fixed example that returns 200.
+        Exercised by the integration path instead.
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The decision and its per-mechanism breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [decision]
+                properties:
+                  decision: { $ref: "#/components/schemas/Decision" }
+        "404":
+          description: >
+            Not retained. The log is capped and time-limited, so this means the
+            request aged out rather than that it never happened.
 
   /suppressions:
     get:

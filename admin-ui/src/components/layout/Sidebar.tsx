@@ -25,6 +25,7 @@ import {
   Fingerprint,
   EyeOff,
   BellOff,
+  Search,
   MessageSquare,
   Workflow,
   Target,
@@ -65,6 +66,7 @@ const navigation = [
   {
     name: 'Analytics',
     children: [
+      { name: 'Request Explorer', href: '/analytics/requests', icon: Search },
       { name: 'Behavioral', href: '/analytics/behavioral', icon: Activity },
     ],
   },

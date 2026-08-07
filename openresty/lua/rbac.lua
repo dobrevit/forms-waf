@@ -39,6 +39,7 @@ local DEFAULT_ROLES = {
             slack = {"read", "update", "test", "reset"},
             shadow = {"read", "promote", "delete"},
             suppressions = {"create", "read", "delete"},
+            decisions = {"read", "delete"},
             geoip = {"read", "update", "reload"},
             reputation = {"read", "update"},
             timing = {"read", "update"},
@@ -72,6 +73,7 @@ local DEFAULT_ROLES = {
             slack = {"read"},
             shadow = {"read"},
             suppressions = {"create", "read", "delete"},
+            decisions = {"read", "delete"},
             geoip = {"read"},
             reputation = {"read"},
             timing = {"read"},
@@ -102,6 +104,7 @@ local DEFAULT_ROLES = {
             slack = {"read"},
             shadow = {"read"},
             suppressions = {"read"},
+            decisions = {"read"},
             geoip = {"read"},
             reputation = {"read"},
             timing = {"read"},
@@ -198,6 +201,8 @@ local ENDPOINT_PERMISSIONS = {
     ["GET:/suppressions"] = {resource = "suppressions", action = "read"},
     ["POST:/suppressions"] = {resource = "suppressions", action = "create"},
     ["DELETE:/suppressions"] = {resource = "suppressions", action = "delete"},
+    ["GET:/decisions"] = {resource = "decisions", action = "read"},
+    ["DELETE:/decisions"] = {resource = "decisions", action = "delete"},
 
     -- Slack notifications
     ["GET:/slack/config"] = {resource = "slack", action = "read"},
@@ -308,6 +313,11 @@ local PARAMETRIC_PERMISSIONS = {
     -- scope is enforced when the suppression is created, not when it is deleted.
     suppressions = {
         ["DELETE"] = {resource = "suppressions", action = "delete"},
+    },
+    -- Decisions. Not vhost-scoped: the id is a request id, not a vhost. A
+    -- scoped role still sees every vhost's decisions, which is worth knowing.
+    decisions = {
+        ["GET"] = {resource = "decisions", action = "read"},
     },
     -- Endpoints
     endpoints = {
@@ -540,6 +550,11 @@ function _M.get_endpoint_permission(method, path)
         local action = path:match("^/endpoints/[a-zA-Z0-9_-]+/([a-z]+)$")
         local handler_key = action and (method .. ":" .. action) or method
         return PARAMETRIC_PERMISSIONS.endpoints[handler_key], endpoint_id, "endpoint"
+    end
+
+    local decision_request_id = path:match("^/decisions/([a-fA-F0-9]+)$")
+    if decision_request_id then
+        return PARAMETRIC_PERMISSIONS.decisions[method], decision_request_id, "decision"
     end
 
     local suppression_id = path:match("^/suppressions/([a-fA-F0-9]+)$")

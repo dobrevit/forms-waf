@@ -195,6 +195,131 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search the enforcement decision log */
+        get: {
+            parameters: {
+                query?: {
+                    vhost_id?: string;
+                    endpoint_id?: string;
+                    client_ip?: string;
+                    action?: "blocked" | "allowed" | "challenged" | "tarpit" | "would_block";
+                    flag?: string;
+                    path?: string;
+                    min_score?: number;
+                    since?: number;
+                    until?: number;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Matching decisions, newest first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            decisions: components["schemas"]["Decision"][];
+                            count: number;
+                            limit?: number;
+                            scanned?: number;
+                            /** @description Non-zero means the buffer overflowed and the log has holes. */
+                            dropped_total?: number;
+                            recorded_total?: number;
+                            retention?: components["schemas"]["DecisionRetention"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** Discard the decision log */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Cleared */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            cleared: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Explain one decision */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    request_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The decision and its per-mechanism breakdown */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            decision: components["schemas"]["Decision"];
+                        };
+                    };
+                };
+                /** @description Not retained. The log is capped and time-limited, so this means the request aged out rather than that it never happened. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/suppressions": {
         parameters: {
             query?: never;
@@ -650,6 +775,53 @@ export interface components {
                 high_event_count?: number;
                 high_event_rate?: number;
             };
+        };
+        DecisionTraceEntry: {
+            node?: string;
+            /** @description The mechanism */
+            defense?: string;
+            profile?: string;
+            /** @description What this mechanism contributed */
+            score?: number;
+            blocked?: boolean;
+            flags?: string[];
+            /** @description Detections this mechanism raised that a suppression removed. Present so "fired but suppressed" is distinguishable from "never fired". */
+            suppressed?: string[];
+        };
+        DecisionRetention: {
+            enabled?: boolean;
+            max_records?: number;
+            ttl_seconds?: number;
+            /** @description Allowed requests below this score are not recorded. */
+            min_score?: number;
+        };
+        Decision: {
+            ts: number;
+            /** @description Matches the X-WAF-Request-Id response header */
+            request_id?: string;
+            vhost_id: string;
+            endpoint_id: string;
+            client_ip?: string;
+            host?: string;
+            path?: string;
+            method?: string;
+            user_agent?: string;
+            /**
+             * @description What happened, taken from the response rather than from what the pipeline intended: monitoring mode records would_block with status 200.
+             * @enum {string}
+             */
+            action: "blocked" | "allowed" | "challenged" | "tarpit" | "would_block";
+            status?: number;
+            mode?: string;
+            score: number;
+            block_reason?: string;
+            blocked_by?: string[];
+            flags?: string[];
+            trace?: components["schemas"]["DecisionTraceEntry"][];
+            /** @description Sum of the trace entries. */
+            traced_score?: number;
+            /** @description score minus traced_score. Should be 0. Non-zero means some scoring path is not represented in the trace, so the breakdown is incomplete -- reported rather than assumed, because that has happened. */
+            unattributed_score?: number;
         };
         Suppression: {
             /** @description Digest of scope and flag, so adding the same one twice is idempotent. */
