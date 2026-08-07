@@ -95,8 +95,15 @@ function _M._reset_config()
     _config = nil
 end
 
+--- Clip a list, or return nil if there is nothing in it.
+--
+-- nil rather than {} on purpose: cjson encodes an empty Lua table as {}, not [],
+-- so an empty flags list would arrive at the UI as an object. `flags ?? []` does
+-- not catch that -- {} is neither null nor undefined -- and .slice() on it is
+-- undefined, which is a crashed page rather than an empty column. Omitting the
+-- field keeps the optional-array contract the generated types already describe.
 local function clip_list(list, limit, max_len)
-    if type(list) ~= "table" then return nil end
+    if type(list) ~= "table" or #list == 0 then return nil end
     local out = {}
     for i = 1, math.min(#list, limit) do
         out[i] = clip(list[i], max_len)
@@ -129,6 +136,8 @@ local function compact_trace(trace)
             end
         end
     end
+    -- Same reasoning as clip_list: an empty trace must be absent, not {}.
+    if #significant == 0 then return nil end
     return significant
 end
 

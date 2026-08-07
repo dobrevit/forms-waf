@@ -99,6 +99,46 @@ describe("decision_recorder", function()
         end)
     end)
 
+    describe("empty lists are omitted, not encoded as objects", function()
+        -- cjson encodes an empty Lua table as {}, not []. The UI writes
+        -- `flags ?? []`, which does not catch {} -- it is neither null nor
+        -- undefined -- so .slice() on it is undefined and the page crashes.
+        -- Omitting the field is what keeps the optional-array contract true.
+        local function stored(decision)
+            recorder.record(decision)
+            local red = fake_redis()
+            recorder.flush(red)
+            return red.calls.lpush[1]
+        end
+
+        it("omits an empty flags list rather than storing {}", function()
+            local raw = stored(a_decision({ flags = {} }))
+            assert.is_nil(raw:find('"flags":{}', 1, true),
+                "an empty flags list must not be stored as a JSON object")
+            local cjson = require "cjson.safe"
+            assert.is_nil(cjson.decode(raw).flags)
+        end)
+
+        it("omits an empty blocked_by list", function()
+            local raw = stored(a_decision({ blocked_by = {} }))
+            assert.is_nil(raw:find('"blocked_by":{}', 1, true))
+        end)
+
+        it("omits a trace with nothing significant in it", function()
+            local raw = stored(a_decision({
+                trace = { { node = "n1", defense = "honeypot", score = 0 } },
+            }))
+            assert.is_nil(raw:find('"trace":{}', 1, true))
+            local cjson = require "cjson.safe"
+            assert.is_nil(cjson.decode(raw).trace)
+        end)
+
+        it("still encodes a populated list as an array", function()
+            local raw = stored(a_decision({ flags = { "kw:viagra" } }))
+            assert.is_not_nil(raw:find('"flags":["kw:viagra"]', 1, true))
+        end)
+    end)
+
     describe("trace compaction", function()
         local function traced(trace)
             recorder.record(a_decision({ trace = trace }))

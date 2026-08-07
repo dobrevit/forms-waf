@@ -60,7 +60,15 @@ local collect_trace
 local function request_id()
     local rid = ngx.ctx.waf_request_id
     if not rid then
-        rid = ngx.var.request_id or tostring(ngx.now())
+        rid = ngx.var.request_id
+        if not rid or rid == "" then
+            -- Hex, matching $request_id's shape. A decimal timestamp would be
+            -- unqueryable: the route and RBAC patterns for /decisions/{id} are
+            -- hex-only, so an id that is not hex records a decision nobody can
+            -- look up -- the one thing the id exists for.
+            rid = ngx.md5(string.format("%s:%s:%s",
+                ngx.now(), ngx.worker.pid(), ngx.var.connection or "0"))
+        end
         ngx.ctx.waf_request_id = rid
     end
     return rid
@@ -435,7 +443,7 @@ function _M.log_decision()
         action = "blocked"
     elseif status == 429 then
         action = "tarpit"
-    elseif ngx.ctx.captcha_challenged then
+    elseif ngx.ctx.waf_captcha_challenged then
         action = "challenged"
     elseif decision.profile_action == "block" then
         action = "would_block"
@@ -943,6 +951,10 @@ function _M.process_request()
                         profile_result.score or 0
                     ))
                     metrics.record_request(summary.vhost_id, summary.endpoint_id, "captcha_challenged", profile_result.score or 0)
+                    -- Read by log_decision to record action "challenged".
+                    -- Without it a challenge is indistinguishable from a plain
+                    -- allow in the decision log.
+                    ngx.ctx.waf_captcha_challenged = true
                     return captcha_handler.serve_challenge(context, nil, "defense_profile", client_ip)
                 end
             end

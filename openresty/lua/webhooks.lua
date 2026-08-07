@@ -281,7 +281,11 @@ function _M.create_event_data(context, extra_data)
         -- ngx.ctx first: $request_id is not cached by this nginx build, so
         -- reading it again here would produce an id matching nothing else
         -- reported for this request. waf_handler sets the shared one.
-        request_id = ngx.ctx.waf_request_id or ngx.var.request_id or ngx.now(),
+        request_id = ngx.ctx.waf_request_id or ngx.var.request_id
+            -- Hex string in every case. ngx.now() here emitted a number, so a
+            -- payload's request_id changed type depending on where it came
+            -- from, which is a correlation key that cannot be matched on.
+            or ngx.md5(tostring(ngx.now())),
         client_ip = trusted_proxies.get_client_ip(),
         host = ngx.var.http_host or ngx.var.host,
         path = ngx.var.uri,
