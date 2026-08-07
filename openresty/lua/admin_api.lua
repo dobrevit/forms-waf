@@ -123,6 +123,17 @@ local sso_handlers = {
     ["POST:ldap"] = providers_handler.authenticate_ldap,
 }
 
+-- R-20: expose the registered routes so RBAC coverage can be asserted at startup.
+-- Returns a list of "METHOD:/path" keys.
+function _M.get_registered_routes()
+    local routes = {}
+    for route, _ in pairs(handlers) do
+        table.insert(routes, route)
+    end
+    table.sort(routes)
+    return routes
+end
+
 -- Main request handler
 function _M.handle_request()
     local method = ngx.req.get_method()

@@ -21,6 +21,7 @@ COOKIE_JAR=$(mktemp)
 ADMIN_COOKIE_JAR=$(mktemp)
 SETUP_COOKIE_JAR=$(mktemp)
 ORIGINAL_IP_RATE_LIMIT=""
+ORIGINAL_FP_RATE_LIMIT=""
 
 cleanup() {
     # Restore anything the harness changed before removing the jars.
@@ -28,6 +29,12 @@ cleanup() {
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/config/thresholds" \
             -H 'Content-Type: application/json' \
             -d "{\"name\":\"ip_rate_limit\",\"value\":$ORIGINAL_IP_RATE_LIMIT}" >/dev/null 2>&1 || true
+        curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$ORIGINAL_FP_RATE_LIMIT" ]; then
+        curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/config/thresholds" \
+            -H 'Content-Type: application/json' \
+            -d "{\"name\":\"fingerprint_rate_limit\",\"value\":$ORIGINAL_FP_RATE_LIMIT}" >/dev/null 2>&1 || true
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1 || true
     fi
     rm -f "$COOKIE_JAR" "$ADMIN_COOKIE_JAR" "$SETUP_COOKIE_JAR"
@@ -49,6 +56,15 @@ if [ -n "$WAF_ADMIN_USER" ] && [ -n "$WAF_ADMIN_PASS" ]; then
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/config/thresholds" \
             -H 'Content-Type: application/json' \
             -d '{"name":"ip_rate_limit","value":100000}' >/dev/null 2>&1
+        # The suite also presents a single client fingerprint for its whole run,
+        # and fingerprint_rate_limit (default 20) is enforced independently of the
+        # IP limit. Leaving it in place made results alternate between clean and
+        # several spurious failures depending on run timing.
+        ORIGINAL_FP_RATE_LIMIT=$(curl -s -b "$SETUP_COOKIE_JAR" "$ADMIN_URL/api/config/thresholds" 2>/dev/null \
+            | sed -n 's/.*"fingerprint_rate_limit"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
+        curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/config/thresholds" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"fingerprint_rate_limit","value":100000}' >/dev/null 2>&1
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1
         sleep 1
     fi

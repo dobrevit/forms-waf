@@ -180,6 +180,9 @@ local ENDPOINT_PERMISSIONS = {
     ["POST:/webhooks/test"] = {resource = "webhooks", action = "test"},
     ["GET:/webhooks/stats"] = {resource = "webhooks", action = "read"},
 
+    -- Timing (per-vhost listing)
+    ["GET:/timing/vhosts"] = {resource = "timing", action = "read"},
+
     -- Slack notifications
     ["GET:/slack/config"] = {resource = "slack", action = "read"},
     ["PUT:/slack/config"] = {resource = "slack", action = "update"},
@@ -336,6 +339,12 @@ local PARAMETRIC_PERMISSIONS = {
         ["GET"] = {resource = "defense_profiles", action = "read"},
         ["PUT"] = {resource = "defense_profiles", action = "update"},
         ["DELETE"] = {resource = "defense_profiles", action = "delete"},
+        -- Action sub-routes. Without these the handlers are registered but
+        -- unreachable for every role (found by audit_route_coverage).
+        ["GET:resolved"] = {resource = "defense_profiles", action = "read"},
+        ["POST:clone"] = {resource = "defense_profiles", action = "create"},
+        ["POST:enable"] = {resource = "defense_profiles", action = "update"},
+        ["POST:disable"] = {resource = "defense_profiles", action = "update"},
     },
     -- Attack signatures
     ["attack-signatures"] = {
@@ -545,10 +554,12 @@ function _M.get_endpoint_permission(method, path)
     end
 
     -- Defense profiles
-    local def_profile_id = path:match("^/defense%-profiles/([a-zA-Z0-9_-]+)$")
+    local def_profile_id, def_profile_action = path:match("^/defense%-profiles/([a-zA-Z0-9_-]+)/?([a-z]*)$")
     if def_profile_id and def_profile_id ~= "reset-builtins" and def_profile_id ~= "builtins"
        and def_profile_id ~= "metadata" and def_profile_id ~= "validate" and def_profile_id ~= "simulate" then
-        return PARAMETRIC_PERMISSIONS["defense-profiles"][method], def_profile_id, "defense_profile"
+        local handler_key = (def_profile_action and def_profile_action ~= "")
+            and (method .. ":" .. def_profile_action) or method
+        return PARAMETRIC_PERMISSIONS["defense-profiles"][handler_key], def_profile_id, "defense_profile"
     end
 
     -- Attack signatures
@@ -560,6 +571,57 @@ function _M.get_endpoint_permission(method, path)
     end
 
     return nil
+end
+
+-- Routes that are deliberately reachable without an RBAC mapping. These are
+-- handled before the permission check in admin_api.handle_request (login,
+-- SSO initiation and callbacks), so an absent mapping is correct for them.
+local RBAC_EXEMPT_ROUTES = {
+    ["GET:/auth/providers"] = true,
+}
+
+local function is_rbac_exempt(path)
+    return path:match("^/auth/callback/") ~= nil
+        or path:match("^/auth/sso/") ~= nil
+end
+
+-- R-20: verify every registered Admin API route has a permission mapping.
+--
+-- check_permission() default-denies anything unmapped (F04), so a handler that
+-- is registered but not mapped returns 403 for every role including admin, with
+-- no startup diagnostic. That is exactly how the Slack endpoints shipped
+-- unreachable. Called once per worker at init.
+function _M.audit_route_coverage(routes)
+    if type(routes) ~= "table" then
+        return 0
+    end
+
+    local missing = {}
+    for _, route in ipairs(routes) do
+        local method, path = route:match("^([A-Z]+):(.+)$")
+        if method and path and not RBAC_EXEMPT_ROUTES[route] and not is_rbac_exempt(path) then
+            -- Some handlers are registered with ":id" placeholders. Those keys are
+            -- never dispatched by the exact-match table (the router resolves
+            -- parametric routes separately), so substitute a concrete segment to
+            -- exercise the parametric permission tables rather than reporting a
+            -- template as unmapped.
+            local probe_path = path:gsub(":[%w_]+", "probeid")
+            local permission = _M.get_endpoint_permission(method, probe_path)
+            if not permission then
+                table.insert(missing, route)
+            end
+        end
+    end
+
+    if #missing > 0 then
+        ngx.log(ngx.ERR, "RBAC: ", #missing, " registered route(s) have no permission ",
+                "mapping and will return 403 for EVERY role, including admin: ",
+                table.concat(missing, ", "))
+    else
+        ngx.log(ngx.INFO, "RBAC: route coverage OK (", #routes, " routes checked)")
+    end
+
+    return #missing
 end
 
 -- Main permission check function
