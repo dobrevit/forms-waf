@@ -595,7 +595,7 @@ echo "========================================"
 echo "Test Summary"
 echo "========================================"
 echo -e "Passed: ${GREEN}$PASS${NC}"
-echo -e "Known gaps: ${YELLOW}${KNOWN_GAPS}${NC} (see R-27)"
+echo -e "Known gaps: ${YELLOW}${KNOWN_GAPS}${NC} (assertions parked deliberately - see the [KNOWN GAP] lines above)"
 echo -e "Failed: ${RED}$FAIL${NC}"
 echo ""
 
