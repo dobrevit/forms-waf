@@ -4,7 +4,7 @@
 # Based on the same OpenResty release as production, because the tests must run
 # on the interpreter that serves traffic: LuaJIT accepts goto/::continue:: (Lua
 # 5.2 syntax) that several modules use and PUC Lua 5.1 rejects.
-FROM openresty/openresty:1.27.1.2-alpine
+FROM openresty/openresty:1.31.1.1-alpine
 
 USER root
 
