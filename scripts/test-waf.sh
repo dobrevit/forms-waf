@@ -22,6 +22,7 @@ ADMIN_COOKIE_JAR=$(mktemp)
 SETUP_COOKIE_JAR=$(mktemp)
 ORIGINAL_IP_RATE_LIMIT=""
 ORIGINAL_FP_RATE_LIMIT=""
+ORIGINAL_WP_RPM=""
 
 cleanup() {
     # Restore anything the harness changed before removing the jars.
@@ -36,6 +37,23 @@ cleanup() {
             -H 'Content-Type: application/json' \
             -d "{\"name\":\"fingerprint_rate_limit\",\"value\":$ORIGINAL_FP_RATE_LIMIT}" >/dev/null 2>&1 || true
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$ORIGINAL_WP_RPM" ] && command -v python3 >/dev/null 2>&1; then
+        WP_CFG=$(curl -s -b "$SETUP_COOKIE_JAR" "$ADMIN_URL/api/endpoints/wp-login" 2>/dev/null)
+        WP_TMP=$(mktemp)
+        printf '%s' "$WP_CFG" | ORIGINAL_WP_RPM="$ORIGINAL_WP_RPM" python3 -c "
+import sys, os, json
+cfg = json.load(sys.stdin)['endpoint']
+rl = cfg.setdefault('rate_limiting', {})
+rl['enabled'] = True
+rl['requests_per_minute'] = int(os.environ['ORIGINAL_WP_RPM'])
+rl['requests_per_day'] = 100
+sys.stdout.write(json.dumps(cfg))
+" > "$WP_TMP" 2>/dev/null
+        curl -s -b "$SETUP_COOKIE_JAR" -X PUT "$ADMIN_URL/api/endpoints/wp-login" \
+            -H 'Content-Type: application/json' --data-binary @"$WP_TMP" >/dev/null 2>&1 || true
+        curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1 || true
+        rm -f "$WP_TMP"
     fi
     rm -f "$COOKIE_JAR" "$ADMIN_COOKIE_JAR" "$SETUP_COOKIE_JAR"
 }
@@ -65,13 +83,35 @@ if [ -n "$WAF_ADMIN_USER" ] && [ -n "$WAF_ADMIN_PASS" ]; then
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/config/thresholds" \
             -H 'Content-Type: application/json' \
             -d '{"name":"fingerprint_rate_limit","value":100000}' >/dev/null 2>&1
-        # NOTE: the wp-login endpoint has its own rate_limiting.requests_per_minute
-        # of 10, and its defense-line tests issue more requests than that in one
-        # minute, so they can return 429 on a cold stack. Raising it from here is
-        # not currently possible without damage: GET /api/endpoints/{id} returns
-        # the *resolved* config, and PUTting that back replaces the stored config
-        # with resolved values, which breaks the suite's own endpoint checks.
-        # Needs an API that exposes the raw stored config for round-tripping.
+        # The wp-login endpoint has its own rate_limiting.requests_per_minute of
+        # 10 -- a deliberate brute-force control -- and its defense-line section
+        # issues more requests than that in a minute. PUT validates the whole
+        # object, so the config must be round-tripped: GET returns both the raw
+        # stored config under "endpoint" and the merged view under "resolved";
+        # only "endpoint" is safe to send back.
+        if command -v python3 >/dev/null 2>&1; then
+            WP_CFG=$(curl -s -b "$SETUP_COOKIE_JAR" "$ADMIN_URL/api/endpoints/wp-login" 2>/dev/null)
+            if printf '%s' "$WP_CFG" | grep -q '"endpoint"'; then
+                ORIGINAL_WP_RPM=$(printf '%s' "$WP_CFG" | python3 -c "
+import sys, json
+cfg = json.load(sys.stdin).get('endpoint', {})
+print(cfg.get('rate_limiting', {}).get('requests_per_minute', ''))
+" 2>/dev/null)
+                WP_TMP=$(mktemp)
+                printf '%s' "$WP_CFG" | python3 -c "
+import sys, json
+cfg = json.load(sys.stdin)['endpoint']
+rl = cfg.setdefault('rate_limiting', {})
+rl['enabled'] = True
+rl['requests_per_minute'] = 100000
+rl['requests_per_day'] = 1000000
+sys.stdout.write(json.dumps(cfg))
+" > "$WP_TMP" 2>/dev/null
+                curl -s -b "$SETUP_COOKIE_JAR" -X PUT "$ADMIN_URL/api/endpoints/wp-login" \
+                    -H 'Content-Type: application/json' --data-binary @"$WP_TMP" >/dev/null 2>&1
+                rm -f "$WP_TMP"
+            fi
+        fi
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1
         sleep 2
     fi

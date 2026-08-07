@@ -73,14 +73,13 @@ jobs:
   integration:
     name: WAF integration suite
     runs-on: ubuntu-latest
-    # KNOWN LIMITATION: not yet blocking. The rate-limit interference is fixed
-    # (the harness now raises the wp-login endpoint limit via a full-object PUT),
-    # but 6 wp-login defense-line assertions still return 200 instead of 403.
-    # The endpoint's defense_lines are configured and its attack signatures are
-    # seeded; the remaining question is whether defense_lines survives config
-    # resolution into request_context.endpoint_config, which is where
-    # defense_profile_multi_executor reads it. Make this blocking once that is
-    # resolved.
+    # KNOWN LIMITATION: not yet blocking, but down to a single failure.
+    # 41 passed / 2 known gaps (R-27) / 1 failed on a cold stack.
+    # The remaining failure is "WP Login - Honeypot triggered": the honeypot
+    # defense reads config.honeypot.{enabled,field_names}, while the resolver
+    # produces fields.honeypot and security.honeypot_*, so config.honeypot is
+    # always nil and the check is skipped as "honeypot_disabled". Make this
+    # blocking once that is fixed.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
