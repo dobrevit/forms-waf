@@ -359,7 +359,7 @@ export default function AttackSignatures() {
         throw new Error('Expected signatures array')
       }
       importMutation.mutate(signatures)
-    } catch (e) {
+    } catch {
       toast({
         title: 'Invalid JSON',
         description: 'Please provide valid JSON with a signatures array.',
