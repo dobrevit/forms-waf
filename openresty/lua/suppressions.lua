@@ -43,6 +43,13 @@ local function cache()
     return ngx.shared.suppression_cache
 end
 
+-- apply() runs on every defense node, so several times per request. Decoding the
+-- same JSON blob each time is work with no new answer. Keyed on the raw string,
+-- so a redis_sync write is picked up on the very next call rather than after a
+-- TTL -- a stale suppression is either traffic wrongly blocked or wrongly
+-- allowed, and neither should wait.
+local _cached_raw, _cached_list
+
 --- Every suppression currently in force, as stored by redis_sync.
 -- @return array of {id, scope_type, scope_id, flag, reason, created_at, created_by}
 function _M.get_all()
@@ -52,8 +59,14 @@ function _M.get_all()
     local raw = dict:get(CACHE_KEY)
     if not raw then return {} end
 
+    if raw == _cached_raw then
+        return _cached_list
+    end
+
     local decoded = cjson.decode(raw)
     if type(decoded) ~= "table" then return {} end
+
+    _cached_raw, _cached_list = raw, decoded
     return decoded
 end
 
@@ -98,19 +111,21 @@ function _M.active_patterns(vhost_id, endpoint_id)
 end
 
 --- Apply suppressions to one defense node's result.
--- Returns the result (mutated in place) and the list of flags removed, so the
--- caller can report what was suppressed rather than the detection just vanishing.
+-- @return result (mutated in place), the flags removed, and whether the node
+--         lost its verdict entirely. The caller logs the third case louder: a
+--         suppression that merely drops a flag is routine, one that turns a
+--         block into a pass is the answer to "why did this get through?".
 function _M.apply(result, vhost_id, endpoint_id)
-    if type(result) ~= "table" then return result, nil end
+    if type(result) ~= "table" then return result, nil, false end
 
     local original = result.flags
     if type(original) ~= "table" or #original == 0 then
-        return result, nil
+        return result, nil, false
     end
 
     local patterns = _M.active_patterns(vhost_id, endpoint_id)
     if #patterns == 0 then
-        return result, nil
+        return result, nil, false
     end
 
     local kept, removed = {}, {}
@@ -130,26 +145,25 @@ function _M.apply(result, vhost_id, endpoint_id)
     end
 
     if #removed == 0 then
-        return result, nil
+        return result, nil, false
     end
 
     result.flags = kept
+    result.details = result.details or {}
+    result.details.suppressed = removed
 
     -- Only a node whose every detection was suppressed loses its verdict. One
     -- surviving flag means something the operator did not suppress still fired,
     -- and that finding is left intact.
+    local neutralised = false
     if #kept == 0 then
+        neutralised = result.blocked or (result.score or 0) > 0
         result.score = 0
         result.blocked = false
         result.block_reason = nil
-        result.details = result.details or {}
-        result.details.suppressed = removed
-    else
-        result.details = result.details or {}
-        result.details.suppressed = removed
     end
 
-    return result, removed
+    return result, removed, neutralised
 end
 
 function _M.get_cache_key()

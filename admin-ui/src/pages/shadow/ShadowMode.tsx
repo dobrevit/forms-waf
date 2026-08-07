@@ -47,14 +47,23 @@ function formatWhen(ts: number): string {
 }
 
 /**
- * Recorded flags are profile-prefixed (`legacy:kw:viagra`) because a decision can
- * come from any profile, but a suppression matches the flag the mechanism itself
- * emits (`kw:viagra`). Strip the profile segment so the suppression form is
- * prefilled with something that will actually match.
+ * Recorded flags are usually profile-prefixed (`legacy:kw:viagra`), but not
+ * always: defense-line flags are merged into the result without a prefix. A
+ * suppression matches the flag the mechanism itself emits, so the prefix has to
+ * come off -- and only when it really is a prefix.
+ *
+ * Stripping up to the first colon unconditionally mangles an unprefixed
+ * `kw:viagra` into `viagra`, which matches nothing. Requiring the remainder to
+ * still contain a colon fails the other way, on single-segment flags like
+ * `legacy:thread_error`. So the decision is made against the profile names the
+ * API already reports in top_rules: strip a leading segment only if it is one
+ * of them.
  */
-function detectionFlag(recorded: string): string {
+function detectionFlag(recorded: string, profileNames: Set<string>): string {
   const firstColon = recorded.indexOf(':')
-  return firstColon === -1 ? recorded : recorded.slice(firstColon + 1)
+  if (firstColon === -1) return recorded
+  const head = recorded.slice(0, firstColon)
+  return profileNames.has(head) ? recorded.slice(firstColon + 1) : recorded
 }
 
 /**
@@ -65,10 +74,12 @@ function CountBars({
   items,
   empty,
   suppressScope,
+  profileNames,
 }: {
   items: ShadowCount[]
   empty: string
   suppressScope?: string
+  profileNames?: Set<string>
 }) {
   if (!items?.length) {
     return <p className="text-sm text-muted-foreground">{empty}</p>
@@ -82,16 +93,16 @@ function CountBars({
             <code className="text-xs font-medium break-all">{item.name}</code>
             <span className="flex items-center gap-2">
               <span className="text-sm tabular-nums text-muted-foreground">{item.count}</span>
-              {suppressScope && (
+              {suppressScope && profileNames && (
                 <Button
                   asChild
                   size="sm"
                   variant="ghost"
                   className="h-6 px-2 text-xs"
-                  title={`Stop ${detectionFlag(item.name)} counting for ${suppressScope}`}
+                  title={`Stop ${detectionFlag(item.name, profileNames)} counting for ${suppressScope}`}
                 >
                   <Link
-                    to={`/security/suppressions?flag=${encodeURIComponent(detectionFlag(item.name))}&scope_type=vhost&scope_id=${encodeURIComponent(suppressScope)}`}
+                    to={`/security/suppressions?flag=${encodeURIComponent(detectionFlag(item.name, profileNames))}&scope_type=vhost&scope_id=${encodeURIComponent(suppressScope)}`}
                   >
                     <BellOff className="mr-1 h-3 w-3" />
                     Suppress
@@ -178,6 +189,11 @@ export default function ShadowMode() {
   // and a suppression applied to the wrong vhost is a hole, not an annoyance.
   const scopeVhosts = new Set((summary?.scopes ?? []).map((s) => s.vhost_id))
   const singleVhost = scopeVhosts.size === 1 ? [...scopeVhosts][0] : undefined
+
+  // top_rules is the set of things that produced a decision -- profile ids for a
+  // profile block. That is what tells detectionFlag which leading segment is a
+  // prefix rather than part of the flag.
+  const summaryProfiles = new Set((summary?.top_rules ?? []).map((r) => r.name))
 
   return (
     <div className="space-y-6">
@@ -274,6 +290,7 @@ export default function ShadowMode() {
               items={summary?.top_flags ?? []}
               empty="Nothing recorded yet. Put a vhost in monitoring mode and send traffic."
               suppressScope={singleVhost}
+              profileNames={summaryProfiles}
             />
           </CardContent>
         </Card>
@@ -448,6 +465,7 @@ export default function ShadowMode() {
                       items={pending.top_flags.slice(0, 5)}
                       empty=""
                       suppressScope={pending.vhost_id}
+                      profileNames={new Set((pending.top_rules ?? []).map((r) => r.name))}
                     />
                   </div>
                 )}

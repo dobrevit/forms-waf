@@ -149,6 +149,46 @@ describe("suppressions", function()
             assert.equals(50, out.score)
         end)
 
+        it("reports when it changed the verdict, and when it merely dropped a flag", function()
+            -- The caller logs these differently: a suppression that turns a block
+            -- into a pass is the answer to "why did this get through?", while one
+            -- that drops a flag from a node that was not blocking is routine.
+            install({ { flag = "kw:viagra", scope_type = "global" } })
+
+            local blocked = { score = 0, blocked = true, flags = { "kw:viagra" } }
+            local _, _, neutralised = suppressions.apply(blocked, "v", "e")
+            assert.is_true(neutralised)
+
+            local scored = { score = 30, blocked = false, flags = { "kw:viagra" } }
+            local _, _, scored_neutralised = suppressions.apply(scored, "v", "e")
+            assert.is_true(scored_neutralised, "zeroing a contributing score is a changed verdict")
+
+            local harmless = { score = 0, blocked = false, flags = { "kw:viagra" } }
+            local _, _, harmless_neutralised = suppressions.apply(harmless, "v", "e")
+            assert.is_false(harmless_neutralised, "a node that was not going to block either way")
+
+            local partial = { score = 30, blocked = true, flags = { "kw:viagra", "kw:casino" } }
+            install({ { flag = "kw:viagra", scope_type = "global" } })
+            local _, _, partial_neutralised = suppressions.apply(partial, "v", "e")
+            assert.is_false(partial_neutralised, "casino survived, so the verdict stands")
+        end)
+
+        it("picks up a config change immediately despite caching the decode", function()
+            -- apply() runs several times per request, so the decode is cached on
+            -- the raw blob. A stale suppression is either traffic wrongly blocked
+            -- or wrongly allowed, so the cache must turn over the moment
+            -- redis_sync writes something new.
+            install({ { flag = "kw:viagra", scope_type = "global" } })
+            assert.same({ "kw:viagra" }, suppressions.active_patterns("v", "e"))
+
+            install({ { flag = "kw:casino", scope_type = "global" } })
+            assert.same({ "kw:casino" }, suppressions.active_patterns("v", "e"),
+                "a new blob must not be served from the previous decode")
+
+            install({})
+            assert.same({}, suppressions.active_patterns("v", "e"))
+        end)
+
         it("survives junk in the cache rather than failing open or erroring", function()
             ngx.shared.suppression_cache:set("suppressions", "not json at all")
             local result = { score = 40, blocked = true, flags = { "kw:viagra" } }

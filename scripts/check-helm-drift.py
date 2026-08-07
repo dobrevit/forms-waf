@@ -33,7 +33,10 @@ ROOT = Path(__file__).resolve().parent.parent
 NGINX_CONF = ROOT / "openresty" / "conf" / "nginx.conf"
 HELM_CONFIGMAP = ROOT / "helm" / "forms-waf" / "templates" / "openresty-configmap.yaml"
 
-ENV_RE = re.compile(r"^\s*env\s+([A-Z_][A-Z0-9_]*)\s*;", re.MULTILINE)
+# Case-sensitive on purpose but NOT uppercase-only: nginx.conf declares the
+# lowercase proxy variables too (http_proxy et al), and an uppercase-only
+# pattern reported "in sync" while three of them were missing from the chart.
+ENV_RE = re.compile(r"^\s*env\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", re.MULTILINE)
 DICT_RE = re.compile(r"^\s*lua_shared_dict\s+([a-z_][a-z0-9_]*)\s", re.MULTILINE)
 
 

@@ -125,7 +125,9 @@ _M.handlers["POST:/suppressions"] = function()
         if entry.id == id then already = true break end
     end
 
-    -- Bounded: this list is walked on every defense node of every request.
+    -- Bounded: this list is walked on every defense node of every request. The
+    -- scan above is only used for this cap; whether the entry already existed
+    -- comes from HSET below, which cannot race with a concurrent write.
     if not already and existing and #existing >= suppressions.get_max() then
         utils.close_redis(red)
         return utils.error_response(
@@ -144,11 +146,15 @@ _M.handlers["POST:/suppressions"] = function()
     }
 
     local encoded = cjson.encode(entry)
-    local ok, set_err = red:hset(REDIS_KEY, id, encoded)
+    -- HSET returns 1 when it created the field and 0 when it replaced one, which
+    -- is the authoritative answer to "did this already exist?". The earlier scan
+    -- is a best-effort read that a concurrent write can invalidate.
+    local created_field, set_err = red:hset(REDIS_KEY, id, encoded)
     utils.close_redis(red)
-    if not ok then
+    if not created_field then
         return utils.error_response("Failed to store suppression: " .. (set_err or "unknown"))
     end
+    local created = tonumber(created_field) == 1
 
     -- Push it to this pod's workers now; other pods pick it up on their timer.
     redis_sync.sync_now()
@@ -158,8 +164,8 @@ _M.handlers["POST:/suppressions"] = function()
 
     return utils.json_response({
         suppression = entry,
-        created = not already,
-    }, already and 200 or 201)
+        created = created,
+    }, created and 201 or 200)
 end
 
 -- DELETE /suppressions - remove every suppression at once

@@ -237,18 +237,39 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Exact detection flag, or a trailing "*" for a family (kw:*). This is the flag the mechanism emits, without the profile prefix that appears on recorded shadow decisions. */
+                        flag: string;
+                        /**
+                         * @default global
+                         * @enum {string}
+                         */
+                        scope_type?: "global" | "vhost" | "endpoint";
+                        /** @description Required unless scope_type is global. */
+                        scope_id?: string;
+                        reason?: string;
+                    };
+                };
+            };
             responses: {
+                /** @description Already present. The id is a digest of scope and flag, so re-adding the same suppression updates it rather than creating a duplicate. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SuppressionCreated"];
+                    };
+                };
                 /** @description Created */
                 201: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            suppression?: components["schemas"]["Suppression"];
-                            created?: boolean;
-                        };
+                        "application/json": components["schemas"]["SuppressionCreated"];
                     };
                 };
                 /** @description Invalid input. Includes a global "*", which would disable all detection and is refused deliberately. */
@@ -272,6 +293,58 @@ export interface paths {
             responses: {
                 /** @description Cleared */
                 200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            cleared: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/suppressions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove one suppression */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Removed */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            deleted: boolean;
+                            id: string;
+                        };
+                    };
+                };
+                /** @description No suppression with that id */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -590,6 +663,11 @@ export interface components {
             reason?: string;
             created_at?: number;
             created_by?: string;
+        };
+        SuppressionCreated: {
+            suppression: components["schemas"]["Suppression"];
+            /** @description False when the suppression already existed and was updated. */
+            created: boolean;
         };
         ShadowDecision: {
             /** @description Unix time the decision was made */

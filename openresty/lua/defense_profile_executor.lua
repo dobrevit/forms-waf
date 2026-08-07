@@ -427,14 +427,20 @@ local function execute_defense_node(node, request_context)
     -- this point rather than in each mechanism. A suppression an operator added
     -- after seeing a false positive in the shadow view takes effect here.
     local suppressions = require "suppressions"
-    local _, removed = suppressions.apply(result, request_context.vhost_id,
-                                          request_context.endpoint_id)
+    local _, removed, neutralised = suppressions.apply(result, request_context.vhost_id,
+                                                       request_context.endpoint_id)
     if removed then
-        -- Logged, not silent: a detection that stops counting is exactly the
-        -- thing an operator needs to be able to find later when asking why
-        -- something got through.
-        ngx.log(ngx.INFO, "SUPPRESSED: ", defense_name, " flags=",
-                table.concat(removed, ","), " vhost=", tostring(request_context.vhost_id),
+        -- WARN only when the suppression actually changed the verdict, which is
+        -- the case an operator has to be able to find when asking why something
+        -- got through. Dropping a flag from a node that was not going to block
+        -- either way is routine and stays at INFO -- a suppression exists
+        -- precisely because its rule fires often, so logging every hit at WARN
+        -- would bury the consequential ones. Note the default error_log level is
+        -- warn, so the INFO line needs the level raised to be seen at all.
+        ngx.log(neutralised and ngx.WARN or ngx.INFO,
+                "SUPPRESSED", neutralised and " (block prevented)" or "", ": ",
+                defense_name, " flags=", table.concat(removed, ","),
+                " vhost=", tostring(request_context.vhost_id),
                 " endpoint=", tostring(request_context.endpoint_id))
     end
 
