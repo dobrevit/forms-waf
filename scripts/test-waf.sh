@@ -22,6 +22,7 @@ ADMIN_COOKIE_JAR=$(mktemp)
 SETUP_COOKIE_JAR=$(mktemp)
 ORIGINAL_IP_RATE_LIMIT=""
 ORIGINAL_FP_RATE_LIMIT=""
+ORIGINAL_WP_RPM=""
 
 cleanup() {
     # Restore anything the harness changed before removing the jars.
@@ -36,6 +37,24 @@ cleanup() {
             -H 'Content-Type: application/json' \
             -d "{\"name\":\"fingerprint_rate_limit\",\"value\":$ORIGINAL_FP_RATE_LIMIT}" >/dev/null 2>&1 || true
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$ORIGINAL_WP_RPM" ] && command -v python3 >/dev/null 2>&1; then
+        WP_CFG=$(curl -s -b "$SETUP_COOKIE_JAR" "$ADMIN_URL/api/endpoints/wp-login" 2>/dev/null)
+        WP_TMP=$(mktemp)
+        printf '%s' "$WP_CFG" | ORIGINAL_WP_RPM="$ORIGINAL_WP_RPM" python3 -c "
+import sys, os, json
+d = json.load(sys.stdin)
+cfg = d.get('endpoint') or d.get('config') or d
+rl = cfg.setdefault('rate_limiting', {})
+rl['enabled'] = True
+rl['requests_per_minute'] = int(os.environ['ORIGINAL_WP_RPM'])
+rl['requests_per_day'] = 100
+sys.stdout.write(json.dumps(cfg))
+" > "$WP_TMP" 2>/dev/null
+        curl -s -b "$SETUP_COOKIE_JAR" -X PUT "$ADMIN_URL/api/endpoints/wp-login" \
+            -H 'Content-Type: application/json' --data-binary @"$WP_TMP" >/dev/null 2>&1 || true
+        curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1 || true
+        rm -f "$WP_TMP"
     fi
     rm -f "$COOKIE_JAR" "$ADMIN_COOKIE_JAR" "$SETUP_COOKIE_JAR"
 }
@@ -65,8 +84,42 @@ if [ -n "$WAF_ADMIN_USER" ] && [ -n "$WAF_ADMIN_PASS" ]; then
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/config/thresholds" \
             -H 'Content-Type: application/json' \
             -d '{"name":"fingerprint_rate_limit","value":100000}' >/dev/null 2>&1
+        # The wp-login endpoint carries its own rate_limiting.requests_per_minute
+        # (10, a deliberate brute-force control), enforced by HAProxy via the
+        # X-WAF-Rate-Limit-Value header and independent of the global thresholds
+        # above. The defense-line tests issue GET+POST pairs and exceed it.
+        #
+        # PUT /api/endpoints/{id} validates the whole object ("matching
+        # configuration is required"), so a partial body is rejected -- the config
+        # must be fetched, modified and sent back in full.
+        if command -v python3 >/dev/null 2>&1; then
+            WP_CFG=$(curl -s -b "$SETUP_COOKIE_JAR" "$ADMIN_URL/api/endpoints/wp-login" 2>/dev/null)
+            if echo "$WP_CFG" | grep -q 'requests_per_minute'; then
+                ORIGINAL_WP_RPM=$(printf '%s' "$WP_CFG" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cfg = d.get('endpoint') or d.get('config') or d
+print(cfg.get('rate_limiting', {}).get('requests_per_minute', ''))
+" 2>/dev/null)
+                WP_TMP=$(mktemp)
+                printf '%s' "$WP_CFG" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+cfg = d.get('endpoint') or d.get('config') or d
+rl = cfg.setdefault('rate_limiting', {})
+rl['enabled'] = True
+rl['requests_per_minute'] = 100000
+rl['requests_per_day'] = 1000000
+sys.stdout.write(json.dumps(cfg))
+" > "$WP_TMP" 2>/dev/null
+                curl -s -b "$SETUP_COOKIE_JAR" -X PUT "$ADMIN_URL/api/endpoints/wp-login" \
+                    -H 'Content-Type: application/json' --data-binary @"$WP_TMP" >/dev/null 2>&1
+                rm -f "$WP_TMP"
+            fi
+        fi
+
         curl -s -b "$SETUP_COOKIE_JAR" -X POST "$ADMIN_URL/api/sync" >/dev/null 2>&1
-        sleep 1
+        sleep 2
     fi
 fi
 
