@@ -95,6 +95,18 @@ jobs:
           sudo luarocks install luacheck
           luacheck openresty/lua --std luajit --globals ngx --no-unused-args --codes || true
 
+      # Unit tests run on LuaJIT from a test-only image, so the interpreter under
+      # test is the one that serves traffic. The production image gains nothing.
+      - name: Build the test image
+        run: docker build -t forms-waf-lua-test:ci -f openresty/Dockerfile.test ./openresty
+
+      - name: Lua unit tests
+        run: |
+          docker run --rm \
+            -v "$PWD/openresty/lua:/app/lua:ro" \
+            -v "$PWD/openresty/spec:/app/spec:ro" \
+            forms-waf-lua-test:ci --verbose /app/spec
+
       # Guards the seam between config_resolver and the defense mechanisms, where
       # six shipped features were silently inert.
       - name: Config contract

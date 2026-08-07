@@ -1,4 +1,4 @@
-FROM openresty/openresty:1.27.1.2-alpine
+FROM openresty/openresty:1.31.1.1-alpine
 USER root
 
 # Install dependencies and Lua modules in a single layer:
