@@ -62,47 +62,46 @@ jobs:
         run: npm run audit:gate
 
   lua:
-    name: Lua syntax and lint
+    name: Lua syntax, lint and config contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Lua tooling
-        run: sudo apt-get update && sudo apt-get install -y lua5.1 luarocks && sudo luarocks install luacheck
-
-      # Catches syntax errors only (system Lua is 5.1 here, LuaJIT at runtime).
-      - name: Syntax check every module
-        run: |
-          fail=0
-          for f in $(find openresty/lua -name '*.lua'); do
-            luac5.1 -p "$f" || { echo "SYNTAX FAIL: $f"; fail=1; }
-          done
-          exit $fail
-
-      # Warnings do not fail the build yet; the codebase has not been linted
-      # before. Errors (syntax, undefined globals) do.
-      - name: Luacheck
-        run: luacheck openresty/lua --globals ngx --no-unused-args --codes || true
-
-  config-contract:
-    name: Config contract
-    runs-on: ubuntu-latest
-    # Guards the seam between config_resolver and the defense mechanisms. Six
-    # shipped features were silently inert because a mechanism read a config
-    # shape the resolver never produced, or required a module that did not
-    # exist. Each failed to score 0 with no error and no log, so neither unit
-    # tests of a mechanism nor the integration suite would have caught them.
-    steps:
-      - uses: actions/checkout@v4
-
+      # The runtime is LuaJIT, which supports goto/::continue:: (a Lua 5.2
+      # feature). Checking with PUC luac5.1 rejects valid code, and checking with
+      # luac5.4 accepts code LuaJIT might not -- neither matches production. Use
+      # the interpreter the WAF actually runs on, taken from the image itself.
       - name: Build the OpenResty image
-        run: docker build -t forms-waf-openresty:contract ./openresty
+        run: docker build -t forms-waf-openresty:ci ./openresty
 
-      - name: Run the config contract check
+      - name: Syntax check every module with the runtime interpreter
         run: |
-          docker run --rm -v "$PWD/openresty/tests:/tests:ro" \
-            forms-waf-openresty:contract \
-            /usr/local/openresty/luajit/bin/luajit /tests/config_contract_spec.lua
+          docker run --rm --entrypoint sh -v "$PWD/openresty/lua:/lua:ro" forms-waf-openresty:ci -c '
+            fail=0
+            for f in $(find /lua -name "*.lua"); do
+              if ! /usr/local/openresty/luajit/bin/luajit -bl "$f" /dev/null >/dev/null 2>&1; then
+                echo "SYNTAX FAIL: ${f#/lua/}"
+                /usr/local/openresty/luajit/bin/luajit -bl "$f" /dev/null 2>&1 | head -2
+                fail=1
+              fi
+            done
+            exit $fail'
+
+      # --std luajit so goto and the LuaJIT globals are understood. Warnings do
+      # not fail the build yet; this code has never been linted.
+      - name: Luacheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y luarocks
+          sudo luarocks install luacheck
+          luacheck openresty/lua --std luajit --globals ngx --no-unused-args --codes || true
+
+      # Guards the seam between config_resolver and the defense mechanisms, where
+      # six shipped features were silently inert.
+      - name: Config contract
+        run: |
+          docker run --rm --entrypoint /usr/local/openresty/luajit/bin/luajit \
+            -v "$PWD/openresty/tests:/tests:ro" forms-waf-openresty:ci \
+            /tests/config_contract_spec.lua
 
   integration:
     name: WAF integration suite
