@@ -278,7 +278,10 @@ end
 -- F14: Use trusted_proxies for secure IP extraction
 function _M.create_event_data(context, extra_data)
     local data = {
-        request_id = ngx.var.request_id or ngx.now(),
+        -- ngx.ctx first: $request_id is not cached by this nginx build, so
+        -- reading it again here would produce an id matching nothing else
+        -- reported for this request. waf_handler sets the shared one.
+        request_id = ngx.ctx.waf_request_id or ngx.var.request_id or ngx.now(),
         client_ip = trusted_proxies.get_client_ip(),
         host = ngx.var.http_host or ngx.var.host,
         path = ngx.var.uri,

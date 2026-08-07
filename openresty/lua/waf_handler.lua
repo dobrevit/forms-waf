@@ -49,6 +49,23 @@ local LOG_HMAC_KEY = os.getenv("WAF_LOG_HMAC_KEY")
 
 local collect_trace
 
+--- The request id, stable for the life of the request.
+--
+-- $request_id is NOT cached by this nginx build: every read of
+-- ngx.var.request_id mints a fresh value. Two adjacent reads in one request
+-- return different ids, which quietly made every id the WAF emitted useless for
+-- correlation -- the audit log entry and the webhook for the same request
+-- carried different "request ids", and neither matched the response header.
+-- Read once, cached on ngx.ctx, shared by everything that reports an id.
+local function request_id()
+    local rid = ngx.ctx.waf_request_id
+    if not rid then
+        rid = ngx.var.request_id or tostring(ngx.now())
+        ngx.ctx.waf_request_id = rid
+    end
+    return rid
+end
+
 -- Append to whichever trace a result carries. Scores added outside the profile
 -- executor -- vhost keywords here, defense lines in the multi-executor -- have
 -- to land in the trace too, or the detail view shows a total that its own
@@ -149,7 +166,7 @@ local function audit_log(event_type, event_data)
     local log_entry = {
         ["@timestamp"] = os.date("!%Y-%m-%dT%H:%M:%SZ"),
         event_type = event_type,
-        request_id = ngx.var.request_id or tostring(ngx.now()),
+        request_id = request_id(),
         client_ip = trusted_proxies.get_client_ip(),  -- F01: Use secure IP extraction
         host = ngx.var.http_host or ngx.var.host,
         path = ngx.var.uri,
@@ -784,8 +801,14 @@ function _M.process_request()
         -- tarpit, flag, monitor, allow -- and covering five is the failure this
         -- feature exists to avoid. The log phase sees exactly one outcome per
         -- request, and the real one.
+        -- Returned on every response, not gated behind WAF_EXPOSE_HEADERS. It is
+        -- the handle support needs to look a decision up, and it reveals nothing
+        -- about the verdict -- unlike the score and flag headers, which is what
+        -- that flag exists to keep in.
+        ngx.header["X-WAF-Request-Id"] = request_id()
+
         ngx.ctx.waf_decision = {
-            request_id   = ngx.var.request_id,
+            request_id   = request_id(),
             vhost_id     = summary.vhost_id,
             endpoint_id  = summary.endpoint_id,
             client_ip    = client_ip,
