@@ -827,7 +827,6 @@ export interface TimingTokenConfig {
   enabled: boolean
   cookie_name?: string
   cookie_ttl?: number
-  encryption_key?: string
   min_time_block?: number
   min_time_flag?: number
   score_no_cookie?: number

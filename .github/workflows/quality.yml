@@ -35,6 +35,20 @@ jobs:
       - name: Install
         run: npm ci
 
+      # docs/openapi.yaml is the source of truth for the API types. If the spec
+      # changed without regenerating, or generated.ts was hand-edited, fail here
+      # rather than letting the drift reach a page.
+      - name: API types are in sync with the spec
+        run: |
+          npm run generate:api
+          if ! git diff --quiet -- src/api/generated.ts; then
+            echo "src/api/generated.ts is out of date. Run 'npm run generate:api' and commit the result."
+            git diff -- src/api/generated.ts
+            exit 1
+          fi
+
+      # Also enforces src/api/contract.assert.ts, which fails compilation if a
+      # hand-written type declares a field the specification does not.
       - name: Typecheck
         run: npm run typecheck
 
@@ -121,6 +135,16 @@ jobs:
           WAF_ADMIN_USER: admin
           WAF_ADMIN_PASS: ci-test-password-not-a-secret
         run: ./scripts/test-waf.sh http://localhost:8080 http://localhost:8082
+
+      # Proves the specification describes the server that is actually running.
+      # Without this the spec drifts exactly as the hand-written client did.
+      - name: API contract matches the running server
+        env:
+          WAF_ADMIN_USER: admin
+          WAF_ADMIN_PASS: ci-test-password-not-a-secret
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/check-api-contract.py http://localhost:8082 "$WAF_ADMIN_USER" "$WAF_ADMIN_PASS"
 
       - name: Dump logs on failure
         if: failure()

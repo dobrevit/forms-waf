@@ -1,0 +1,242 @@
+openapi: 3.0.3
+info:
+  title: Forms WAF Admin API
+  version: "1.0.0"
+  description: |
+    Contract for the Admin API served on port 8082.
+
+    This exists because the hand-maintained TypeScript client drifted from the
+    backend and three pages were silently non-functional as a result: the timing
+    config page wrote min_time_seconds/no_cookie_score while the backend reads
+    min_time_block/score_no_cookie, the routing page bound a toggle to a
+    haproxy_ssl field that does not exist, and the vhost form wrote an
+    `exclusions` array instead of excluded_blocked/excluded_flagged. Every one
+    type-checked, because the types were written by hand to match the code
+    rather than the server.
+
+    A spec alone would drift the same way, so scripts/check-api-contract.py
+    validates these schemas against a *live* server. The spec is only as good as
+    that check, and the check is what makes it true.
+
+    Coverage is deliberately partial: the endpoints below are the ones whose
+    shapes have been verified against a running instance. Extend it by adding a
+    path plus a schema and the checker picks it up with no further wiring.
+
+servers:
+  - url: http://localhost:8082/api
+    description: Admin API (compose)
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: waf_admin_session
+
+  schemas:
+    Thresholds:
+      type: object
+      required: [spam_score_block, spam_score_flag, hash_count_block, ip_rate_limit, ip_daily_limit]
+      properties:
+        spam_score_block:     { type: integer, description: Score at which a request is blocked }
+        spam_score_flag:      { type: integer, description: Score at which a request is flagged }
+        hash_count_block:     { type: integer }
+        hash_unique_ips_block: { type: integer }
+        ip_rate_limit:        { type: integer }
+        ip_daily_limit:       { type: integer }
+        fingerprint_rate_limit:  { type: integer }
+        ip_spam_score_threshold: { type: integer }
+        expose_waf_headers:      { type: boolean }
+        rate_limiting_enabled:   { type: boolean }
+
+    GlobalRouting:
+      type: object
+      required: [haproxy_upstream]
+      properties:
+        haproxy_upstream:
+          type: string
+          description: HTTP upstream address. Note the port; HAProxy binds 8080.
+        haproxy_upstream_ssl:
+          type: string
+        upstream_ssl:
+          type: boolean
+          description: |
+            Use the SSL upstream address. There is no `haproxy_ssl` field --
+            the admin UI bound a toggle to that name and it silently did nothing.
+        haproxy_timeout:
+          type: integer
+
+    TimingTokenConfig:
+      type: object
+      required: [enabled, cookie_name, min_time_block, min_time_flag, score_no_cookie, score_too_fast, score_suspicious]
+      properties:
+        enabled:          { type: boolean }
+        cookie_name:      { type: string }
+        cookie_ttl:       { type: integer }
+        min_time_block:
+          type: integer
+          description: Seconds below which a submission is blocked. NOT min_time_seconds.
+        min_time_flag:
+          type: integer
+          description: Seconds below which a submission is flagged. NOT suspicious_time_seconds.
+        score_no_cookie:
+          type: integer
+          description: Added when no timing cookie is present. NOT no_cookie_score.
+        score_too_fast:
+          type: integer
+          description: NOT too_fast_score.
+        score_suspicious:
+          type: integer
+          description: NOT suspicious_score.
+        path_match_mode:  { type: string }
+        apply_to_methods: { type: array, items: { type: string } }
+        set_on_methods:   { type: array, items: { type: string } }
+
+    SlackConfig:
+      type: object
+      required: [enabled, events, update_interval, resolution_threshold]
+      properties:
+        enabled:          { type: boolean }
+        webhook_url:
+          type: string
+          description: Masked as "***" on read; submit the mask unchanged to keep the stored value.
+        webhook_url_set:  { type: boolean }
+        channel:          { type: string }
+        update_interval:      { type: integer }
+        resolution_threshold: { type: integer }
+        events:           { type: array, items: { type: string } }
+        mention_users:    { type: array, items: { type: string } }
+        mention_on_high_severity: { type: boolean }
+        severity_thresholds:
+          type: object
+          properties:
+            high_event_count: { type: integer }
+            high_event_rate:  { type: integer }
+
+    WafStatus:
+      type: object
+      required: [redis_connected, blocked_hashes_count, whitelisted_ips_count, endpoints_count, vhosts_count]
+      properties:
+        redis_host:       { type: string }
+        redis_port:       { type: integer }
+        redis_connected:  { type: boolean }
+        sync_interval:    { type: integer }
+        blocked_hashes_count:  { type: integer }
+        whitelisted_ips_count: { type: integer }
+        endpoints_count:  { type: integer }
+        vhosts_count:     { type: integer }
+
+security:
+  - sessionCookie: []
+
+paths:
+  /status:
+    get:
+      summary: WAF status
+      responses:
+        "200":
+          description: Current status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WafStatus" }
+
+  /config/thresholds:
+    get:
+      summary: Global thresholds
+      responses:
+        "200":
+          description: Effective thresholds and defaults
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [thresholds]
+                properties:
+                  thresholds: { $ref: "#/components/schemas/Thresholds" }
+                  defaults:   { type: object }
+
+  /config/routing:
+    get:
+      summary: Global routing
+      responses:
+        "200":
+          description: Effective routing and defaults
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [routing]
+                properties:
+                  routing:  { $ref: "#/components/schemas/GlobalRouting" }
+                  defaults: { $ref: "#/components/schemas/GlobalRouting" }
+
+  /timing/config:
+    get:
+      summary: Form timing token configuration
+      responses:
+        "200":
+          description: Timing configuration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TimingTokenConfig" }
+
+  /slack/config:
+    get:
+      summary: Slack notification configuration
+      responses:
+        "200":
+          description: Configuration, defaults and event availability
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [config, defaults]
+                properties:
+                  config:   { $ref: "#/components/schemas/SlackConfig" }
+                  defaults: { $ref: "#/components/schemas/SlackConfig" }
+                  emitted_events:     { type: array, items: { type: string } }
+                  unavailable_events: { type: array, items: { type: string } }
+
+  /keywords/blocked:
+    get:
+      summary: Blocked keywords
+      responses:
+        "200":
+          description: Keyword list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keywords]
+                properties:
+                  keywords: { type: array, items: { type: string } }
+
+  /vhosts:
+    get:
+      summary: Virtual hosts
+      responses:
+        "200":
+          description: All vhosts visible to the session
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [vhosts, total]
+                properties:
+                  vhosts: { type: array, items: { type: object } }
+                  total:  { type: integer }
+
+  /endpoints:
+    get:
+      summary: Endpoints
+      responses:
+        "200":
+          description: All endpoints visible to the session
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [endpoints, total]
+                properties:
+                  endpoints: { type: array, items: { type: object } }
+                  total:     { type: integer }
