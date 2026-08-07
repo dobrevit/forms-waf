@@ -107,6 +107,13 @@ jobs:
             -v "$PWD/openresty/spec:/app/spec:ro" \
             forms-waf-lua-test:ci --verbose /app/spec
 
+      # The chart ships its own copy of nginx.conf, so an env declaration or a
+      # shared dict added in one place and not the other fails silently and only
+      # on Kubernetes. Shadow mode shipped missing its dict; HAPROXY_TIMEOUT was
+      # set by the deployment but undeclared, so Lua never saw it.
+      - name: Helm / nginx.conf drift
+        run: python3 scripts/check-helm-drift.py
+
       # Guards the seam between config_resolver and the defense mechanisms, where
       # six shipped features were silently inert.
       - name: Config contract
