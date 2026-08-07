@@ -253,7 +253,7 @@ WP_LOGIN_ENDPOINT='{
   },
   "defense_lines": [
     {
-      "profile_id": "builtin_strict",
+      "profile_id": "high-value",
       "signature_ids": ["builtin_wordpress_login", "builtin_credential_stuffing"],
       "enabled": true
     }

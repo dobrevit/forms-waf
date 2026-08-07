@@ -358,7 +358,8 @@ function _M.resolve(endpoint_config)
             fields = deep_copy(DEFAULT_ENDPOINT_CONFIG.fields),
             actions = deep_copy(DEFAULT_ENDPOINT_CONFIG.actions),
             fingerprint_profiles = nil,  -- No profile attachment - use defaults
-            defense_profiles = nil  -- No profile attachment - use defaults (will fall back to legacy)
+            defense_profiles = nil,  -- No profile attachment - use defaults (will fall back to legacy)
+            defense_lines = nil  -- No defense lines without an endpoint config
         }
     end
 
@@ -385,6 +386,17 @@ function _M.resolve(endpoint_config)
         security = endpoint_config.security,  -- Pass through security settings (honeypot, disposable email, etc.)
         fingerprint_profiles = endpoint_config.fingerprint_profiles,  -- Pass through fingerprint profile attachment
         defense_profiles = endpoint_config.defense_profiles,  -- Pass through defense profile attachment
+        -- Defense lines were missing from this table, so an endpoint configured
+        -- with defense_lines had them silently dropped during resolution:
+        -- defense_profile_multi_executor reads them from
+        -- request_context.endpoint_config, which is this resolved table, so it
+        -- always saw nil and skipped the whole feature. The seeded wp-login
+        -- endpoint (builtin_strict + two attack signatures) never enforced
+        -- anything as a result.
+        --
+        -- NOTE: this table is an explicit allowlist. Any new endpoint config key
+        -- must be added here or it will not reach the request path.
+        defense_lines = endpoint_config.defense_lines,
         metadata = endpoint_config.metadata
     }
 
