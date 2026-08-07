@@ -47,6 +47,8 @@ end
 -- F08: HMAC key for log integrity (optional)
 local LOG_HMAC_KEY = os.getenv("WAF_LOG_HMAC_KEY")
 
+local collect_trace
+
 -- Keep a would-block decision so "what happens if I switch this to blocking?"
 -- becomes a query rather than a log grep.
 --
@@ -70,6 +72,35 @@ local function get_shadow_recorder()
         if ok then _shadow_recorder = mod end
     end
     return _shadow_recorder
+end
+
+-- The executor returns a per-node trace per profile. Flatten them into one list
+-- so a detail view can read the decision top to bottom without knowing how many
+-- profiles ran.
+collect_trace = function(profile_result)
+    if type(profile_result) ~= "table" then return nil end
+
+    -- Single-profile results carry the trace directly; multi-profile results
+    -- nest one per profile.
+    if profile_result.trace then
+        return profile_result.trace
+    end
+
+    local results = profile_result.profile_results
+    if type(results) ~= "table" then return nil end
+
+    local flat = {}
+    for profile_id, r in pairs(results) do
+        if type(r) == "table" and type(r.trace) == "table" then
+            for _, entry in ipairs(r.trace) do
+                if type(entry) == "table" then
+                    entry.profile = profile_id
+                    flat[#flat + 1] = entry
+                end
+            end
+        end
+    end
+    return flat
 end
 
 local function record_shadow_decision(summary, client_ip, host, path, method, profile_result)
@@ -344,6 +375,41 @@ local function detect_field_anomalies(form_data, security_settings, ignore_field
 end
 
 -- Process incoming request
+--- Called from log_by_lua. Records the decision stashed during the access
+--- phase, with the status the client actually received attached.
+function _M.log_decision()
+    local decision = ngx.ctx.waf_decision
+    if not decision then
+        return
+    end
+
+    local ok, recorder = pcall(require, "decision_recorder")
+    if not ok or not recorder then
+        return
+    end
+
+    local status = ngx.status
+    -- What happened, from the response rather than from what the pipeline
+    -- intended: monitoring mode returns 200 on a verdict of "block", and the
+    -- record has to say the request was allowed through.
+    local action
+    if status == 403 then
+        action = "blocked"
+    elseif status == 429 then
+        action = "tarpit"
+    elseif ngx.ctx.captcha_challenged then
+        action = "challenged"
+    elseif decision.profile_action == "block" then
+        action = "would_block"
+    else
+        action = "allowed"
+    end
+
+    decision.action = action
+    decision.status = status
+    pcall(recorder.record, decision)
+end
+
 function _M.process_request()
     local method = ngx.req.get_method()
     local path = ngx.var.uri
@@ -680,6 +746,29 @@ function _M.process_request()
                 ngx.header["X-Defense-Profiles-Flags"] = table.concat(profile_result.flags, ",")
             end
         end
+
+        -- Stash the verdict for the log phase. Recording happens there, not in
+        -- the branches below, because there are six of them -- block, captcha,
+        -- tarpit, flag, monitor, allow -- and covering five is the failure this
+        -- feature exists to avoid. The log phase sees exactly one outcome per
+        -- request, and the real one.
+        ngx.ctx.waf_decision = {
+            request_id   = ngx.var.request_id,
+            vhost_id     = summary.vhost_id,
+            endpoint_id  = summary.endpoint_id,
+            client_ip    = client_ip,
+            host         = host,
+            path         = path,
+            method       = method,
+            user_agent   = ngx.var.http_user_agent,
+            mode         = summary.mode,
+            score        = profile_result.score,
+            flags        = profile_result.flags,
+            blocked_by   = profile_result.blocked_by,
+            block_reason = profile_result.block_reason,
+            profile_action = profile_result.action,
+            trace        = collect_trace(profile_result),
+        }
 
         -- Handle profile result actions
         if profile_result.action == "block" then

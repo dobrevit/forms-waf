@@ -353,7 +353,10 @@ function _M.aggregate(results, config, start_time)
             action = r.result.action,
             score = r.result.score,
             flags = r.result.flags,
-            execution_time_ms = r.result.execution_time_ms
+            execution_time_ms = r.result.execution_time_ms,
+            -- Per-node breakdown, so a decision can be explained down to the
+            -- mechanism rather than stopping at "profile X scored 65".
+            trace = r.result.trace
         }
     end
 

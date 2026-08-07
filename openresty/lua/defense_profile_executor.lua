@@ -583,8 +583,19 @@ function _M.execute(profile, request_context)
         details = {},
         final_action = nil,
         action_config = nil,
-        would_block_reasons = {}  -- Track what would have blocked in monitoring mode
+        would_block_reasons = {},  -- Track what would have blocked in monitoring mode
+        -- Per-node record of what each mechanism contributed. The aggregate score
+        -- alone cannot answer "why was this blocked?" -- 65 points tells an
+        -- operator nothing about which of eight mechanisms produced them. Built
+        -- at the same place the score and flags are accumulated, so the trace
+        -- always adds up to the aggregate rather than being a parallel guess.
+        trace = {}
     }
+
+    -- A pathological or looping graph must not turn the trace into the memory
+    -- problem. Nodes executed past this still count toward the score; they just
+    -- stop being individually itemised.
+    local MAX_TRACE_ENTRIES = 50
 
     -- Node results cache
     local node_results = {}
@@ -632,6 +643,20 @@ function _M.execute(profile, request_context)
                     for _, flag in ipairs(result.flags) do
                         table.insert(exec_context.flags, flag)
                     end
+                end
+
+                if #exec_context.trace < MAX_TRACE_ENTRIES then
+                    table.insert(exec_context.trace, {
+                        node = node.id,
+                        defense = node.defense,
+                        score = result.score or 0,
+                        flags = result.flags,
+                        blocked = result.blocked or false,
+                        -- Carried through so the explorer can show "this fired but
+                        -- was suppressed", which is otherwise indistinguishable
+                        -- from never having fired at all.
+                        suppressed = result.details and result.details.suppressed or nil,
+                    })
                 end
             end
             if result.details then
@@ -754,7 +779,8 @@ function _M.execute(profile, request_context)
         execution_time_ms = elapsed_ms,
         nodes_executed = iterations,
         would_block_reasons = exec_context.would_block_reasons,  -- What would have blocked (useful in monitoring mode)
-        is_monitoring_mode = is_monitoring_mode
+        is_monitoring_mode = is_monitoring_mode,
+        trace = exec_context.trace
     }
 end
 
