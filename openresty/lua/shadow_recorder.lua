@@ -45,8 +45,12 @@ local MAX_FLAG_LENGTH  = 120
 local MAX_PATH_LENGTH  = 256
 
 local BUFFER_HEAD = "shadow:head"   -- next write slot
-local BUFFER_TAIL = "shadow:tail"   -- next slot to flush
+local BUFFER_TAIL = "shadow:tail"   -- last slot successfully flushed
 local DROPPED     = "shadow:dropped"
+local DRAIN_LOCK  = "shadow:draining"
+-- Long enough that a real drain never trips it, short enough that a worker
+-- killed mid-drain cannot wedge the buffer for more than one sync interval or two.
+local DRAIN_LOCK_TTL = 30
 
 --- Trim a value that originates from the request, so a long or hostile field
 --- cannot bloat storage.
@@ -104,37 +108,12 @@ function _M.record(decision)
     return true
 end
 
---- Drain the buffer into Redis. Timer context only.
--- @param red  an open Redis connection
--- @return number of records flushed
-function _M.flush(red)
-    if not shadow_cache or not red then
-        return 0
-    end
-
-    local head = shadow_cache:get(BUFFER_HEAD) or 0
-    local tail = shadow_cache:get(BUFFER_TAIL) or 0
-    if head <= tail then
-        return 0
-    end
-
-    -- redis_sync's timer runs on EVERY worker, so several of them reach this at
-    -- the same moment. Reading the tail, draining, then writing the tail back
-    -- lets each worker drain the same slots -- three workers turned one
-    -- would-block decision into three recorded copies, which would have
-    -- overstated the impact of promoting an endpoint by 3x.
-    --
-    -- incr is atomic on a shared dict, so claim the range first and let each
-    -- worker own a disjoint slice. Whoever claims nothing does nothing.
-    local pending = head - tail
-    local claimed_end = shadow_cache:incr(BUFFER_TAIL, pending, 0)
-    if not claimed_end then
-        return 0
-    end
-    local claimed_start = claimed_end - pending + 1
-
+--- Write one slot range to Redis. Called under the drain lock.
+-- Separated out so flush() can run it under pcall and still release the lock:
+-- otherwise a failure part-way wedges the buffer until the lock TTL expires.
+local function drain_range(red, from, to)
     local flushed = 0
-    for slot = claimed_start, claimed_end do
+    for slot = from, to do
         local key = "shadow:rec:" .. slot
         local record = shadow_cache:get(key)
         if record then
@@ -161,6 +140,57 @@ function _M.flush(red)
             end
             shadow_cache:delete(key)
         end
+        -- Advance one slot at a time rather than jumping the tail at the end: a
+        -- drain that dies part-way resumes from the last completed slot, with
+        -- neither a replayed record nor a lost one.
+        shadow_cache:set(BUFFER_TAIL, slot)
+    end
+    return flushed
+end
+
+--- Drain the buffer into Redis. Timer context only.
+-- @param red  an open Redis connection
+-- @return number of records flushed
+function _M.flush(red)
+    if not shadow_cache or not red then
+        return 0
+    end
+
+    local head = shadow_cache:get(BUFFER_HEAD) or 0
+    local tail = shadow_cache:get(BUFFER_TAIL) or 0
+    if head <= tail then
+        return 0
+    end
+
+    -- redis_sync's timer runs on EVERY worker, so several of them reach this at
+    -- the same moment. Reading the tail, draining, then writing the tail back
+    -- lets each worker drain the same slots -- three workers turned one
+    -- would-block decision into three recorded copies, which overstated the
+    -- impact of promoting an endpoint by 3x.
+    --
+    -- Claiming a range with incr(TAIL, pending) fixed the duplicates and
+    -- introduced something worse: a second worker claiming the same `pending`
+    -- pushed the tail past the head, into slots the writer had not filled yet.
+    -- Those claims drained nothing, and every record written into that gap was
+    -- then skipped for good, because the head <= tail guard above reports an
+    -- empty buffer. Silent loss in the thing whose whole job is to be a
+    -- trustworthy sample.
+    --
+    -- add() is atomic and fails when the key already exists, so exactly one
+    -- worker drains and the rest return immediately.
+    if not shadow_cache:add(DRAIN_LOCK, 1, DRAIN_LOCK_TTL) then
+        return 0
+    end
+
+    -- The TTL on the lock only covers a worker that dies outright. A drain that
+    -- merely fails -- Redis going away mid-range -- releases here instead, so the
+    -- next sync interval retries rather than waiting the TTL out.
+    local ok, flushed = pcall(drain_range, red, tail + 1, head)
+    if not ok then
+        shadow_cache:delete(DRAIN_LOCK)
+        ngx.log(ngx.ERR, "shadow flush failed, resuming from last completed slot: ",
+                tostring(flushed))
+        return 0
     end
 
     if flushed > 0 then
@@ -178,6 +208,7 @@ function _M.flush(red)
         shadow_cache:set(DROPPED, 0)
     end
 
+    shadow_cache:delete(DRAIN_LOCK)
     return flushed
 end
 

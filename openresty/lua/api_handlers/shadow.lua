@@ -61,7 +61,12 @@ end
 
 --- Decode the stored decision list, optionally narrowed to one scope.
 local function read_decisions(red, vhost_id, endpoint_id, limit)
-    local raw = red:lrange(KEYS.decisions, 0, MAX_LIMIT - 1)
+    -- Unfiltered, every entry read is an entry returned, so ask for exactly the
+    -- page wanted: a limit=25 UI poll was pulling and decoding 500 JSON blobs.
+    -- Filtered, the matches can sit anywhere in the list, so the wider read is
+    -- what makes the filter meaningful.
+    local scan_to = (vhost_id or endpoint_id) and MAX_LIMIT or limit
+    local raw = red:lrange(KEYS.decisions, 0, scan_to - 1)
     local out = {}
     if type(raw) ~= "table" then return out end
 
@@ -124,7 +129,11 @@ end
 
 -- GET /shadow/decisions - the individual records behind the summary
 _M.handlers["GET:/shadow/decisions"] = function()
-    local limit = math.min(tonumber(query_arg("limit", DEFAULT_LIMIT)) or DEFAULT_LIMIT, MAX_LIMIT)
+    -- Clamped at both ends. Without the floor, limit=0 or a negative made
+    -- read_decisions return nothing at all, which reads as "no decisions
+    -- recorded" rather than as bad input.
+    local limit = tonumber(query_arg("limit", DEFAULT_LIMIT)) or DEFAULT_LIMIT
+    limit = math.max(1, math.min(math.floor(limit), MAX_LIMIT))
     local vhost_id = query_arg("vhost_id")
     local endpoint_id = query_arg("endpoint_id")
 

@@ -80,14 +80,68 @@ describe("shadow_recorder", function()
         assert.equals(0, #second.calls.lpush)
     end)
 
-    it("claims the range before draining, so a concurrent drain finds nothing", function()
+    it("only one worker drains at a time", function()
         for i = 1, 5 do recorder.record(a_decision()) end
-        local depth_before = recorder.buffer_depth()
-        assert.equals(5, depth_before)
-        -- A worker that claims first leaves nothing for the next to claim.
+        assert.equals(5, recorder.buffer_depth())
         recorder.flush(fake_redis())
         assert.equals(0, recorder.buffer_depth(),
-            "the claim must advance the tail so another worker drains nothing")
+            "a completed drain must leave nothing for another worker")
+    end)
+
+    it("a concurrent drain never pushes the tail past the head", function()
+        -- The defect this guards, and it is subtler than the duplicate it
+        -- replaced. Claiming a range with incr(TAIL, pending) let a second
+        -- worker claim slots the writer had not filled yet, leaving tail > head.
+        -- Records written into that gap were then skipped for good: no
+        -- duplicates, so the obvious test passed, while the sample silently lost
+        -- records -- the one thing a shadow sample must not do.
+        for i = 1, 5 do recorder.record(a_decision()) end
+
+        -- Two workers reach flush together. The first holds the drain lock, so
+        -- simulate the second arriving before the first has released it by
+        -- calling flush again from inside the fake connection's first lpush.
+        local second_result
+        local red = fake_redis()
+        local real_lpush = red.lpush
+        local reentered = false
+        red.lpush = function(self, ...)
+            if not reentered then
+                reentered = true
+                second_result = recorder.flush(fake_redis())
+            end
+            return real_lpush(self, ...)
+        end
+
+        assert.equals(5, recorder.flush(red))
+        assert.equals(0, second_result, "the second worker must drain nothing")
+        assert.is_true(reentered, "the concurrent drain did not run; test is not proving anything")
+
+        -- The real assertion: the buffer still works afterwards.
+        for i = 1, 3 do recorder.record(a_decision()) end
+        assert.equals(3, recorder.buffer_depth(),
+            "records written after a concurrent drain must still be visible")
+        local after = fake_redis()
+        assert.equals(3, recorder.flush(after),
+            "records written after a concurrent drain must still be flushed")
+    end)
+
+    it("resumes from the last completed slot rather than replaying or skipping", function()
+        for i = 1, 6 do recorder.record(a_decision()) end
+        -- A drain that dies part-way: fail the connection after 2 records.
+        local red = fake_redis()
+        local n = 0
+        local real_lpush = red.lpush
+        red.lpush = function(self, ...)
+            n = n + 1
+            if n > 2 then error("connection lost") end
+            return real_lpush(self, ...)
+        end
+        pcall(recorder.flush, red)
+
+        -- The 2 that landed must not come back; the other 4 must not be lost.
+        local resumed = fake_redis()
+        assert.equals(4, recorder.flush(resumed),
+            "a resumed drain must pick up exactly the slots that did not complete")
     end)
 
     it("flushing an empty buffer is a no-op", function()

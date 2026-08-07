@@ -56,9 +56,25 @@ local LOG_HMAC_KEY = os.getenv("WAF_LOG_HMAC_KEY")
 --
 -- The recorder buffers in a shared dict and a timer drains it: the request path
 -- must not touch Redis, and a timer per request would exhaust the timer pool.
+-- Resolved once and cached, following get_multi_executor above. This runs on
+-- every would-block request, and pcall(require, ...) on a hot path is overhead
+-- for a lookup whose answer never changes. _shadow_tried keeps a failed require
+-- from being retried on every request too.
+local _shadow_recorder
+local _shadow_tried = false
+
+local function get_shadow_recorder()
+    if not _shadow_tried then
+        _shadow_tried = true
+        local ok, mod = pcall(require, "shadow_recorder")
+        if ok then _shadow_recorder = mod end
+    end
+    return _shadow_recorder
+end
+
 local function record_shadow_decision(summary, client_ip, host, path, method, profile_result)
-    local ok, shadow_recorder = pcall(require, "shadow_recorder")
-    if not ok or not shadow_recorder then
+    local shadow_recorder = get_shadow_recorder()
+    if not shadow_recorder then
         return
     end
     shadow_recorder.record({
