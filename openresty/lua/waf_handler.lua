@@ -47,6 +47,33 @@ end
 -- F08: HMAC key for log integrity (optional)
 local LOG_HMAC_KEY = os.getenv("WAF_LOG_HMAC_KEY")
 
+-- Keep a would-block decision so "what happens if I switch this to blocking?"
+-- becomes a query rather than a log grep.
+--
+-- There are two would-block branches in process_request and both must record.
+-- Capturing only one would silently understate the impact of promoting an
+-- endpoint, which is the one thing this feature exists to get right.
+--
+-- The recorder buffers in a shared dict and a timer drains it: the request path
+-- must not touch Redis, and a timer per request would exhaust the timer pool.
+local function record_shadow_decision(summary, client_ip, host, path, method, profile_result)
+    local ok, shadow_recorder = pcall(require, "shadow_recorder")
+    if not ok or not shadow_recorder then
+        return
+    end
+    shadow_recorder.record({
+        vhost_id    = summary.vhost_id,
+        endpoint_id = summary.endpoint_id,
+        client_ip   = client_ip,
+        host        = host,
+        path        = path,
+        method      = method,
+        score       = profile_result.score or 0,
+        blocked_by  = profile_result.blocked_by,
+        flags       = profile_result.flags,
+    })
+end
+
 -- Structured audit logging for security events
 -- Outputs JSON formatted log entries for easy parsing by log aggregation tools
 -- F08: Optionally adds HMAC signature for log integrity verification
@@ -732,6 +759,7 @@ function _M.process_request()
                     profile_result.flags and table.concat(profile_result.flags, ",") or "none"
                 ))
                 metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", profile_result.score or 0)
+                record_shadow_decision(summary, client_ip, host, path, method, profile_result)
                 -- Return to continue to proxy_pass - HAProxy will use the request headers we set
                 return
             end
@@ -826,6 +854,7 @@ function _M.process_request()
                     profile_result.score or 0
                 ))
                 metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", profile_result.score or 0)
+                record_shadow_decision(summary, client_ip, host, path, method, profile_result)
             else
                 metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", profile_result.score or 0)
             end

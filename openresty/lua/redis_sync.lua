@@ -1155,6 +1155,19 @@ local function do_sync()
     -- Sync Slack notification configuration
     sync_slack(red)
 
+    -- Drain the shadow-mode buffer here rather than on its own timer: this
+    -- function already holds an open connection and runs on a predictable
+    -- interval.
+    local ok_shadow, shadow_recorder = pcall(require, "shadow_recorder")
+    if ok_shadow and shadow_recorder then
+        local ok_flush, flushed = pcall(shadow_recorder.flush, red)
+        if not ok_flush then
+            ngx.log(ngx.ERR, "shadow recorder flush failed: ", tostring(flushed))
+        elseif flushed > 0 then
+            ngx.log(ngx.INFO, "shadow recorder: flushed ", flushed, " would-block decisions")
+        end
+    end
+
     close_redis(red)
 
     ngx.log(ngx.INFO, "Redis sync completed")
