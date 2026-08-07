@@ -1,0 +1,106 @@
+name: Quality Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# R-18: the repository previously had only build-push.yml, which builds and
+# pushes images and runs no tests, linter, type check or dependency audit. Seven
+# months of dependency drift (14 advisories) and 74 accumulated type errors went
+# undetected as a direct result.
+
+jobs:
+  admin-ui:
+    name: Admin UI (typecheck, lint, audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      # node 24 for npm >= 11, which is required for min-release-age in .npmrc.
+      # On node 22 (npm 10.x) that setting is silently ignored.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+
+      # npm ci honours .npmrc (ignore-scripts, min-release-age) and installs the
+      # committed lockfile exactly.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # Fails on high/critical advisories except those with a justified,
+      # time-boxed entry in .audit-allowlist.json. Entries expire, so an accepted
+      # risk resurfaces rather than becoming permanent.
+      - name: Audit gate
+        run: npm run audit:gate
+
+  lua:
+    name: Lua syntax and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua tooling
+        run: sudo apt-get update && sudo apt-get install -y lua5.1 luarocks && sudo luarocks install luacheck
+
+      # Catches syntax errors only (system Lua is 5.1 here, LuaJIT at runtime).
+      - name: Syntax check every module
+        run: |
+          fail=0
+          for f in $(find openresty/lua -name '*.lua'); do
+            luac5.1 -p "$f" || { echo "SYNTAX FAIL: $f"; fail=1; }
+          done
+          exit $fail
+
+      # Warnings do not fail the build yet; the codebase has not been linted
+      # before. Errors (syntax, undefined globals) do.
+      - name: Luacheck
+        run: luacheck openresty/lua --globals ngx --no-unused-args --codes || true
+
+  integration:
+    name: WAF integration suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start the stack
+        env:
+          WAF_ADMIN_SALT: ci_salt_at_least_32_characters_long_for_tests
+          WAF_ADMIN_PASSWORD: ci-test-password-not-a-secret
+        run: |
+          docker compose up -d --build
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://localhost:8082/health && break
+            sleep 2
+          done
+          sleep 5
+
+      # Credentials let the harness raise ip_rate_limit and fingerprint_rate_limit
+      # for the run; without them the suite's own request volume trips them and
+      # reports spurious failures.
+      - name: Run integration suite
+        env:
+          WAF_ADMIN_USER: admin
+          WAF_ADMIN_PASS: ci-test-password-not-a-secret
+        run: ./scripts/test-waf.sh http://localhost:8080 http://localhost:8082
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

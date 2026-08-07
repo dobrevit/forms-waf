@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "Advisories consciously accepted, with an expiry so they resurface instead of",
+    "being forgotten. scripts/audit-gate.mjs fails CI on anything not listed here,",
+    "and also fails on an entry whose reviewBy date has passed.",
+    "Every entry must state why it is not exploitable here, or what blocks the fix."
+  ],
+  "allow": [
+    {
+      "id": "GHSA-qwww-vcr4-c8h2",
+      "package": "react-router",
+      "severity": "high",
+      "reason": "RSC-mode CSRF. Not reachable: this is a client-only SPA using BrowserRouter, with no RSC, no data router, no loaders and no actions. The fix is react-router 8.3.0, which drops react-router-dom and is a framework migration rather than a version bump.",
+      "reviewBy": "2026-11-01"
+    },
+    {
+      "id": "GHSA-5p4m-2wfm-xmqj",
+      "package": "js-yaml",
+      "severity": "high",
+      "reason": "Dev-only transitive via eslint; not shipped to the browser. The fixed version is less than 7 days old and is therefore held back by min-release-age in .npmrc. Expires quickly on purpose: once the fix ages in, a plain lockfile refresh clears it.",
+      "reviewBy": "2026-09-01"
+    }
+  ]
+}
