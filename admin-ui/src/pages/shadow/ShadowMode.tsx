@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { shadowApi } from '@/api/client'
 import type { ShadowCount, ShadowImpact, ShadowScope } from '@/api/client'
@@ -33,6 +34,7 @@ import {
   Trash2,
   ArrowUpCircle,
   Fingerprint,
+  BellOff,
 } from 'lucide-react'
 
 function formatWhen(ts: number): string {
@@ -45,10 +47,40 @@ function formatWhen(ts: number): string {
 }
 
 /**
+ * Recorded flags are usually profile-prefixed (`legacy:kw:viagra`), but not
+ * always: defense-line flags are merged into the result without a prefix. A
+ * suppression matches the flag the mechanism itself emits, so the prefix has to
+ * come off -- and only when it really is a prefix.
+ *
+ * Stripping up to the first colon unconditionally mangles an unprefixed
+ * `kw:viagra` into `viagra`, which matches nothing. Requiring the remainder to
+ * still contain a colon fails the other way, on single-segment flags like
+ * `legacy:thread_error`. So the decision is made against the profile names the
+ * API already reports in top_rules: strip a leading segment only if it is one
+ * of them.
+ */
+function detectionFlag(recorded: string, profileNames: Set<string>): string {
+  const firstColon = recorded.indexOf(':')
+  if (firstColon === -1) return recorded
+  const head = recorded.slice(0, firstColon)
+  return profileNames.has(head) ? recorded.slice(firstColon + 1) : recorded
+}
+
+/**
  * A count bar. The relative width is what makes a list of flags readable at a
  * glance -- "which rule is responsible for most of this" is the whole question.
  */
-function CountBars({ items, empty }: { items: ShadowCount[]; empty: string }) {
+function CountBars({
+  items,
+  empty,
+  suppressScope,
+  profileNames,
+}: {
+  items: ShadowCount[]
+  empty: string
+  suppressScope?: string
+  profileNames?: Set<string>
+}) {
   if (!items?.length) {
     return <p className="text-sm text-muted-foreground">{empty}</p>
   }
@@ -59,7 +91,25 @@ function CountBars({ items, empty }: { items: ShadowCount[]; empty: string }) {
         <div key={item.name} className="space-y-1">
           <div className="flex items-baseline justify-between gap-4">
             <code className="text-xs font-medium break-all">{item.name}</code>
-            <span className="text-sm tabular-nums text-muted-foreground">{item.count}</span>
+            <span className="flex items-center gap-2">
+              <span className="text-sm tabular-nums text-muted-foreground">{item.count}</span>
+              {suppressScope && profileNames && (
+                <Button
+                  asChild
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  title={`Stop ${detectionFlag(item.name, profileNames)} counting for ${suppressScope}`}
+                >
+                  <Link
+                    to={`/security/suppressions?flag=${encodeURIComponent(detectionFlag(item.name, profileNames))}&scope_type=vhost&scope_id=${encodeURIComponent(suppressScope)}`}
+                  >
+                    <BellOff className="mr-1 h-3 w-3" />
+                    Suppress
+                  </Link>
+                </Button>
+              )}
+            </span>
           </div>
           <div className="h-1.5 w-full rounded-full bg-muted">
             <div
@@ -132,6 +182,18 @@ export default function ShadowMode() {
   }
 
   const incomplete = (summary?.dropped_total ?? 0) > 0
+
+  // The summary spans every scope, so a flag in it cannot always be attributed
+  // to one vhost. Offer the suppress shortcut only when every recorded decision
+  // came from the same vhost -- otherwise the prefilled scope would be a guess,
+  // and a suppression applied to the wrong vhost is a hole, not an annoyance.
+  const scopeVhosts = new Set((summary?.scopes ?? []).map((s) => s.vhost_id))
+  const singleVhost = scopeVhosts.size === 1 ? [...scopeVhosts][0] : undefined
+
+  // top_rules is the set of things that produced a decision -- profile ids for a
+  // profile block. That is what tells detectionFlag which leading segment is a
+  // prefix rather than part of the flag.
+  const summaryProfiles = new Set((summary?.top_rules ?? []).map((r) => r.name))
 
   return (
     <div className="space-y-6">
@@ -227,6 +289,8 @@ export default function ShadowMode() {
             <CountBars
               items={summary?.top_flags ?? []}
               empty="Nothing recorded yet. Put a vhost in monitoring mode and send traffic."
+              suppressScope={singleVhost}
+              profileNames={summaryProfiles}
             />
           </CardContent>
         </Card>
@@ -397,7 +461,12 @@ export default function ShadowMode() {
                 {!!pending?.top_flags?.length && (
                   <div>
                     <p className="mb-2 text-sm font-medium">Mostly from</p>
-                    <CountBars items={pending.top_flags.slice(0, 5)} empty="" />
+                    <CountBars
+                      items={pending.top_flags.slice(0, 5)}
+                      empty=""
+                      suppressScope={pending.vhost_id}
+                      profileNames={new Set((pending.top_rules ?? []).map((r) => r.name))}
+                    />
                   </div>
                 )}
                 {!!pending?.affected_endpoints?.length && (

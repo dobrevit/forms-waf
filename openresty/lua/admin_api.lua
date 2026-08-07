@@ -20,6 +20,7 @@ local config_handler = require "api_handlers.config"
 local webhooks_handler = require "api_handlers.webhooks"
 local slack_handler = require "api_handlers.slack"
 local shadow_handler = require "api_handlers.shadow"
+local suppressions_handler = require "api_handlers.suppressions"
 local geoip_handler = require "api_handlers.geoip"
 local reputation_handler = require "api_handlers.reputation"
 local bulk_handler = require "api_handlers.bulk"
@@ -70,6 +71,7 @@ register_handlers(config_handler)
 register_handlers(webhooks_handler)
 register_handlers(slack_handler)
 register_handlers(shadow_handler)
+register_handlers(suppressions_handler)
 register_handlers(geoip_handler)
 register_handlers(reputation_handler)
 register_handlers(bulk_handler)
@@ -198,6 +200,15 @@ function _M.handle_request()
             if crud_handler then
                 return crud_handler(endpoint_id)
             end
+        end
+    end
+
+    -- Check for parameterized suppression routes: DELETE /suppressions/{id}
+    local suppression_id = path:match("^/suppressions/([a-fA-F0-9]+)$")
+    if suppression_id then
+        local handler = suppressions_handler.resource_handlers[method]
+        if handler then
+            return handler(suppression_id)
         end
     end
 

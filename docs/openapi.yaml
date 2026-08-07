@@ -113,6 +113,33 @@ components:
             high_event_count: { type: integer }
             high_event_rate:  { type: integer }
 
+    Suppression:
+      type: object
+      required: [id, scope_type, flag]
+      properties:
+        id:
+          type: string
+          description: Digest of scope and flag, so adding the same one twice is idempotent.
+        scope_type: { type: string, enum: [global, vhost, endpoint] }
+        scope_id:
+          type: string
+          description: Absent for global scope; the vhost or endpoint id otherwise.
+        flag:
+          type: string
+          description: Exact detection flag, or a trailing "*" to cover a family (kw:*).
+        reason:     { type: string }
+        created_at: { type: integer }
+        created_by: { type: string }
+
+    SuppressionCreated:
+      type: object
+      required: [suppression, created]
+      properties:
+        suppression: { $ref: "#/components/schemas/Suppression" }
+        created:
+          type: boolean
+          description: False when the suppression already existed and was updated.
+
     ShadowDecision:
       type: object
       required: [ts, vhost_id, endpoint_id, score]
@@ -263,6 +290,102 @@ paths:
                   defaults: { $ref: "#/components/schemas/SlackConfig" }
                   emitted_events:     { type: array, items: { type: string } }
                   unavailable_events: { type: array, items: { type: string } }
+
+  /suppressions:
+    get:
+      summary: Detections that no longer count, and where
+      responses:
+        "200":
+          description: Every suppression currently in force
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [suppressions, count]
+                properties:
+                  suppressions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Suppression" }
+                  count: { type: integer }
+                  max:
+                    type: integer
+                    description: Ceiling on entries; this list is walked on every defense node.
+    post:
+      summary: Stop a detection counting for one scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [flag]
+              properties:
+                flag:
+                  type: string
+                  maxLength: 120
+                  description: >
+                    Exact detection flag, or a trailing "*" for a family (kw:*).
+                    This is the flag the mechanism emits, without the profile
+                    prefix that appears on recorded shadow decisions.
+                scope_type:
+                  type: string
+                  enum: [global, vhost, endpoint]
+                  default: global
+                scope_id:
+                  type: string
+                  description: Required unless scope_type is global.
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuppressionCreated" }
+        "200":
+          description: >
+            Already present. The id is a digest of scope and flag, so re-adding
+            the same suppression updates it rather than creating a duplicate.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuppressionCreated" }
+        "400":
+          description: >
+            Invalid input. Includes a global "*", which would disable all
+            detection and is refused deliberately.
+    delete:
+      summary: Remove every suppression
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cleared]
+                properties:
+                  cleared: { type: boolean }
+
+  /suppressions/{id}:
+    delete:
+      summary: Remove one suppression
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, id]
+                properties:
+                  deleted: { type: boolean }
+                  id: { type: string }
+        "404":
+          description: No suppression with that id
 
   /shadow/summary:
     get:

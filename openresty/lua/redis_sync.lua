@@ -104,6 +104,7 @@ local KEYS = {
     thresholds = "waf:config:thresholds",
     routing = "waf:config:routing",
     ip_whitelist = "waf:whitelist:ips",
+    suppressions = "waf:suppressions",
     -- Endpoint configuration keys
     endpoint_index = "waf:endpoints:index",
     endpoint_config_prefix = "waf:endpoints:config:",
@@ -282,6 +283,51 @@ local function sync_thresholds(red)
         config_cache:set("thresholds", cjson.encode(thresholds), 120)
         ngx.log(ngx.DEBUG, "Synced thresholds")
     end
+end
+
+-- Sync rule suppressions
+-- Read on every defense node of every request, so it lands in its own dict and
+-- is stored pre-decoded as one JSON blob rather than as N keys to look up.
+local function sync_suppressions(red)
+    local suppression_cache = ngx.shared.suppression_cache
+    if not suppression_cache then
+        return
+    end
+
+    local entries, err = red:hgetall(KEYS.suppressions)
+    if not entries then
+        ngx.log(ngx.WARN, "Failed to get suppressions: ", err)
+        return
+    end
+
+    local cjson = require "cjson.safe"
+    local list = {}
+    if type(entries) == "table" then
+        for i = 1, #entries, 2 do
+            local decoded = cjson.decode(entries[i + 1])
+            -- Objects only. cjson.decode happily returns a number or a string for
+            -- valid-but-wrong JSON, and both are truthy; assigning .id to one
+            -- raises here, and letting one through would arm the same failure in
+            -- the request path.
+            if type(decoded) == "table" then
+                decoded.id = decoded.id or entries[i]
+                list[#list + 1] = decoded
+            else
+                ngx.log(ngx.WARN, "Ignoring malformed suppression: ", tostring(entries[i]))
+            end
+        end
+    end
+
+    local encoded = cjson.encode(list)
+    if encoded then
+        -- No TTL: an expiring suppression would silently start blocking traffic
+        -- an operator deliberately allowed. It is replaced on every sync instead.
+        local ok, set_err = suppression_cache:set("suppressions", encoded)
+        if not ok then
+            ngx.log(ngx.ERR, "Failed to cache suppressions: ", set_err)
+        end
+    end
+    ngx.log(ngx.DEBUG, "Synced ", #list, " suppressions")
 end
 
 -- Sync routing configuration
@@ -1130,6 +1176,7 @@ local function do_sync()
     sync_thresholds(red)
     sync_routing(red)
     sync_ip_whitelist(red)
+    sync_suppressions(red)
 
     -- Sync endpoint configurations
     sync_endpoints(red)

@@ -335,6 +335,32 @@ local ok, err = utils.validate_required(data, {"field1", "field2"})
 
 ---
 
+### Rule Suppressions (`api_handlers/suppressions.lua`)
+
+The counterpart to shadow mode. Shadow mode names the rule that would have
+blocked; a suppression is how an operator says that rule is wrong *here*,
+without turning the endpoint off.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /suppressions | Everything currently in force |
+| POST | /suppressions | Stop a detection counting for one scope |
+| DELETE | /suppressions | Remove all suppressions |
+| DELETE | /suppressions/{id} | Remove one |
+
+Applied in `defense_profile_executor.execute_defense_node`, which every
+mechanism returns through. Suppressed flags are removed from the node result;
+a node is neutralised only when *every* one of its flags was suppressed. A
+mechanism reports one aggregate score for all its flags, so there is no
+per-flag score to subtract — which is why a node that also fired for an
+unsuppressed reason keeps its verdict. `kw:*` covers a family; a global `*`
+is refused, because that is a WAF that is on and does nothing.
+
+Scopes accumulate (global + vhost + endpoint all apply) rather than the
+narrower replacing the broader, which is the opposite of the deep-merge
+`config_resolver` uses — deliberately, since a narrow entry silently dropping
+the global ones is the wrong default for a safety control.
+
 ### Shadow Mode (`api_handlers/shadow.lua`)
 
 What monitoring mode *would* have blocked, so a rule set can be proven before it
@@ -372,6 +398,7 @@ Each endpoint requires specific permissions. See [RBAC Guide](RBAC.md) for full 
 | security | read, update |
 | slack | read, update, test |
 | shadow | read, promote, delete |
+| suppressions | create, read, delete |
 
 ---
 
