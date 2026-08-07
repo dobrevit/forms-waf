@@ -47,6 +47,49 @@ end
 -- F08: HMAC key for log integrity (optional)
 local LOG_HMAC_KEY = os.getenv("WAF_LOG_HMAC_KEY")
 
+-- Keep a would-block decision so "what happens if I switch this to blocking?"
+-- becomes a query rather than a log grep.
+--
+-- There are two would-block branches in process_request and both must record.
+-- Capturing only one would silently understate the impact of promoting an
+-- endpoint, which is the one thing this feature exists to get right.
+--
+-- The recorder buffers in a shared dict and a timer drains it: the request path
+-- must not touch Redis, and a timer per request would exhaust the timer pool.
+-- Resolved once and cached, following get_multi_executor above. This runs on
+-- every would-block request, and pcall(require, ...) on a hot path is overhead
+-- for a lookup whose answer never changes. _shadow_tried keeps a failed require
+-- from being retried on every request too.
+local _shadow_recorder
+local _shadow_tried = false
+
+local function get_shadow_recorder()
+    if not _shadow_tried then
+        _shadow_tried = true
+        local ok, mod = pcall(require, "shadow_recorder")
+        if ok then _shadow_recorder = mod end
+    end
+    return _shadow_recorder
+end
+
+local function record_shadow_decision(summary, client_ip, host, path, method, profile_result)
+    local shadow_recorder = get_shadow_recorder()
+    if not shadow_recorder then
+        return
+    end
+    shadow_recorder.record({
+        vhost_id    = summary.vhost_id,
+        endpoint_id = summary.endpoint_id,
+        client_ip   = client_ip,
+        host        = host,
+        path        = path,
+        method      = method,
+        score       = profile_result.score or 0,
+        blocked_by  = profile_result.blocked_by,
+        flags       = profile_result.flags,
+    })
+end
+
 -- Structured audit logging for security events
 -- Outputs JSON formatted log entries for easy parsing by log aggregation tools
 -- F08: Optionally adds HMAC signature for log integrity verification
@@ -732,6 +775,7 @@ function _M.process_request()
                     profile_result.flags and table.concat(profile_result.flags, ",") or "none"
                 ))
                 metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", profile_result.score or 0)
+                record_shadow_decision(summary, client_ip, host, path, method, profile_result)
                 -- Return to continue to proxy_pass - HAProxy will use the request headers we set
                 return
             end
@@ -826,6 +870,7 @@ function _M.process_request()
                     profile_result.score or 0
                 ))
                 metrics.record_request(summary.vhost_id, summary.endpoint_id, "monitored", profile_result.score or 0)
+                record_shadow_decision(summary, client_ip, host, path, method, profile_result)
             else
                 metrics.record_request(summary.vhost_id, summary.endpoint_id, "allowed", profile_result.score or 0)
             end

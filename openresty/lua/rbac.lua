@@ -37,6 +37,7 @@ local DEFAULT_ROLES = {
             captcha = {"create", "read", "update", "delete", "enable", "disable", "test"},
             webhooks = {"read", "update", "test"},
             slack = {"read", "update", "test", "reset"},
+            shadow = {"read", "promote", "delete"},
             geoip = {"read", "update", "reload"},
             reputation = {"read", "update"},
             timing = {"read", "update"},
@@ -68,6 +69,7 @@ local DEFAULT_ROLES = {
             captcha = {"read"},
             webhooks = {"read"},
             slack = {"read"},
+            shadow = {"read"},
             geoip = {"read"},
             reputation = {"read"},
             timing = {"read"},
@@ -96,6 +98,7 @@ local DEFAULT_ROLES = {
             captcha = {"read"},
             webhooks = {"read"},
             slack = {"read"},
+            shadow = {"read"},
             geoip = {"read"},
             reputation = {"read"},
             timing = {"read"},
@@ -182,6 +185,13 @@ local ENDPOINT_PERMISSIONS = {
 
     -- Timing (per-vhost listing)
     ["GET:/timing/vhosts"] = {resource = "timing", action = "read"},
+
+    -- Shadow mode (what monitoring would have blocked, and promoting a scope)
+    ["GET:/shadow/summary"] = {resource = "shadow", action = "read"},
+    ["GET:/shadow/decisions"] = {resource = "shadow", action = "read"},
+    ["GET:/shadow/impact"] = {resource = "shadow", action = "read"},
+    ["POST:/shadow/promote"] = {resource = "shadow", action = "promote"},
+    ["DELETE:/shadow/decisions"] = {resource = "shadow", action = "delete"},
 
     -- Slack notifications
     ["GET:/slack/config"] = {resource = "slack", action = "read"},

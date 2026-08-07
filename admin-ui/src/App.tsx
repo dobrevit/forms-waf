@@ -27,6 +27,7 @@ import AttackSignatures from '@/pages/security/AttackSignatures'
 import AttackSignatureEditor from '@/pages/security/AttackSignatureEditor'
 import BehavioralAnalytics from '@/pages/analytics/BehavioralAnalytics'
 import ClusterStatus from '@/pages/cluster/ClusterStatus'
+import ShadowMode from '@/pages/shadow/ShadowMode'
 import { About } from '@/pages/About'
 import { Users } from '@/pages/admin/Users'
 import { AuthProviders } from '@/pages/admin/AuthProviders'
@@ -87,6 +88,7 @@ export default function App() {
                 <Route path="/security/attack-signatures" element={<AttackSignatures />} />
                 <Route path="/security/attack-signatures/:id" element={<AttackSignatureEditor />} />
                 <Route path="/analytics/behavioral" element={<BehavioralAnalytics />} />
+                <Route path="/security/shadow" element={<ShadowMode />} />
                 <Route path="/cluster" element={<ClusterStatus />} />
                 <Route path="/about" element={<About />} />
                 <Route path="/admin/users" element={<Users />} />

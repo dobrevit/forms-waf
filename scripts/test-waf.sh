@@ -549,17 +549,19 @@ if echo "$WP_RESPONSE" | grep -q '"endpoint":"wp-login"' || [ "$WP_PROBE_STATUS"
 
     sleep 1
 
-    # Test 6: Common username "admin" should be blocked (from builtin_credential_stuffing signature)
-    test_request "WP Login - Credential stuffing (admin)" "403" "POST" "/wp-login.php" \
-        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-        -d "log=admin&pwd=somepassword"
-
-    sleep 1
-
-    # Test 7: Common password should be blocked
-    test_request "WP Login - Credential stuffing (password123)" "403" "POST" "/wp-login.php" \
-        -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-        -d "log=someuser&pwd=password123"
+    # KNOWN GAP: these asserted that a single common-credential POST returns 403,
+    # and they passed -- but for the wrong reason. Bare curl sends a Chrome
+    # User-Agent with none of Chrome's headers, so the fake-modern-browser check
+    # scored them, not credential-stuffing detection. Given a realistic browser
+    # client both requests are allowed.
+    #
+    # Credential stuffing is by definition automated and repetitive, so the honest
+    # assertion is that a burst of common-credential attempts from one source is
+    # blocked while a single attempt from a real browser is not. That needs a
+    # product decision on where the line sits, so the assertions are parked rather
+    # than rewritten to match whatever the code happens to do today.
+    log_known_gap "WP Login - Credential stuffing (admin) - assertion passed for the wrong reason; needs a burst-based test"
+    log_known_gap "WP Login - Credential stuffing (password123) - assertion passed for the wrong reason; needs a burst-based test"
 
 else
     log_info "WP Login endpoint not configured - skipping defense line tests"
@@ -593,7 +595,7 @@ echo "========================================"
 echo "Test Summary"
 echo "========================================"
 echo -e "Passed: ${GREEN}$PASS${NC}"
-echo -e "Known gaps: ${YELLOW}${KNOWN_GAPS}${NC} (see R-27)"
+echo -e "Known gaps: ${YELLOW}${KNOWN_GAPS}${NC} (assertions parked deliberately - see the [KNOWN GAP] lines above)"
 echo -e "Failed: ${RED}$FAIL${NC}"
 echo ""
 
