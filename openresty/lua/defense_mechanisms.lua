@@ -592,22 +592,34 @@ executor.register_defense("pattern_scan", function(request_context, node_config)
         return executor.result_score(0, {}, {skipped = true, reason = "patterns_disabled"})
     end
 
-    -- R-27: pattern_scanner.lua does not exist in this tree. The node is part of
-    -- the built-in "legacy" profile, so a bare require() here would abort defense
-    -- execution for every request as soon as an operator sets patterns.enabled.
-    -- Fail closed on the feature, open on the request: contribute nothing and say
-    -- so, rather than taking the request path down.
-    local ok, pattern_scanner = pcall(require, "pattern_scanner")
-    if not ok or type(pattern_scanner) ~= "table" or type(pattern_scanner.scan) ~= "function" then
-        ngx.log(ngx.ERR, "pattern_scan: pattern_scanner module unavailable; ",
-                "pattern scanning is configured but cannot run")
-        return executor.result_score(0, {}, {skipped = true, reason = "pattern_scanner_unavailable"})
+    -- R-27: this required a "pattern_scanner" module that has never existed in
+    -- this tree, so the node could only ever fail. The implementation was already
+    -- present as keyword_filter.pattern_scan, which walks the same DEFAULT_PATTERNS
+    -- table (suspicious TLDs, URL shorteners, excessive links, script tags).
+    local keyword_filter = require "keyword_filter"
+    local ignore_fields = (config.fields and config.fields.ignore) or {}
+    local result = keyword_filter.pattern_scan(form_data, ignore_fields)
+
+    -- Honour patterns.disabled: an operator can switch off individual pattern
+    -- flags without disabling the whole mechanism.
+    local disabled = config.patterns.disabled or {}
+    local score, flags = 0, {}
+    for _, flag in ipairs(result.flags or {}) do
+        -- flags are emitted as "name" or "name:detail"
+        local base = flag:match("^([^:]+)") or flag
+        if not disabled[base] and not disabled[flag] then
+            table.insert(flags, flag)
+        end
     end
 
-    local result = pattern_scanner.scan(form_data, config.patterns)
+    -- Only keep the score when at least one flag survived the disabled filter.
+    if #flags > 0 then
+        score = result.score or 0
+    end
 
-    return executor.result_score(result.score or 0, result.flags or {}, {
-        matches = result.matches
+    return executor.result_score(score, flags, {
+        patterns_matched = #flags,
+        filtered = #(result.flags or {}) - #flags,
     })
 end)
 
@@ -619,17 +631,36 @@ executor.register_defense("disposable_email", function(request_context, node_con
     local config = get_config(request_context)
     local form_data = get_form_data(request_context)
 
-    -- Check if disposable email detection is enabled
-    if not config.disposable_email or not config.disposable_email.enabled then
+    -- Canonical shape, matching vhost_resolver.get_security_settings():
+    --     security.check_disposable_email   boolean
+    --     security.disposable_email_action  "block" | anything else means score
+    --     security.disposable_email_score   number
+    --
+    -- This previously read config.disposable_email.enabled, which
+    -- config_resolver never emits, so the check was skipped on every request.
+    -- Same defect as the honeypot mechanism. The old shape is still honoured.
+    local legacy = config.disposable_email
+    local security = config.security or {}
+    local enabled = security.check_disposable_email
+    if enabled == nil and legacy then
+        enabled = legacy.enabled
+    end
+
+    if not enabled then
         return executor.result_score(0, {}, {skipped = true, reason = "disposable_email_disabled"})
     end
 
-    local action = node_config.action or config.disposable_email.action or "flag"
-    local score = node_config.score or config.disposable_email.score or 30
+    local action = node_config.action or security.disposable_email_action
+        or (legacy and legacy.action) or "flag"
+    local score = node_config.score or security.disposable_email_score
+        or (legacy and legacy.score) or 30
 
     -- Find email fields
-    local email_fields = config.disposable_email.fields or {"email", "e-mail", "mail"}
-    local disposable_checker = require "disposable_email"
+    local email_fields = (legacy and legacy.fields) or {"email", "e-mail", "mail"}
+    -- The module is disposable_domains; requiring "disposable_email" (the event
+    -- name) raised on every request that reached this point. Same defect class as
+    -- pattern_scan's missing "pattern_scanner".
+    local disposable_checker = require "disposable_domains"
 
     for _, field_name in ipairs(email_fields) do
         local email = form_data[field_name]

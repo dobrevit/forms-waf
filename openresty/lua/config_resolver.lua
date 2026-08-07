@@ -25,6 +25,10 @@ local DEFAULT_ENDPOINT_CONFIG = {
         excluded_flagged = {}
     },
     patterns = {
+        -- On by default: this drives the link analysis and script-tag detection
+        -- the README advertises. It was absent here and in the no-endpoint-config
+        -- branch below, so pattern_scan skipped for every request.
+        enabled = true,
         inherit_global = true,
         disabled = {},
         custom = {}
@@ -152,6 +156,10 @@ end
 -- Merge pattern configuration
 local function merge_patterns(global_patterns, endpoint_patterns)
     local result = {
+        -- `enabled` gates the pattern_scan defense. It was absent from this
+        -- table, so config.patterns.enabled was always nil and pattern_scan
+        -- skipped on every request regardless of endpoint configuration.
+        enabled = true,
         inherit_global = true,
         disabled = {},
         custom = {}
@@ -161,6 +169,11 @@ local function merge_patterns(global_patterns, endpoint_patterns)
         return result
     end
 
+    if endpoint_patterns.enabled ~= nil then
+        result.enabled = endpoint_patterns.enabled == true
+    else
+        result.enabled = true   -- inherit the default rather than silently disabling
+    end
     result.inherit_global = endpoint_patterns.inherit_global ~= false
 
     -- Support canonical name (disabled) and legacy (disabled_patterns)
@@ -347,6 +360,7 @@ function _M.resolve(endpoint_config)
                 excluded_flagged = {}
             },
             patterns = {
+                enabled = true,
                 inherit_global = true,
                 disabled = {},
                 custom = {}

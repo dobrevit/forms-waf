@@ -16,6 +16,27 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# A real Chrome request is more than a User-Agent string. The WAF's
+# fake-modern-browser check flags a request that claims to be Chrome 120 while
+# omitting the client hints and Sec-Fetch headers Chrome always sends -- which is
+# correct bot detection, and exactly what a -A flag alone looks like. Tests that
+# describe themselves as "legitimate browser" must therefore send a browser's
+# headers, or they assert the opposite of what they claim.
+BROWSER_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+BROWSER_HEADERS=(
+    -H "Accept-Language: en-GB,en;q=0.9"
+    -H "Accept-Encoding: gzip, deflate, br"
+    -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+    -H 'sec-ch-ua: "Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
+    -H 'sec-ch-ua-mobile: ?0'
+    -H 'sec-ch-ua-platform: "Windows"'
+    -H 'Sec-Fetch-Site: same-origin'
+    -H 'Sec-Fetch-Mode: navigate'
+    -H 'Sec-Fetch-User: ?1'
+    -H 'Sec-Fetch-Dest: document'
+    -H 'Upgrade-Insecure-Requests: 1'
+)
+
 # Create temp cookie jars for timing cookies and admin session
 COOKIE_JAR=$(mktemp)
 ADMIN_COOKIE_JAR=$(mktemp)
@@ -274,22 +295,25 @@ echo ""
 
 # Test 4: Pattern detection
 log_info "Testing pattern detection..."
+# These two assert "flagged but NOT blocked", which only holds for a client that
+# is not already carrying the +30 bot-fingerprint penalty. Bare curl claims to be
+# nothing in particular and is scored accordingly, so without browser headers the
+# assertion tests the fingerprint check rather than the pattern scoring it names.
 test_request "Multiple URLs (should flag)" "200" "POST" "/submit" \
+    -A "$BROWSER_UA" "${BROWSER_HEADERS[@]}" \
     -d "message=Check out http://example.com and http://test.com"
 
-# KNOWN GAP (R-27): pattern scanning cannot run -- defense_mechanisms.lua requires
-# a pattern_scanner module that does not exist in this tree, and patterns.enabled is
-# absent from the default endpoint config, so pattern_scan always contributes 0.
-# These payloads score 30 (fingerprint only) against a block threshold of 80.
-# Restore the 403 expectations once pattern scanning is implemented.
-log_known_gap "Excessive URLs (should block) - blocked by R-27, pattern scanning unavailable"
+test_request "Excessive URLs (should block)" "403" "POST" "/submit" \
+    -d "message=Visit http://a.com http://b.com http://c.com http://d.com http://e.com for more"
 
 # Single XSS pattern scores 30, below block threshold of 80 - should flag but allow
 test_request "XSS attempt (flagged, not blocked)" "200" "POST" "/submit" \
+    -A "$BROWSER_UA" "${BROWSER_HEADERS[@]}" \
     -d "message=<script>alert('xss')</script>"
 
 # Multiple XSS patterns should accumulate score and block
-log_known_gap "Multiple XSS attempts (should block) - blocked by R-27, pattern scanning unavailable"
+test_request "Multiple XSS attempts (should block)" "403" "POST" "/submit" \
+    -d "message=<script>alert(1)</script><script>alert(2)</script><script>alert(3)</script><iframe src=evil></iframe>"
 
 echo ""
 
@@ -450,26 +474,6 @@ fi
 # Tests defense lines execution with attack signature pattern matching
 # The wp-login endpoint uses defense lines with builtin_wordpress_login and builtin_credential_stuffing signatures
 
-# A real Chrome request is more than a User-Agent string. The WAF's
-# fake-modern-browser check flags a request that claims to be Chrome 120 while
-# omitting the client hints and Sec-Fetch headers Chrome always sends -- which is
-# correct bot detection, and exactly what a -A flag alone looks like. Tests that
-# describe themselves as "legitimate browser" must therefore send a browser's
-# headers, or they assert the opposite of what they claim.
-BROWSER_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-BROWSER_HEADERS=(
-    -H "Accept-Language: en-GB,en;q=0.9"
-    -H "Accept-Encoding: gzip, deflate, br"
-    -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-    -H 'sec-ch-ua: "Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"'
-    -H 'sec-ch-ua-mobile: ?0'
-    -H 'sec-ch-ua-platform: "Windows"'
-    -H 'Sec-Fetch-Site: same-origin'
-    -H 'Sec-Fetch-Mode: navigate'
-    -H 'Sec-Fetch-User: ?1'
-    -H 'Sec-Fetch-Dest: document'
-    -H 'Upgrade-Insecure-Requests: 1'
-)
 
 log_info "Testing WordPress login endpoint with defense lines..."
 

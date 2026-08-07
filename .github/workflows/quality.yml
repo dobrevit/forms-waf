@@ -70,6 +70,26 @@ jobs:
       - name: Luacheck
         run: luacheck openresty/lua --globals ngx --no-unused-args --codes || true
 
+  config-contract:
+    name: Config contract
+    runs-on: ubuntu-latest
+    # Guards the seam between config_resolver and the defense mechanisms. Six
+    # shipped features were silently inert because a mechanism read a config
+    # shape the resolver never produced, or required a module that did not
+    # exist. Each failed to score 0 with no error and no log, so neither unit
+    # tests of a mechanism nor the integration suite would have caught them.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the OpenResty image
+        run: docker build -t forms-waf-openresty:contract ./openresty
+
+      - name: Run the config contract check
+        run: |
+          docker run --rm -v "$PWD/openresty/tests:/tests:ro" \
+            forms-waf-openresty:contract \
+            /usr/local/openresty/luajit/bin/luajit /tests/config_contract_spec.lua
+
   integration:
     name: WAF integration suite
     runs-on: ubuntu-latest
