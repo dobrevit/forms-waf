@@ -83,14 +83,20 @@ redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" HSET waf:config:thresholds \
 
 echo "Loaded default thresholds"
 
-# Whitelist internal IPs (example)
-redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" SADD waf:whitelist:ips \
-    "127.0.0.1" \
-    "10.0.0.0/8" \
-    "172.16.0.0/12" \
-    "192.168.0.0/16"
+# IP allowlist — intentionally EMPTY by default.
+#
+# This previously seeded 127.0.0.1 plus every RFC1918 range (10/8, 172.16/12,
+# 192.168/16). An allowlisted source bypasses inspection completely, and in the
+# documented architecture (Client -> Ingress -> OpenResty -> HAProxy) the address
+# OpenResty sees is a private one whenever X-Forwarded-For is absent or the peer
+# is not a configured trusted proxy. The shipped default therefore disabled the
+# WAF for all traffic in exactly the topology it is designed for.
+#
+# Add your own entries deliberately, e.g.:
+#   redis-cli SADD waf:whitelist:ips "203.0.113.7" "198.51.100.0/24"
+# Prefer narrow, specific ranges; never whole RFC1918 blocks.
 
-echo "Loaded IP whitelist"
+echo "IP allowlist left empty (add entries deliberately - see comment above)"
 
 # ============================================================================
 # Admin User Configuration
@@ -286,7 +292,8 @@ DEFAULT_VHOST='{
   "hostnames": [],
   "waf": {
     "enabled": true,
-    "mode": "monitoring"
+    "_comment": "blocking: this vhost catches unmatched Host headers. In monitoring mode an attacker can bypass every configured vhost simply by sending an unrecognised Host.",
+    "mode": "blocking"
   },
   "routing": {
     "use_haproxy": true

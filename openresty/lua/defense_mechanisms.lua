@@ -573,7 +573,18 @@ executor.register_defense("pattern_scan", function(request_context, node_config)
         return executor.result_score(0, {}, {skipped = true, reason = "patterns_disabled"})
     end
 
-    local pattern_scanner = require "pattern_scanner"
+    -- R-27: pattern_scanner.lua does not exist in this tree. The node is part of
+    -- the built-in "legacy" profile, so a bare require() here would abort defense
+    -- execution for every request as soon as an operator sets patterns.enabled.
+    -- Fail closed on the feature, open on the request: contribute nothing and say
+    -- so, rather than taking the request path down.
+    local ok, pattern_scanner = pcall(require, "pattern_scanner")
+    if not ok or type(pattern_scanner) ~= "table" or type(pattern_scanner.scan) ~= "function" then
+        ngx.log(ngx.ERR, "pattern_scan: pattern_scanner module unavailable; ",
+                "pattern scanning is configured but cannot run")
+        return executor.result_score(0, {}, {skipped = true, reason = "pattern_scanner_unavailable"})
+    end
+
     local result = pattern_scanner.scan(form_data, config.patterns)
 
     return executor.result_score(result.score or 0, result.flags or {}, {
