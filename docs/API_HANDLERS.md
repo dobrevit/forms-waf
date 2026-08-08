@@ -335,6 +335,30 @@ local ok, err = utils.validate_required(data, {"field1", "field2"})
 
 ---
 
+### Request Explorer (`api_handlers/decisions.lua`)
+
+Answers "why was this blocked?" as a query rather than a log grep.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /decisions | Search: vhost, endpoint, client_ip, action, flag, path, min_score, since/until |
+| GET | /decisions/{request_id} | One decision with its per-mechanism breakdown |
+| DELETE | /decisions | Discard the log |
+
+Records are written by `decision_recorder` from `log_by_lua`, not from the
+enforcement branches — there are six of those and covering five is the failure
+mode. The log phase sees one outcome per request, and the real one, which is
+why a monitoring-mode record reads `action: would_block` with `status: 200`.
+
+`trace` is the per-mechanism breakdown, built in `defense_profile_executor`
+where score and flags are already accumulated. `unattributed_score` reports
+`score - sum(trace)` and should be 0; anything else means a scoring path is
+not represented in the trace. It is reported rather than assumed because that
+invariant broke three times during development, each time silently.
+
+Retention: `WAF_DECISION_LOG_ENABLED`, `_MAX`, `_TTL`, `_MIN_SCORE`. Disabled
+is legitimate — the log stores request paths and client IPs.
+
 ### Rule Suppressions (`api_handlers/suppressions.lua`)
 
 The counterpart to shadow mode. Shadow mode names the rule that would have
@@ -399,6 +423,7 @@ Each endpoint requires specific permissions. See [RBAC Guide](RBAC.md) for full 
 | slack | read, update, test |
 | shadow | read, promote, delete |
 | suppressions | create, read, delete |
+| decisions | read, delete |
 
 ---
 

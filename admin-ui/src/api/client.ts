@@ -1548,3 +1548,86 @@ export const suppressionsApi = {
 
   clear: () => request<{ cleared: boolean }>('/suppressions', { method: 'DELETE' }),
 }
+
+// ---------------------------------------------------------------------------
+// Request explorer
+//
+// "Why was this blocked?" as a query. trace is the per-mechanism breakdown;
+// unattributed_score reports how much of the score it fails to account for.
+// ---------------------------------------------------------------------------
+
+export type DecisionAction = 'blocked' | 'allowed' | 'challenged' | 'tarpit' | 'would_block'
+
+export interface DecisionTraceEntry {
+  node?: string
+  defense?: string
+  profile?: string
+  score?: number
+  blocked?: boolean
+  flags?: string[]
+  suppressed?: string[]
+}
+
+export interface Decision {
+  ts: number
+  request_id?: string
+  vhost_id: string
+  endpoint_id: string
+  client_ip?: string
+  host?: string
+  path?: string
+  method?: string
+  user_agent?: string
+  action: DecisionAction
+  status?: number
+  mode?: string
+  score: number
+  block_reason?: string
+  blocked_by?: string[]
+  flags?: string[]
+  trace?: DecisionTraceEntry[]
+  traced_score?: number
+  unattributed_score?: number
+}
+
+export interface DecisionRetention {
+  enabled?: boolean
+  max_records?: number
+  ttl_seconds?: number
+  min_score?: number
+}
+
+export interface DecisionSearch {
+  vhost_id?: string
+  endpoint_id?: string
+  client_ip?: string
+  action?: string
+  flag?: string
+  path?: string
+  min_score?: number
+  limit?: number
+}
+
+export const decisionsApi = {
+  search: (params: DecisionSearch = {}) => {
+    const q = new URLSearchParams()
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') q.set(k, String(v))
+    })
+    const qs = q.toString()
+    return request<{
+      decisions: Decision[]
+      count: number
+      limit?: number
+      scanned?: number
+      dropped_total?: number
+      recorded_total?: number
+      retention?: DecisionRetention
+    }>(`/decisions${qs ? `?${qs}` : ''}`)
+  },
+
+  get: (requestId: string) =>
+    request<{ decision: Decision }>(`/decisions/${encodeURIComponent(requestId)}`),
+
+  clear: () => request<{ cleared: boolean }>('/decisions', { method: 'DELETE' }),
+}

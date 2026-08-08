@@ -47,6 +47,51 @@ end
 -- F08: HMAC key for log integrity (optional)
 local LOG_HMAC_KEY = os.getenv("WAF_LOG_HMAC_KEY")
 
+local collect_trace
+
+--- The request id, stable for the life of the request.
+--
+-- $request_id is NOT cached by this nginx build: every read of
+-- ngx.var.request_id mints a fresh value. Two adjacent reads in one request
+-- return different ids, which quietly made every id the WAF emitted useless for
+-- correlation -- the audit log entry and the webhook for the same request
+-- carried different "request ids", and neither matched the response header.
+-- Read once, cached on ngx.ctx, shared by everything that reports an id.
+local function request_id()
+    local rid = ngx.ctx.waf_request_id
+    if not rid then
+        rid = ngx.var.request_id
+        if not rid or rid == "" then
+            -- Hex, matching $request_id's shape. A decimal timestamp would be
+            -- unqueryable: the route and RBAC patterns for /decisions/{id} are
+            -- hex-only, so an id that is not hex records a decision nobody can
+            -- look up -- the one thing the id exists for.
+            rid = ngx.md5(string.format("%s:%s:%s",
+                ngx.now(), ngx.worker.pid(), ngx.var.connection or "0"))
+        end
+        ngx.ctx.waf_request_id = rid
+    end
+    return rid
+end
+
+-- Append to whichever trace a result carries. Scores added outside the profile
+-- executor -- vhost keywords here, defense lines in the multi-executor -- have
+-- to land in the trace too, or the detail view shows a total that its own
+-- breakdown does not account for.
+local function add_trace_entry(profile_result, entry)
+    if type(profile_result) ~= "table" then return end
+
+    if type(profile_result.trace) == "table" then
+        table.insert(profile_result.trace, entry)
+        return
+    end
+
+    -- Multi-profile result: no top-level trace, so carry these in a list the
+    -- flattener folds in alongside the per-profile ones.
+    profile_result.extra_trace = profile_result.extra_trace or {}
+    table.insert(profile_result.extra_trace, entry)
+end
+
 -- Keep a would-block decision so "what happens if I switch this to blocking?"
 -- becomes a query rather than a log grep.
 --
@@ -70,6 +115,38 @@ local function get_shadow_recorder()
         if ok then _shadow_recorder = mod end
     end
     return _shadow_recorder
+end
+
+-- The executor returns a per-node trace per profile. Flatten them into one list
+-- so a detail view can read the decision top to bottom without knowing how many
+-- profiles ran.
+collect_trace = function(profile_result)
+    if type(profile_result) ~= "table" then return nil end
+
+    -- Single-profile results carry the trace directly; multi-profile results
+    -- nest one per profile.
+    if profile_result.trace then
+        return profile_result.trace
+    end
+
+    local results = profile_result.profile_results
+    if type(results) ~= "table" then return profile_result.extra_trace end
+
+    local flat = {}
+    for profile_id, r in pairs(results) do
+        if type(r) == "table" and type(r.trace) == "table" then
+            for _, entry in ipairs(r.trace) do
+                if type(entry) == "table" then
+                    entry.profile = profile_id
+                    flat[#flat + 1] = entry
+                end
+            end
+        end
+    end
+    for _, entry in ipairs(profile_result.extra_trace or {}) do
+        flat[#flat + 1] = entry
+    end
+    return flat
 end
 
 local function record_shadow_decision(summary, client_ip, host, path, method, profile_result)
@@ -97,7 +174,7 @@ local function audit_log(event_type, event_data)
     local log_entry = {
         ["@timestamp"] = os.date("!%Y-%m-%dT%H:%M:%SZ"),
         event_type = event_type,
-        request_id = ngx.var.request_id or tostring(ngx.now()),
+        request_id = request_id(),
         client_ip = trusted_proxies.get_client_ip(),  -- F01: Use secure IP extraction
         host = ngx.var.http_host or ngx.var.host,
         path = ngx.var.uri,
@@ -344,6 +421,41 @@ local function detect_field_anomalies(form_data, security_settings, ignore_field
 end
 
 -- Process incoming request
+--- Called from log_by_lua. Records the decision stashed during the access
+--- phase, with the status the client actually received attached.
+function _M.log_decision()
+    local decision = ngx.ctx.waf_decision
+    if not decision then
+        return
+    end
+
+    local ok, recorder = pcall(require, "decision_recorder")
+    if not ok or not recorder then
+        return
+    end
+
+    local status = ngx.status
+    -- What happened, from the response rather than from what the pipeline
+    -- intended: monitoring mode returns 200 on a verdict of "block", and the
+    -- record has to say the request was allowed through.
+    local action
+    if status == 403 then
+        action = "blocked"
+    elseif status == 429 then
+        action = "tarpit"
+    elseif ngx.ctx.waf_captcha_challenged then
+        action = "challenged"
+    elseif decision.profile_action == "block" then
+        action = "would_block"
+    else
+        action = "allowed"
+    end
+
+    decision.action = action
+    decision.status = status
+    pcall(recorder.record, decision)
+end
+
 function _M.process_request()
     local method = ngx.req.get_method()
     local path = ngx.var.uri
@@ -620,6 +732,12 @@ function _M.process_request()
                         profile_result.action = "block"
                         profile_result.blocked_by = profile_result.blocked_by or {}
                         table.insert(profile_result.blocked_by, "additional_keyword")
+                        add_trace_entry(profile_result, {
+                            defense = "additional_keyword",
+                            score = 0,
+                            blocked = true,
+                            flags = { "vhost:add_block:" .. kw },
+                        })
                         ngx.log(ngx.INFO, "ADDITIONAL_KEYWORD_BLOCK: keyword=", kw)
                     end
                 end
@@ -633,6 +751,11 @@ function _M.process_request()
                         checked_flagged[kw_lower] = true
                         profile_result.score = (profile_result.score or 0) + kw_score
                         table.insert(profile_result.flags, "vhost:add_flag:" .. kw)
+                        add_trace_entry(profile_result, {
+                            defense = "additional_keyword",
+                            score = kw_score,
+                            flags = { "vhost:add_flag:" .. kw },
+                        })
                     end
                 end
             end
@@ -680,6 +803,35 @@ function _M.process_request()
                 ngx.header["X-Defense-Profiles-Flags"] = table.concat(profile_result.flags, ",")
             end
         end
+
+        -- Stash the verdict for the log phase. Recording happens there, not in
+        -- the branches below, because there are six of them -- block, captcha,
+        -- tarpit, flag, monitor, allow -- and covering five is the failure this
+        -- feature exists to avoid. The log phase sees exactly one outcome per
+        -- request, and the real one.
+        -- Returned on every response, not gated behind WAF_EXPOSE_HEADERS. It is
+        -- the handle support needs to look a decision up, and it reveals nothing
+        -- about the verdict -- unlike the score and flag headers, which is what
+        -- that flag exists to keep in.
+        ngx.header["X-WAF-Request-Id"] = request_id()
+
+        ngx.ctx.waf_decision = {
+            request_id   = request_id(),
+            vhost_id     = summary.vhost_id,
+            endpoint_id  = summary.endpoint_id,
+            client_ip    = client_ip,
+            host         = host,
+            path         = path,
+            method       = method,
+            user_agent   = ngx.var.http_user_agent,
+            mode         = summary.mode,
+            score        = profile_result.score,
+            flags        = profile_result.flags,
+            blocked_by   = profile_result.blocked_by,
+            block_reason = profile_result.block_reason,
+            profile_action = profile_result.action,
+            trace        = collect_trace(profile_result),
+        }
 
         -- Handle profile result actions
         if profile_result.action == "block" then
@@ -799,6 +951,10 @@ function _M.process_request()
                         profile_result.score or 0
                     ))
                     metrics.record_request(summary.vhost_id, summary.endpoint_id, "captcha_challenged", profile_result.score or 0)
+                    -- Read by log_decision to record action "challenged".
+                    -- Without it a challenge is indistinguishable from a plain
+                    -- allow in the decision log.
+                    ngx.ctx.waf_captcha_challenged = true
                     return captcha_handler.serve_challenge(context, nil, "defense_profile", client_ip)
                 end
             end

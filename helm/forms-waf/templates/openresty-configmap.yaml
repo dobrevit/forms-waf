@@ -34,6 +34,10 @@ data:
     env WAF_LOG_HMAC_KEY;
     env WAF_SESSION_TTL;
     env WAF_TRUSTED_PROXIES;
+    env WAF_DECISION_LOG_ENABLED;
+    env WAF_DECISION_LOG_MAX;
+    env WAF_DECISION_LOG_TTL;
+    env WAF_DECISION_LOG_MIN_SCORE;
     env http_proxy;
     env https_proxy;
     env no_proxy;
@@ -107,6 +111,7 @@ data:
         lua_shared_dict coordinator_cache 1m;
         lua_shared_dict shadow_cache 10m;
         lua_shared_dict suppression_cache 1m;
+        lua_shared_dict decision_cache 10m;
 
         # Initialize modules on worker start
         init_worker_by_lua_block {

@@ -113,6 +113,7 @@ def main():
         base = "/" + base.split("/", 3)[3] if len(base.split("/", 3)) > 3 else ""
 
     failures, checked = [], 0
+    skipped = []
     for path, methods in spec["paths"].items():
         if "get" not in methods:
             continue
@@ -123,6 +124,17 @@ def main():
         example_query = methods["get"].get("x-contract-example-query")
         if example_query:
             url = f"{url}?{example_query}"
+
+        # A path template with no fixed example -- a request id, say -- cannot be
+        # fetched. Skip it, but print it: a check that silently covers less than
+        # it appears to is worse than one that admits the gap.
+        skip_reason = methods["get"].get("x-contract-skip")
+        if skip_reason:
+            skipped.append(f"GET {path}: {skip_reason}")
+            continue
+        if "{" in path:
+            skipped.append(f"GET {path}: templated path with no x-contract-skip reason given")
+            continue
         try:
             status, raw, _ = request(url, cookie=cookie)
         except urllib.error.HTTPError as exc:
@@ -153,6 +165,10 @@ def main():
     print("API contract check")
     print("==================")
     print(f"  endpoints validated : {checked}")
+    if skipped:
+        print(f"  endpoints skipped   : {len(skipped)}")
+        for entry in skipped:
+            print(f"    - {entry}")
     for f in failures:
         print(f"  MISMATCH            : {f}")
 

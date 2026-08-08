@@ -353,7 +353,10 @@ function _M.aggregate(results, config, start_time)
             action = r.result.action,
             score = r.result.score,
             flags = r.result.flags,
-            execution_time_ms = r.result.execution_time_ms
+            execution_time_ms = r.result.execution_time_ms,
+            -- Per-node breakdown, so a decision can be explained down to the
+            -- mechanism rather than stopping at "profile X scored 65".
+            trace = r.result.trace
         }
     end
 
@@ -443,6 +446,33 @@ function _M.execute(config, request_context)
         lines_result.blocked_by_line or "none"
     ))
 
+    -- The base result of a multi-profile run carries no top-level trace: the
+    -- per-node entries sit under profile_results[id].trace. Setting a trace on
+    -- the merged result makes the consumer read that and stop looking, so the
+    -- base entries have to be folded in here or they are lost -- a wp-login
+    -- decision reported score 113 against a trace summing to 83, the difference
+    -- being the fingerprint node the base profile had already scored.
+    local function base_trace(result)
+        local flat = {}
+        if type(result.trace) == "table" then
+            for _, entry in ipairs(result.trace) do
+                flat[#flat + 1] = entry
+            end
+            return flat
+        end
+        for profile_id, r in pairs(result.profile_results or {}) do
+            if type(r) == "table" and type(r.trace) == "table" then
+                for _, entry in ipairs(r.trace) do
+                    if type(entry) == "table" then
+                        entry.profile = profile_id
+                        flat[#flat + 1] = entry
+                    end
+                end
+            end
+        end
+        return flat
+    end
+
     -- Merge results: if defense lines block, the final action is block
     if lines_result.action == "block" then
         -- Combine flags from base and defense lines
@@ -454,11 +484,20 @@ function _M.execute(config, request_context)
             table.insert(all_flags, flag)
         end
 
+        local merged_trace = base_trace(base_result)
+        table.insert(merged_trace, {
+            defense = "defense_line:" .. (lines_result.blocked_by_line or "unknown"),
+            score = lines_result.score or 0,
+            blocked = true,
+            flags = lines_result.flags,
+        })
+
         return {
             action = "block",
             action_config = lines_result.action_config or base_result.action_config,
             score = base_result.score + lines_result.score,
             flags = all_flags,
+            trace = merged_trace,
             details = {
                 base_profile = base_result.details,
                 defense_lines = lines_result.details
@@ -484,11 +523,25 @@ function _M.execute(config, request_context)
         table.insert(all_flags, flag)
     end
 
+    -- Defense lines contribute score even when they do not block, so this merge
+    -- needs the same trace entry as the blocking branch above. Tracing only the
+    -- blocking one left a wp-login decision reporting score 113 against a trace
+    -- summing to 30.
+    local merged_trace = base_trace(base_result)
+    if (lines_result.score or 0) ~= 0 or (lines_result.flags and #lines_result.flags > 0) then
+        table.insert(merged_trace, {
+            defense = "defense_line:" .. (lines_result.blocked_by_line or "evaluated"),
+            score = lines_result.score or 0,
+            flags = lines_result.flags,
+        })
+    end
+
     return {
         action = "allow",
         action_config = base_result.action_config,
         score = base_result.score + lines_result.score,
         flags = all_flags,
+        trace = merged_trace,
         details = {
             base_profile = base_result.details,
             defense_lines = lines_result.details

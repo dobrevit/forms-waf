@@ -1205,6 +1205,17 @@ local function do_sync()
     -- Drain the shadow-mode buffer here rather than on its own timer: this
     -- function already holds an open connection and runs on a predictable
     -- interval.
+    -- Same treatment for the enforcement decision log.
+    local ok_dec, decision_recorder = pcall(require, "decision_recorder")
+    if ok_dec and decision_recorder then
+        local ok_flush, flushed = pcall(decision_recorder.flush, red)
+        if not ok_flush then
+            ngx.log(ngx.ERR, "decision recorder flush failed: ", tostring(flushed))
+        elseif flushed > 0 then
+            ngx.log(ngx.INFO, "decision recorder: flushed ", flushed, " decisions")
+        end
+    end
+
     local ok_shadow, shadow_recorder = pcall(require, "shadow_recorder")
     if ok_shadow and shadow_recorder then
         local ok_flush, flushed = pcall(shadow_recorder.flush, red)
